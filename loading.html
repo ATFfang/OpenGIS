@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenGIS - Loading</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #ffffff;
+      color: #1a1a2e;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .container {
+      text-align: center;
+      max-width: 420px;
+      width: 100%;
+      padding: 48px 32px;
+    }
+    .logo-wrapper {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+      box-shadow: 0 4px 24px rgba(59, 130, 246, 0.10);
+    }
+    .logo-wrapper img {
+      width: 52px;
+      height: 52px;
+      object-fit: contain;
+    }
+    .title {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+      color: #1a1a2e;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #8c8c9a;
+      margin-bottom: 44px;
+      font-weight: 400;
+    }
+    .steps { text-align: left; margin-bottom: 36px; }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 0;
+      font-size: 13.5px;
+      color: #b0b0be;
+      transition: color 0.35s ease;
+    }
+    .step.active { color: #3b82f6; font-weight: 500; }
+    .step.done { color: #22c55e; }
+    .step-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      transition: all 0.35s ease;
+    }
+    .step.pending .step-icon {
+      background: #f0f0f5;
+      color: #c0c0cc;
+      border: 1.5px solid #e2e2ec;
+    }
+    .step.active .step-icon {
+      background: #3b82f6;
+      color: #ffffff;
+      border: 1.5px solid #3b82f6;
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.30);
+    }
+    .step.done .step-icon {
+      background: #22c55e;
+      color: #ffffff;
+      border: 1.5px solid #22c55e;
+    }
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .checkmark { font-size: 13px; font-weight: 700; }
+    .progress-wrapper { margin-bottom: 16px; }
+    .progress-track {
+      width: 100%;
+      height: 3px;
+      background: #f0f0f5;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #3b82f6, #6366f1);
+      border-radius: 2px;
+      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .status-text {
+      font-size: 12px;
+      color: #a0a0b0;
+      min-height: 18px;
+    }
+    .footer {
+      position: absolute;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11.5px;
+      color: #c8c8d4;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo-wrapper">
+      <img src="./logo.png" alt="OpenGIS">
+    </div>
+    <div class="title">OpenGIS</div>
+    <div class="subtitle">AI-powered GIS Workspace</div>
+
+    <div class="steps">
+      <div class="step pending" id="step-init">
+        <span class="step-icon">1</span>
+        <span class="step-label">Initializing application</span>
+      </div>
+      <div class="step pending" id="step-window">
+        <span class="step-icon">2</span>
+        <span class="step-label">Preparing workspace</span>
+      </div>
+      <div class="step pending" id="step-python">
+        <span class="step-icon">3</span>
+        <span class="step-label">Starting Python backend</span>
+      </div>
+      <div class="step pending" id="step-ready">
+        <span class="step-icon">4</span>
+        <span class="step-label">Ready</span>
+      </div>
+    </div>
+
+    <div class="progress-wrapper">
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+    </div>
+    <div class="status-text" id="statusText"></div>
+  </div>
+
+  <div class="footer">v4.0 - Powered by LiteLLM</div>
+
+  <script>
+    const { ipcRenderer } = require('electron')
+
+    const steps = ['step-init', 'step-window', 'step-python', 'step-ready']
+    const progressFill = document.getElementById('progressFill')
+    const statusText = document.getElementById('statusText')
+
+    // Buffer: hold messages that arrived before we were ready to render.
+    // Also replay them once updateStep is defined.
+    const _buf = []
+    let _ready = false
+
+    function updateStep(doneCount, currentStep, statusMsg) {
+      // Clamp
+      doneCount = Math.max(0, Math.min(doneCount, steps.length))
+      steps.forEach((id, i) => {
+        const el = document.getElementById(id)
+        let state = 'pending'
+        if (i < doneCount) {
+          state = 'done'
+        } else if (i === doneCount && currentStep) {
+          state = 'active'
+        } else if (i === doneCount && !currentStep) {
+          state = 'done'
+        }
+        el.className = 'step ' + state
+        const icon = el.querySelector('.step-icon')
+        if (i < doneCount || (i === doneCount && !currentStep)) {
+          icon.innerHTML = '<span class="checkmark">✓</span>'
+        } else if (i === doneCount && currentStep) {
+          icon.innerHTML = '<div class="spinner"></div>'
+        } else {
+          icon.textContent = i + 1
+        }
+      })
+
+      const pct = Math.round(((doneCount + (currentStep ? 0.5 : 0)) / steps.length) * 100)
+      progressFill.style.width = Math.max(pct, (doneCount / steps.length) * 100) + '%'
+
+      if (statusMsg) statusText.textContent = statusMsg
+      _ready = true
+      // Flush any buffered messages
+      while (_buf.length) {
+        const d = _buf.shift()
+        _applyProgress(d)
+      }
+    }
+
+    function _applyProgress(data) {
+      if (data.step !== undefined) updateStep(data.step, true, data.status)
+      if (data.done !== undefined) updateStep(data.done, false, data.status)
+      if (data.status === 'Ready!') {
+        updateStep(steps.length, false, data.status)
+      } else if (data.status && data.step === undefined && data.done === undefined) {
+        statusText.textContent = data.status
+      }
+    }
+
+    ipcRenderer.on('loading:progress', (event, data) => {
+      if (!_ready) { _buf.push(data); return }
+      _applyProgress(data)
+    })
+
+    // Initial state: show step 0 as active immediately
+    updateStep(0, true, 'Initializing...')
+  </script>
+</body>
+</html>

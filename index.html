@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-jKKrj9b0GFk1mastbPPnAIHqfSuOCU8vsYx2/+ZTgHA='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' data: blob: ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:* https://*.openstreetmap.org https://*.tile.openstreetmap.org https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://*.stamen.com https://*.stadiamaps.com https://*.arcgisonline.com https://*.mapbox.com; img-src 'self' data: blob: https://*.openstreetmap.org https://*.tile.openstreetmap.org https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://*.stamen.com https://*.stadiamaps.com https://*.arcgisonline.com https://*.mapbox.com; worker-src 'self' blob:;"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>OpenGIS</title>
+  </head>
+  <body class="bg-bg-primary text-text-primary antialiased">
+    <div id="root"></div>
+    <script>
+      // Prevent FOUC: apply theme before React renders
+      // Default theme is 'system', so check OS preference
+      (function() {
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (!prefersDark) document.documentElement.classList.add('light');
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

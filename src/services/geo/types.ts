@@ -1,0 +1,328 @@
+/**
+ * Shared GIS data types used across the application.
+ * This module defines the contract between geo services, stores, and UI components.
+ */
+
+// ─── Geometry Types ───────────────────────────────────────────────
+
+export type GeometryType = 'Point' | 'MultiPoint' | 'LineString' | 'MultiLineString' | 'Polygon' | 'MultiPolygon' | 'GeometryCollection'
+
+export interface BBox {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+// ─── GeoJSON (RFC 7946 subset) ────────────────────────────────────
+
+export interface GeoJSONFeature {
+  type: 'Feature'
+  geometry: {
+    type: GeometryType
+    coordinates: any
+  }
+  properties: Record<string, any>
+  id?: string | number
+}
+
+export interface GeoJSONFeatureCollection {
+  type: 'FeatureCollection'
+  features: GeoJSONFeature[]
+}
+
+// ─── Data Source Descriptor ───────────────────────────────────────
+
+export type DataSourceType = 'geojson' | 'csv' | 'shapefile' | 'geopackage' | 'kml' | 'geotiff'
+
+export interface DataSourceMeta {
+  /** Original file name */
+  fileName: string
+  /** File extension (lowercase, with dot) */
+  extension: string
+  /** Detected source type */
+  sourceType: DataSourceType
+  /** File size in bytes */
+  fileSize: number
+  /** MIME type if available */
+  mimeType?: string
+  /**
+   * Absolute filesystem path, if the layer originated from a file on disk.
+   * Agent-generated / in-memory layers may omit this. Used by AssetExplorer
+   * to reliably detect whether a file is already loaded (fileName alone is
+   * ambiguous across directories).
+   */
+  filePath?: string
+}
+
+// ─── Parsed Layer Data ────────────────────────────────────────────
+
+export interface ParsedVectorData {
+  kind: 'vector'
+  geojson: GeoJSONFeatureCollection
+  geometryType: GeometryType
+  featureCount: number
+  bbox: BBox
+  /** CRS identifier (e.g. "EPSG:4326") */
+  crs: string
+  /** Attribute field names */
+  fields: FieldDescriptor[]
+}
+
+export interface ParsedRasterData {
+  kind: 'raster'
+  /**
+   * 如何把这个 raster 喂给 MapLibre。
+   *  - 'image'    : 已经渲染成 PNG 的 data URL / blob URL，走 ImageSource（推荐：
+   *                 本地 GeoTIFF 解完色带后给这类；体积小、可交互快）
+   *  - 'tile-xyz' : XYZ 瓦片模板 URL
+   *  - 'tile-wmts': WMTS 能力 URL（目前按 tile-xyz 同等对待，留字段）
+   *  - 'cog'     : Cloud-Optimized GeoTIFF 的 HTTP URL（未实装）
+   */
+  source: 'image' | 'tile-xyz' | 'tile-wmts' | 'cog'
+  /** `source='image'` 时必填：已经渲染好的 PNG data/blob URL */
+  imageUrl?: string
+  /** `source='tile-xyz' | 'tile-wmts'` 时必填 */
+  tileUrl?: string
+  bbox: BBox
+  width: number
+  height: number
+  bandCount: number
+  crs: string
+  /**
+   * 像素 nodata 值（导入时会被渲染成透明）。GeoTIFF parser 会从 tag 里读。
+   */
+  noDataValue?: number | null
+  /** 每个 band 的真实 min/max，用于分档 / 颜色映射 UI。 */
+  bandStats?: Array<{ min: number; max: number }>
+  /**
+   * 实际编码成 imageUrl 的四角坐标（WGS84，顺时针 NW→NE→SE→SW）。
+   * MapLibre ImageSource 需要它而不是 bbox；非地理 tiff 会反推成一个矩形。
+   */
+  imageCoordinates?: [
+    [number, number],
+    [number, number],
+    [number, number],
+    [number, number],
+  ]
+}
+
+export type ParsedData = ParsedVectorData | ParsedRasterData
+
+export interface FieldDescriptor {
+  name: string
+  type: 'string' | 'number' | 'boolean' | 'date' | 'unknown'
+  /** Number of null/undefined values */
+  nullCount: number
+  /** Sample values for preview */
+  sampleValues: any[]
+}
+
+// ─── Layer Definition (for MapStore) ──────────────────────────────
+
+export type LayerRenderType =
+  | 'fill'
+  | 'line'
+  | 'circle'
+  | 'symbol'
+  | 'heatmap'
+  | 'raster'
+  /**
+   * 分级专题（choropleth）：按某个数值字段分档（分位数/等距/自定义断点），
+   * 每档映射一个颜色。默认对 Polygon fill；Point 等价变成 circle 的颜色分档。
+   */
+  | 'graduated'
+  /**
+   * 分类专题：按某个字符串字段的唯一值映射颜色，常用于区划/类型这种离散
+   * 字段。
+   */
+  | 'categorized'
+  /**
+   * 点聚合：同一 source 开 cluster + 三个 circle 档位 + count 数字。
+   * 仅对 Point 几何有效。
+   */
+  | 'cluster'
+  /**
+   * 3D 拔起：按某个数值字段把 Polygon 拔出高度（fill-extrusion）。
+   */
+  | 'extrusion'
+
+/** 分档策略 —— graduated renderer 使用 */
+export type ClassificationMethod =
+  | 'quantile'        // 分位数（n 档每档要素数相近）
+  | 'equal-interval'  // 等距
+  | 'jenks'           // 自然断点（简化实现，退回 quantile 也可接受）
+  | 'manual'          // 使用用户传入的 breaks
+
+export interface GraduatedClassification {
+  field: string
+  method: ClassificationMethod
+  /**
+   * 分档数（method='manual' 时由 breaks.length 决定，此字段忽略）。
+   * 默认 5。
+   */
+  classes?: number
+  /**
+   * 当 method='manual' 时必填；否则作为计算结果被写回这个字段，
+   * 长度 = classes - 1。
+   */
+  breaks?: number[]
+  /**
+   * 颜色渐变，长度需要等于档数；若省略按 classes 生成一个默认 viridis-like
+   * 渐变。
+   */
+  palette?: string[]
+}
+
+export interface CategorizedClassification {
+  field: string
+  /**
+   * 手动指定的 value→color 映射表；若省略，renderer 会在数据里扫前 N 个
+   * 唯一值自动配色。
+   */
+  colors?: Record<string, string>
+  /**
+   * 自动模式下取前多少个唯一值，默认 12，超出归入 "其它"。
+   */
+  maxCategories?: number
+  /** "其它" 档的颜色，默认 #9ca3af。 */
+  otherColor?: string
+}
+
+export interface HeatmapSettings {
+  /**
+   * 权重字段。未设置时所有点权重 1。字段必须是数值。
+   */
+  weightField?: string
+  /** 影响半径（像素），默认 30。 */
+  radius?: number
+  /** 整体强度 0-1，默认 1。 */
+  intensity?: number
+}
+
+export interface ClusterSettings {
+  /** 聚合半径（像素），默认 50。 */
+  radius?: number
+  /**
+   * zoom 到多大就不再聚合（展开为原始点），默认 14。
+   */
+  maxZoom?: number
+}
+
+export interface ExtrusionSettings {
+  /** 拔高的字段（数值）。 */
+  heightField: string
+  /** 高度乘数，默认 1。 */
+  heightMultiplier?: number
+  /** 基准高度字段，默认 0。 */
+  baseField?: string
+}
+
+export interface LayerStyle {
+  renderType: LayerRenderType
+  color: string
+  opacity: number
+  strokeColor: string
+  strokeWidth: number
+  radius?: number
+  /** For fill layers */
+  fillOpacity?: number
+
+  // ── 下列字段仅在对应 renderType 启用时被消费。都是可选字段，
+  //    老图层加载不受影响。
+  /** `renderType='graduated'` 时必填 */
+  graduated?: GraduatedClassification
+  /** `renderType='categorized'` 时必填 */
+  categorized?: CategorizedClassification
+  /** `renderType='heatmap'` 时可选，给默认 */
+  heatmap?: HeatmapSettings
+  /** `renderType='cluster'` 时可选 */
+  cluster?: ClusterSettings
+  /** `renderType='extrusion'` 时必填 heightField */
+  extrusion?: ExtrusionSettings
+}
+
+export interface MapLayerDefinition {
+  id: string
+  name: string
+  sourceType: DataSourceType
+  visible: boolean
+  style: LayerStyle
+  data: ParsedData
+  meta: DataSourceMeta
+  /** Timestamp when the layer was added */
+  addedAt: number
+}
+
+// ─── Basemap Configuration ────────────────────────────────────────
+
+export interface BasemapSource {
+  id: string
+  name: string
+  type: 'vector-style' | 'raster-tiles'
+  /** MapLibre style JSON URL (for vector-style) or tile URL template (for raster-tiles) */
+  url: string
+  /** Attribution text */
+  attribution?: string
+  /** Preview thumbnail URL */
+  thumbnail?: string
+}
+
+export const BUILTIN_BASEMAPS: BasemapSource[] = [
+  {
+    id: 'osm-streets',
+    name: 'OpenStreetMap Streets',
+    type: 'raster-tiles',
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+  },
+  {
+    id: 'carto-dark',
+    name: 'CARTO Dark Matter',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'carto-dark-nolabels',
+    name: 'CARTO Dark (No Labels)',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'carto-light',
+    name: 'CARTO Positron',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'carto-light-nolabels',
+    name: 'CARTO Positron (No Labels)',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'carto-voyager',
+    name: 'CARTO Voyager',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'carto-voyager-nolabels',
+    name: 'CARTO Voyager (No Labels)',
+    type: 'vector-style',
+    url: 'https://basemaps.cartocdn.com/gl/voyager-nolabels-gl-style/style.json',
+    attribution: '© CARTO',
+  },
+  {
+    id: 'osm-raster',
+    name: 'OpenStreetMap Raster',
+    type: 'raster-tiles',
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+  },
+]

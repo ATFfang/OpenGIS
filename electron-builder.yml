@@ -1,0 +1,54 @@
+appId: com.opengis.desktop
+productName: OpenGIS
+directories:
+  buildResources: resources
+  output: dist
+
+files:
+  - "out/**/*"
+  - "resources/**/*"
+
+extraResources:
+  - from: "python-backend/"
+    to: "python-backend/"
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/tests/**"
+      - "!**/.venv/**"
+  - from: "resources/icons/"
+    to: "icons/"
+    filter:
+      - "**/*"
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: resources/icons/app-icon.png
+  artifactName: "${productName}-${version}-win-${arch}.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+mac:
+  target:
+    - dmg
+    - zip
+  # 复用 1024×1024 PNG，electron-builder 会在打包阶段自动转成 .icns。
+  # 如需更精细的多尺寸图标，可在 resources/icons/ 放 app-icon.icns 并改回此处。
+  icon: resources/icons/app-icon.png
+  category: public.app-category.developer-tools
+  artifactName: "${productName}-${version}-mac-${arch}.${ext}"
+  # 暂未配置代码签名 / 公证：未签名 .dmg 在 macOS 12+ 首次打开
+  # 需用户右键→打开。正式发版前需补 identity + notarize。
+
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: resources/icons/app-icon.png
+  category: Science
+  artifactName: "${productName}-${version}-linux-${arch}.${ext}"

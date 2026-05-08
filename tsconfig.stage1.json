@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/types/protocol.ts",
+    "src/services/events.ts",
+    "src/services/rpc/**/*.ts",
+    "src/stores/v3/**/*.ts"
+  ],
+  "references": [],
+  "compilerOptions": {
+    "types": ["vitest/globals", "node"]
+  }
+}

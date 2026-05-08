@@ -1,0 +1,328 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   OpenGIS Design Tokens (CSS Custom Properties)
+   ============================================ */
+
+:root {
+  /* Dark theme (default) */
+  --bg-primary: #0a0c10;
+  --bg-secondary: #12151c;
+  --bg-tertiary: #1a1e2a;
+  --bg-hover: #222838;
+
+  --text-primary: #e8eaed;
+  --text-secondary: #9aa0ad;
+  --text-muted: #5f6573;
+
+  --accent-primary: #3b82f6;
+  --accent-success: #22c55e;
+  --accent-warning: #f59e0b;
+  --accent-danger: #ef4444;
+  --accent-geo: #06b6d4;
+
+  --border-color: #1e2330;
+
+  --sidebar-width: 52px;
+  --sidebar-expanded-width: 240px;
+  --panel-min-width: 280px;
+  --titlebar-height: 32px;
+}
+
+.light {
+  --bg-primary: #f8f9fb;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f0f2f5;
+  --bg-hover: #e8eaed;
+
+  --text-primary: #1a1d27;
+  --text-secondary: #5f6573;
+  --text-muted: #9aa0ad;
+
+  --accent-primary: #2563eb;
+  --accent-success: #16a34a;
+  --accent-warning: #d97706;
+  --accent-danger: #dc2626;
+  --accent-geo: #0891b2;
+
+  --border-color: #e2e5ea;
+}
+
+/* ============================================
+   Base Styles
+   ============================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================
+   Scrollbar Styles
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* ============================================
+   Selection Styles
+   ============================================ */
+
+::selection {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
+/* ============================================
+   Titlebar Drag Region (Electron)
+   ============================================ */
+
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ============================================
+   MapLibre GL Overrides
+   ============================================ */
+
+.maplibregl-map {
+  font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+.maplibregl-ctrl-group {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.maplibregl-ctrl-group button {
+  border-color: var(--border-color) !important;
+}
+
+.maplibregl-ctrl-group button:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+
+/* ============================================
+   Cline-style Chat Animations
+   ============================================ */
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ============================================
+   Chat Markdown Styles (mirrors Cline's inline-markdown-block)
+   ============================================ */
+
+.inline-markdown-block {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+}
+
+.inline-markdown-block pre {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 12px 0;
+  padding: 10px;
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+}
+
+.inline-markdown-block code {
+  word-break: break-word;
+  border-radius: 3px;
+}
+
+.inline-markdown-block p,
+.inline-markdown-block li,
+.inline-markdown-block ol,
+.inline-markdown-block ul {
+  line-height: 1.6;
+}
+
+/* Inline cursor container — blinking cursor after last child */
+.inline-cursor-container > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  background-color: var(--text-primary);
+  vertical-align: text-bottom;
+  animation: cursorBlink 1s ease-in-out infinite;
+}
+
+/* Disable cursor after pre/code blocks to prevent ghosting */
+.inline-cursor-container > pre:last-child::after,
+.inline-cursor-container > div:last-child::after {
+  content: none;
+}
+
+/* ============================================
+   Chat code-block legibility (light-mode focus)
+   ============================================
+   Why: in light mode the small monospace text inside chat code blocks
+   used to look "shadowed / blurry". Two contributing causes:
+     1. Prism's `oneDark` token colors were used on a light background
+        (fixed in code via useChatCodeTheme — switches to oneLight).
+     2. Some Prism stylesheets bake a `text-shadow: 0 1px white` onto
+        `code[class*="language-"]` to lift glyphs off a dark surface.
+        On our light surface that shadow IS the blur. Strip it.
+     3. Windows sub-pixel AA on small mono glyphs over a light surface
+        reads as fuzzy. Force grayscale AA + optimizeLegibility.
+   Scope: anything inside the chat scroll container. Other surfaces
+   (CodeViewer, ScriptRunner) keep their own carefully tuned styles. */
+
+[data-chat-scroll] pre,
+[data-chat-scroll] code,
+[data-chat-scroll] pre[class*="language-"],
+[data-chat-scroll] code[class*="language-"] {
+  text-shadow: none !important;
+  font-variant-ligatures: none;
+}
+
+.light [data-chat-scroll] pre,
+.light [data-chat-scroll] code,
+.light [data-chat-scroll] pre[class*="language-"],
+.light [data-chat-scroll] code[class*="language-"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ============================================
+   Scrollbar utilities
+   ============================================ */
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+
+@layer utilities {
+  .text-gradient-geo {
+    @apply bg-gradient-to-r from-accent-geo to-accent-primary bg-clip-text text-transparent;
+  }
+
+  .glass {
+    backdrop-filter: blur(12px);
+    background: rgba(18, 21, 28, 0.8);
+    border: 1px solid var(--border-color);
+  }
+
+  .light .glass {
+    background: rgba(255, 255, 255, 0.85);
+  }
+
+  .panel-shadow {
+    box-shadow:
+      0 0 0 1px var(--border-color),
+      0 4px 16px rgba(0, 0, 0, 0.2);
+  }
+
+  .animate-shimmer {
+    animation: shimmer 5s infinite linear;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+
+  .animate-fade-slide-in {
+    animation: fadeSlideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
