@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { Map as MapIcon, EyeOff, Hand, MousePointer, BoxSelect } from 'lucide-react'
+import { Map as MapIcon, EyeOff, Hand, MousePointer, BoxSelect, Maximize2, Minimize2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapStore } from '@/stores/mapStore'
 import { useSettingsStore } from '@/stores/settingsStore'  // 新增：导入settingsStore
@@ -19,7 +19,13 @@ import { PinnedImagePanel } from './PinnedImagePanel'
  * - Handle file drop for data loading
  * - Display overlay controls and empty state
  */
-export function MapView() {
+export function MapView({
+  onToggleFullscreen,
+  isFullscreen = false,
+}: {
+  onToggleFullscreen?: () => void
+  isFullscreen?: boolean
+} = {}) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const isInitialized = useRef(false)
   /**
@@ -237,6 +243,16 @@ export function MapView() {
     }
   }, [identifyActive, boxSelectActive])
 
+  // ─── Resize map on fullscreen toggle ───────────────────────────
+
+  useEffect(() => {
+    // After layout change, give the browser a frame to reflow, then resize.
+    const raf = requestAnimationFrame(() => {
+      mapEngine.getMap()?.resize()
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [isFullscreen])
+
   // ─── Sync layer changes ───────────────────────────────────────
 
   useEffect(() => {
@@ -439,6 +455,17 @@ export function MapView() {
 
         {/* Export map (PNG/JPG) */}
         <ExportButton />
+
+        {/* Fullscreen toggle */}
+        {onToggleFullscreen && (
+          <button
+            onClick={onToggleFullscreen}
+            className="glass rounded-lg w-8 h-8 flex items-center justify-center text-text-secondary hover:text-accent-primary transition-colors"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+        )}
       </div>
 
       {/* Feature Attribute Panel (single-click identify) */}
