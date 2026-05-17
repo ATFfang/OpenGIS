@@ -104,8 +104,8 @@ save_plot() optional parameters:
 ```python
 import matplotlib.font_manager as fm
 _candidates = ['PingFang SC', 'STHeiti', 'Heiti SC', 'SimHei', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Micro Hei']
-_available = {f.name for f in fm.fontManager.ttflist}
-plt.rcParams['font.sans-serif'] = [f for f in _candidates if f in _available] or ['DejaVu Sans']
+_available = set(f.name for f in fm.fontManager.ttflist)
+plt.rcParams['font.sans-serif'] = [c for c in _candidates if c in _available] or ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 ```
 
