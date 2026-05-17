@@ -1091,6 +1091,13 @@ function AttachPanel({
   const t = useT()
   const ref = useRef<HTMLDivElement>(null)
   const workflowEntries = useWorkflowStore((s) => s.entries)
+  const refreshWorkflows = useWorkflowStore((s) => s.refresh)
+
+  // Load workflows on mount so the section is populated even if the
+  // WorkflowsPanel sidebar tab was never opened.
+  useEffect(() => {
+    refreshWorkflows()
+  }, [refreshWorkflows])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
