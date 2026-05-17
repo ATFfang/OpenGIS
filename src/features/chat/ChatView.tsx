@@ -1179,7 +1179,29 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">QGIS4+</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('QGIS4+') ? 'Attached — click to detach' : '42 QGIS MCP commands'}
+              {attachedSkills.includes('QGIS4+') ? 'Attached — click to detach' : 'QGIS MCP commands'}
+            </p>
+          </div>
+        </button>
+        <button
+          onClick={() => onAttachSkill('OSM', ['osm'])}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
+            attachedSkills.includes('OSM')
+              ? 'bg-green-500/10 text-green-300 ring-1 ring-green-500/30'
+              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+          }`}
+        >
+          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
+            attachedSkills.includes('OSM')
+              ? 'bg-green-500/20 ring-green-500/30'
+              : 'bg-green-500/10 ring-green-500/20'
+          }`}>
+            <Globe className="w-3 h-3 text-green-400" />
+          </div>
+          <div className="text-left flex-1 min-w-0">
+            <p className="text-[12px] font-medium leading-tight">OSM</p>
+            <p className="text-[10px] text-text-muted mt-0.5">
+              {attachedSkills.includes('OSM') ? 'Attached — click to detach' : 'OpenStreetMap data download'}
             </p>
           </div>
         </button>
