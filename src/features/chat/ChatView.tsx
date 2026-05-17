@@ -303,7 +303,8 @@ export function ChatView() {
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter 发送（Shift+Enter 换行）
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // IME 输入法合成中不拦截（中文选词时按回车不应发送）
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
       return
