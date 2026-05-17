@@ -63,9 +63,9 @@ class _FinalAnswer(BaseException):
         self.value = value
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # IPC helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 def _emit(obj: dict) -> None:
@@ -98,9 +98,9 @@ def _read_message() -> dict | None:
         return {}
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Tool stub: forwards calls to parent over the pipe
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 def _make_tool_stub(name: str):
@@ -146,9 +146,9 @@ def _final_answer_stub(value: Any = None) -> None:
     raise _FinalAnswer(value)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Risky-op hooks (D3) — observe, don't block.
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 #
 # We patch a small, curated set of write-effect builtins so every
 # destructive / write call the LLM makes shows up in meta.json.risky_ops.
@@ -176,7 +176,7 @@ def _install_risky_op_hooks() -> None:
             # Never let telemetry break the user's code.
             pass
 
-    # --- os.remove / os.unlink -------------------------------------------------
+    # ─── os.remove / os.unlink ───
     _os_remove = _os.remove
     _os_unlink = _os.unlink
 
@@ -191,7 +191,7 @@ def _install_risky_op_hooks() -> None:
     _os.remove = remove  # type: ignore[assignment]
     _os.unlink = unlink  # type: ignore[assignment]
 
-    # --- shutil.rmtree ---------------------------------------------------------
+    # ─── shutil.rmtree ───
     _rmtree = _shutil.rmtree
 
     def rmtree(path, *a, **kw):
@@ -200,7 +200,7 @@ def _install_risky_op_hooks() -> None:
 
     _shutil.rmtree = rmtree  # type: ignore[assignment]
 
-    # --- pathlib.Path.unlink / .write_text / .write_bytes ----------------------
+    # ─── pathlib.Path.unlink / .write_text / .write_bytes ───
     _path_unlink = _pl.Path.unlink
     _path_write_text = _pl.Path.write_text
     _path_write_bytes = _pl.Path.write_bytes
@@ -221,7 +221,7 @@ def _install_risky_op_hooks() -> None:
     _pl.Path.write_text = path_write_text  # type: ignore[assignment]
     _pl.Path.write_bytes = path_write_bytes  # type: ignore[assignment]
 
-    # --- builtins.open with write mode ----------------------------------------
+    # ─── builtins.open with write mode ───
     # We DO NOT report reads ('r', 'rb', ''); reads are not risky. We only
     # flag modes containing 'w' / 'a' / 'x' / '+'.
     _real_open = builtins.open
@@ -235,9 +235,9 @@ def _install_risky_op_hooks() -> None:
         return _real_open(file, mode, *a, **kw)
 
     builtins.open = open_hook  # type: ignore[assignment]
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Matplotlib pyplot patch -- auto-invoke save_plot() on plt.savefig/show
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 def _install_pyplot_patch(namespace: dict) -> None:
     """Monkey-patch matplotlib.pyplot so plt.savefig/show auto-call save_plot().
@@ -312,9 +312,9 @@ def _install_pyplot_patch(namespace: dict) -> None:
 
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Captured-stdout wrapper
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 class _TeeStdout(io.TextIOBase):
@@ -345,9 +345,9 @@ class _TeeStdout(io.TextIOBase):
         return "".join(self._buf)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Main loop
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 def _make_local_save_plot():

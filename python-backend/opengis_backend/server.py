@@ -73,7 +73,7 @@ app.add_middleware(
 )
 
 
-# ---- REST Endpoints ----
+# ─── REST Endpoints ───
 
 
 @app.get("/api/health")
@@ -115,7 +115,7 @@ async def http_rpc(body: dict):
     return await dispatch_http(body, skill_registry)
 
 
-# ---- WebSocket Endpoint ----
+# ─── WebSocket Endpoint ───
 
 @app.websocket("/ws")
 async def websocket_endpoint(

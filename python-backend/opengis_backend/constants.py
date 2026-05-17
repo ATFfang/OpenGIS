@@ -4,9 +4,9 @@ These are NOT user-configurable (those go in config.py).
 All timeouts are in seconds unless noted otherwise.
 """
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Timeouts
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 # Min per-run exec timeout (1 s — prevents near-instant retries)
 MIN_EXEC_TIMEOUT: float = 1.0
@@ -26,9 +26,9 @@ CLEANUP_FUTURE_TIMEOUT: float = 10.0
 # Exec timeout step multiplier (max_steps * this = safety cap)
 EXEC_STEP_TIMEOUT_MULTIPLIER: float = 30.0
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Iteration / step limits
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 # Default max agent iterations
 DEFAULT_MAX_ITERATIONS: int = 10

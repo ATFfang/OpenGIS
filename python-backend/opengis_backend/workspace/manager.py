@@ -39,9 +39,9 @@ from typing import Final
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Public errors
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 class WorkspaceManagerError(RuntimeError):
@@ -52,9 +52,9 @@ class GitNotAvailableError(WorkspaceManagerError):
     """Raised when the ``git`` executable cannot be located on PATH."""
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Public data classes
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -78,9 +78,9 @@ class WorkspaceInfo:
     gitignore_updated: bool
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # .gitignore block
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 # We fence our additions with unmistakable markers so we can find the
 # block on repeat calls and stay idempotent even if the user edits
@@ -107,9 +107,9 @@ _GITIGNORE_BLOCK: Final = f"{_GITIGNORE_BEGIN}\n{_GITIGNORE_BODY}{_GITIGNORE_END
 _INITIAL_COMMIT_MSG: Final = "chore(opengis): initial workspace snapshot"
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # WorkspaceManager
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 class WorkspaceManager:
@@ -136,9 +136,9 @@ class WorkspaceManager:
         self._git_override = git_executable
         self._resolved_git: str | None = None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Public API
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def ensure_initialized(self, workspace: str | Path) -> WorkspaceInfo:
         """Make ``workspace`` safe for agent runs.
@@ -215,9 +215,9 @@ class WorkspaceManager:
             gitignore_updated=gitignore_updated,
         )
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # .gitignore helpers
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def _ensure_gitignore_block(self, ws: Path) -> bool:
         """Append the OpenGIS fenced block to ``.gitignore`` if absent.
@@ -240,9 +240,9 @@ class WorkspaceManager:
         gi.write_text(_GITIGNORE_BLOCK, encoding="utf-8")
         return True
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # git helpers
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def _git(self) -> str:
         if self._resolved_git is not None:
@@ -300,9 +300,9 @@ class WorkspaceManager:
         result = cls._git_run(["rev-parse", "--short", "HEAD"], cwd=ws, git=git)
         return result.stdout.strip()
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Snapshot / revert — used by A3 (pre/post-run) and A4 (revert RPC).
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def snapshot(
         self,

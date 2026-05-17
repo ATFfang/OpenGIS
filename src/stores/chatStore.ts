@@ -1,3 +1,4 @@
+/** Chat store. 对话状态管理：消息列表、附件、流式输出。 */
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
 import type { UIMessage } from '@/types/chat'

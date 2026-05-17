@@ -31,18 +31,14 @@ import {
   SettingSection,
 } from './components/SettingItem'
 
-/* ============================================
-   Protocol options — only openai and anthropic
-   ============================================ */
+// ─── Protocol options ──────────────────────────────────────────
 
 const PROTOCOL_OPTIONS: { value: ProtocolType; label: string; description: string }[] = [
   { value: 'openai', label: 'OpenAI Compatible', description: 'OpenAI-style API (chat/completions)' },
   { value: 'anthropic', label: 'Anthropic Compatible', description: 'Anthropic-style API (messages)' },
 ]
 
-/* ============================================
-   Navigation sections
-   ============================================ */
+// ─── Navigation sections ───────────────────────────────────────
 
 interface NavSection {
   id: string
@@ -58,9 +54,7 @@ const NAV_SECTIONS: NavSection[] = [
   { id: 'python', label: 'Python', icon: Terminal, keywords: ['python', 'path', 'environment', 'interpreter'] },
 ]
 
-/* ============================================
-   SettingsView — VSCode-style settings page
-   ============================================ */
+// ─── SettingsView ──────────────────────────────────────────────
 
 export function SettingsView() {
   const [searchQuery, setSearchQuery] = useState('')
@@ -499,7 +493,7 @@ export function SettingsView() {
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--text-muted) transparent' }}
         >
           <div className="max-w-[700px]">
-            {/* ======== Model Section ======== */}
+            {/* 模型配置 */}
             {filteredSections.some((s) => s.id === 'model') && (
               <div
                 id="section-model"
@@ -825,7 +819,7 @@ export function SettingsView() {
               </div>
             )}
 
-            {/* ======== Agent Section ======== */}
+            {/* Agent 配置 */}
             {filteredSections.some((s) => s.id === 'agent') && (
               <div
                 id="section-agent"
@@ -939,7 +933,7 @@ export function SettingsView() {
               </div>
             )}
 
-            {/* ======== Appearance Section ======== */}
+            {/* 外观设置 */}
             {filteredSections.some((s) => s.id === 'appearance') && (
               <div
                 id="section-appearance"
@@ -1107,7 +1101,7 @@ export function SettingsView() {
               </div>
             )}
 
-            {/* ======== Python Section ======== */}
+            {/* Python 环境 */}
             {filteredSections.some((s) => s.id === 'python') && (
               <div
                 id="section-python"

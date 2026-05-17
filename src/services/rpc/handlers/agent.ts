@@ -12,9 +12,9 @@ import { notImplemented, parseParams } from './_util';
 import { AgentHelloSchema } from './schemas';
 import { PROTOCOL_VERSION } from '@/types/protocol';
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 // Py → TS：rpc.agent.hello （TS 端必须注册 handler）
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 
 export const agentHandlers: Record<string, RpcHandler> = {
   'rpc.agent.hello': (params) => {
@@ -25,9 +25,9 @@ export const agentHandlers: Record<string, RpcHandler> = {
   },
 };
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 // TS → Py：caller 签名（Stage 3 填实现）
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 
 export interface AgentCaller {
   interrupt(runId: string): Promise<{ interrupted: boolean }>;

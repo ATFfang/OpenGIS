@@ -224,7 +224,7 @@ class RpcHandler:
             if request_id is not None:
                 await self._send_error(request_id, -32603, f"Internal error: {str(e)}")
 
-    # ---- Method Handlers ----
+    # ─── Method Handlers ───
 
     async def _handle_load_file(self, params: dict) -> Any:
         path = params.get("path")
@@ -272,7 +272,7 @@ class RpcHandler:
                 ),
             }
 
-    # ---- Script Runner (user-authored scripts in the agent's sandbox) ----
+    # ─── Script Runner (user-authored scripts in the agent's sandbox) ───
 
     def _ensure_script_runner(self) -> ScriptRunner:
         if self._script_runner is None:
@@ -611,7 +611,7 @@ class RpcHandler:
 
         return {"status": "cancelled" if cancelled else "idle"}
 
-    # ---- A4: workspace revert ----------------------------------------
+    # ─── A4: workspace revert ──────────────────────────────────────────
 
     async def _handle_workspace_revert_run(self, params: dict) -> Any:
         """Reset the workspace to a previous run's pre-run snapshot.
@@ -654,7 +654,7 @@ class RpcHandler:
             return {"status": "error", "message": str(e)}
         return {"status": "ok", "reset_to": pre_sha, "run_id": run_id}
 
-    # ---- C3: run listing / inspection / replay -----------------------
+    # ─── C3: run listing / inspection / replay ──────────────────────────────────────────
 
     async def _handle_runs_list(self, params: dict) -> Any:
         workspace = params.get("workspace_path")
@@ -711,7 +711,7 @@ class RpcHandler:
             }
         )
 
-    # ---- Agent helpers ----
+    # ─── Agent helpers ───
     
     def _ensure_agent(self) -> GISAgent:
         if self._agent is None:
@@ -992,7 +992,7 @@ class RpcHandler:
         except Exception as e:
             print(f"[RpcHandler] notify failed: {e}")
 
-    # ---- JSON-RPC Helpers ----
+    # ─── JSON-RPC Helpers ───
 
     async def _send_result(self, request_id: str, result: Any) -> None:
         await self.ws.send_text(
