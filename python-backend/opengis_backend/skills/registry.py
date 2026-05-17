@@ -50,6 +50,7 @@ def skill(
     examples: list[str] | None = None,
     tags: list[str] | None = None,
     needs_context: bool = False,
+    group: str = "core",
 ):
     """
     Decorator to register a function as a GIS Skill.
@@ -82,6 +83,7 @@ def skill(
             returns=returns,
             examples=examples or [],
             tags=tags or [],
+            group=group,
         )
 
         @wraps(func)
@@ -155,6 +157,10 @@ class SkillRegistry:
     def list_by_category(self, category: str) -> list[SkillSchema]:
         """List skills filtered by category."""
         return [s.schema for s in _registry.values() if s.schema.category == category]
+
+    def list_by_groups(self, groups: list[str]) -> list[RegisteredSkill]:
+        """List skills filtered by group membership."""
+        return [s for s in _registry.values() if s.schema.group in groups]
 
     def has(self, name: str) -> bool:
         """Check if a skill is registered."""

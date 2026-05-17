@@ -101,6 +101,7 @@ class SkillSchema:
     examples: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     version: str = "1.0.0"
+    group: str = "core"  # "core" = always-on, "qgis" = requires attach, etc.
 
     def to_dict(self) -> dict:
         return {
@@ -113,6 +114,7 @@ class SkillSchema:
             "examples": self.examples,
             "tags": self.tags,
             "version": self.version,
+            "group": self.group,
         }
 
     def to_openai_schema(self) -> dict:

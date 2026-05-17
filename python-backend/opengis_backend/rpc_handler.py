@@ -435,10 +435,11 @@ class RpcHandler:
         # back to appdata/agent-runs/<run_id>/".
         workspace_path = params.get("workspace_path") or None
 
-        # Process attachments: detect workflow vs regular files.
+        # Process attachments: detect workflow vs regular files vs skills.
         attachments = params.get("attachments") or []
         workflow_doc: WorkflowDocument | None = None
         regular_attachments: list[dict] = []
+        skill_groups: list[str] | None = None
 
         for att in attachments:
             if att.get("type") == "workflow":
@@ -449,6 +450,12 @@ class RpcHandler:
                     logger.warning("Failed to parse workflow attachment: %s", e)
                     # Fall back to treating it as a regular file.
                     regular_attachments.append(att)
+            elif att.get("type") == "skill":
+                # Extract skill groups to activate.
+                groups = att.get("skill_groups") or []
+                if groups:
+                    # Merge: keep "core" always available.
+                    skill_groups = list(set(groups + ["core"]))
             else:
                 regular_attachments.append(att)
 
@@ -491,7 +498,7 @@ class RpcHandler:
 
         async def _drive():
             try:
-                async for event in agent.run(message, context=ctx, workflow=workflow_doc):
+                async for event in agent.run(message, context=ctx, workflow=workflow_doc, active_skill_groups=skill_groups):
                     # Promote the lock owner now that we know the run_id.
                     if self._workspace_locks.get(lock_key) == "pending":
                         rid = (ctx.meta or {}).get("run_id")

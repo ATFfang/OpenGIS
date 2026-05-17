@@ -2,12 +2,14 @@
 out/
 dist/
 build/
+qgis/
 *.tsbuildinfo
 
 # ===== Dependencies =====
 node_modules/
 .pnp
 .pnp.js
+.mcp.json
 
 # ===== Python Backend =====
 python-backend/.venv/

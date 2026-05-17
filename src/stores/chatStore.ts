@@ -16,9 +16,11 @@ export interface ChatAttachment {
   /** 磁盘绝对路径 */
   path: string
   /** 文件类型提示 */
-  type: 'file' | 'workflow'
+  type: 'file' | 'workflow' | 'skill'
   /** 文件大小（字节，用于显示） */
   size?: number
+  /** 技能组列表（仅 type='skill' 时使用） */
+  skill_groups?: string[]
 }
 
 // ─── 对话类型定义 ──────────────────────────────────────────────
@@ -630,6 +632,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             name: a.name,
             path: a.path,
             type: a.type,
+            ...(a.skill_groups ? { skill_groups: a.skill_groups } : {}),
           })) || undefined,
         })
       } catch (error: any) {
