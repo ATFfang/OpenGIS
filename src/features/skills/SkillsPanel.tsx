@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { ChevronDown, ChevronRight, Zap, Layers, Search, Code, FileText, Map, HelpCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Zap, Layers, Search, Code, FileText, Map, HelpCircle, Terminal, ArrowRightLeft, Wrench } from 'lucide-react'
 import { pythonClient } from '@/services/pythonClient'
 import { useT } from '@/i18n'
 
@@ -33,11 +33,15 @@ type CategoryInfo = {
 }
 
 const CATEGORY_MAP: Record<string, CategoryInfo> = {
-  visualization: { label: 'Visualization', icon: Map, color: 'text-blue-400', bgColor: 'bg-blue-500/10' },
-  analysis:     { label: 'Analysis',      icon: Zap, color: 'text-amber-400', bgColor: 'bg-amber-500/10' },
-  data:          { label: 'Data',           icon: FileText, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10' },
-  utility:       { label: 'Utility',        icon: Code, color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
-  gis:           { label: 'GIS',            icon: Layers, color: 'text-cyan-400', bgColor: 'bg-cyan-500/10' },
+  visualization: { label: 'Visualization', icon: Map,          color: 'text-blue-400',   bgColor: 'bg-blue-500/10' },
+  analysis:      { label: 'Analysis',      icon: Zap,          color: 'text-amber-400',  bgColor: 'bg-amber-500/10' },
+  data:          { label: 'Data',          icon: FileText,     color: 'text-emerald-400',bgColor: 'bg-emerald-500/10' },
+  utility:       { label: 'Utility',       icon: Code,         color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
+  gis:           { label: 'GIS',           icon: Layers,       color: 'text-cyan-400',   bgColor: 'bg-cyan-500/10' },
+  system:        { label: 'System',        icon: Terminal,     color: 'text-green-400',  bgColor: 'bg-green-500/10' },
+  vector:        { label: 'Vector',        icon: Layers,       color: 'text-teal-400',   bgColor: 'bg-teal-500/10' },
+  conversion:    { label: 'Conversion',    icon: ArrowRightLeft,color: 'text-orange-400',bgColor: 'bg-orange-500/10' },
+  'qgis-system': { label: 'QGIS',          icon: Wrench,       color: 'text-amber-400',  bgColor: 'bg-amber-500/10' },
 }
 
 const FALLBACK_CATEGORY: CategoryInfo = {
