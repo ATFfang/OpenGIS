@@ -142,6 +142,7 @@ class RpcHandler:
         # than queue a second Send on the same workspace to keep the
         # state model simple — mirrors the decision in MEMORY ADR-009.
         self._workspace_locks: dict[str, str] = {}  # workspace -> owner run_id
+        self._titled_conversations: set[str] = set()  # conversation_ids that already have a title
         # Last LLM config hash — used to avoid unnecessary agent rebuilds.
         self._last_llm_config_hash: str | None = None
         # Workspace manager — shared across runs, stateless.
@@ -731,6 +732,10 @@ class RpcHandler:
         if not conversation_id:
             logger.debug("Title generation skipped: no conversation_id")
             return
+        if conversation_id in self._titled_conversations:
+            logger.debug("Title generation skipped: already titled for %s", conversation_id)
+            return
+        self._titled_conversations.add(conversation_id)
         if not settings.llm_api_key:
             logger.warning(
                 "Title generation skipped: llm_api_key is empty. Model=%s, base_url=%s",
