@@ -20,6 +20,7 @@ import {
   GitBranch,
   FolderOpen,
   Pencil,
+  Wrench,
 } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
 import { useAssetStore } from '@/stores/assetStore'
@@ -199,6 +200,16 @@ export function ChatView() {
       { name: `${entry.name}.flow.json`, path: entry.path, type: 'workflow' },
     ])
     setShowAttachPanel(false)
+  }, [])
+
+  const handleAttachSkill = useCallback((name: string, groups: string[]) => {
+    setAttachments((prev) => {
+      // Remove existing skill attachment with same name (toggle behavior)
+      const filtered = prev.filter(a => !(a.type === 'skill' && a.name === name))
+      // If already attached, just remove (toggle off)
+      if (prev.some(a => a.type === 'skill' && a.name === name)) return filtered
+      return [...filtered, { name, path: name.toLowerCase(), type: 'skill' as const, skill_groups: groups }]
+    })
   }, [])
 
   const removeAttachment = useCallback((index: number) => {
@@ -594,6 +605,8 @@ export function ChatView() {
                   >
                     {att.type === 'workflow' ? (
                       <GitBranch className="w-3 h-3 text-accent-primary shrink-0" />
+                    ) : att.type === 'skill' ? (
+                      <Wrench className="w-3 h-3 text-amber-400 shrink-0" />
                     ) : (
                       <FileText className="w-3 h-3 text-text-muted shrink-0" />
                     )}
@@ -674,6 +687,8 @@ export function ChatView() {
             <AttachPanel
               onAttachFile={handleAttachFile}
               onAttachWorkflow={handleAttachWorkflow}
+              onAttachSkill={handleAttachSkill}
+              attachedSkills={attachments.filter(a => a.type === 'skill').map(a => a.name)}
               onClose={() => setShowAttachPanel(false)}
             />
           )}
@@ -1063,15 +1078,26 @@ function ConversationListDropdown({
 function AttachPanel({
   onAttachFile,
   onAttachWorkflow,
+  onAttachSkill,
+  attachedSkills,
   onClose,
 }: {
   onAttachFile: () => void
   onAttachWorkflow: (entry: { path: string; name: string }) => void
+  onAttachSkill: (name: string, groups: string[]) => void
+  attachedSkills: string[]
   onClose: () => void
 }) {
   const t = useT()
   const ref = useRef<HTMLDivElement>(null)
   const workflowEntries = useWorkflowStore((s) => s.entries)
+  const refreshWorkflows = useWorkflowStore((s) => s.refresh)
+
+  // Load workflows on mount so the section is populated even if the
+  // WorkflowsPanel sidebar tab was never opened.
+  useEffect(() => {
+    refreshWorkflows()
+  }, [refreshWorkflows])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1136,6 +1162,56 @@ function AttachPanel({
             </div>
           </>
         )}
+
+        {/* Skills section */}
+        <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5 mt-1 flex items-center gap-1">
+          <Wrench className="w-3 h-3" />
+          Attach Skills
+        </div>
+        <button
+          onClick={() => onAttachSkill('QGIS4+', ['qgis'])}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
+            attachedSkills.includes('QGIS4+')
+              ? 'bg-amber-500/10 text-amber-300 ring-1 ring-amber-500/30'
+              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+          }`}
+        >
+          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
+            attachedSkills.includes('QGIS4+')
+              ? 'bg-amber-500/20 ring-amber-500/30'
+              : 'bg-amber-500/10 ring-amber-500/20'
+          }`}>
+            <Wrench className="w-3 h-3 text-amber-400" />
+          </div>
+          <div className="text-left flex-1 min-w-0">
+            <p className="text-[12px] font-medium leading-tight">QGIS4+</p>
+            <p className="text-[10px] text-text-muted mt-0.5">
+              {attachedSkills.includes('QGIS4+') ? 'Attached — click to detach' : 'QGIS MCP commands'}
+            </p>
+          </div>
+        </button>
+        <button
+          onClick={() => onAttachSkill('OSM', ['osm'])}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
+            attachedSkills.includes('OSM')
+              ? 'bg-green-500/10 text-green-300 ring-1 ring-green-500/30'
+              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+          }`}
+        >
+          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
+            attachedSkills.includes('OSM')
+              ? 'bg-green-500/20 ring-green-500/30'
+              : 'bg-green-500/10 ring-green-500/20'
+          }`}>
+            <Globe className="w-3 h-3 text-green-400" />
+          </div>
+          <div className="text-left flex-1 min-w-0">
+            <p className="text-[12px] font-medium leading-tight">OSM</p>
+            <p className="text-[10px] text-text-muted mt-0.5">
+              {attachedSkills.includes('OSM') ? 'Attached — click to detach' : 'OpenStreetMap data download'}
+            </p>
+          </div>
+        </button>
 
         {/* Hint */}
         <div className="px-2 pt-2 pb-1">

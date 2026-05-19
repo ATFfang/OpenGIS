@@ -102,7 +102,10 @@ save_plot() optional parameters:
 
 **中文支持**：matplotlib 绘图必须设置中文字体，防止乱码：
 ```python
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
+import matplotlib.font_manager as fm
+_candidates = ['PingFang SC', 'STHeiti', 'Heiti SC', 'SimHei', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Micro Hei']
+_available = set(f.name for f in fm.fontManager.ttflist)
+plt.rcParams['font.sans-serif'] = [c for c in _candidates if c in _available] or ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 ```
 

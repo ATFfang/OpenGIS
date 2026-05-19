@@ -142,6 +142,7 @@ class RpcHandler:
         # than queue a second Send on the same workspace to keep the
         # state model simple — mirrors the decision in MEMORY ADR-009.
         self._workspace_locks: dict[str, str] = {}  # workspace -> owner run_id
+        self._titled_conversations: set[str] = set()  # conversation_ids that already have a title
         # Last LLM config hash — used to avoid unnecessary agent rebuilds.
         self._last_llm_config_hash: str | None = None
         # Workspace manager — shared across runs, stateless.
@@ -223,7 +224,7 @@ class RpcHandler:
             if request_id is not None:
                 await self._send_error(request_id, -32603, f"Internal error: {str(e)}")
 
-    # ---- Method Handlers ----
+    # ─── Method Handlers ───
 
     async def _handle_load_file(self, params: dict) -> Any:
         path = params.get("path")
@@ -271,7 +272,7 @@ class RpcHandler:
                 ),
             }
 
-    # ---- Script Runner (user-authored scripts in the agent's sandbox) ----
+    # ─── Script Runner (user-authored scripts in the agent's sandbox) ───
 
     def _ensure_script_runner(self) -> ScriptRunner:
         if self._script_runner is None:
@@ -435,10 +436,11 @@ class RpcHandler:
         # back to appdata/agent-runs/<run_id>/".
         workspace_path = params.get("workspace_path") or None
 
-        # Process attachments: detect workflow vs regular files.
+        # Process attachments: detect workflow vs regular files vs skills.
         attachments = params.get("attachments") or []
         workflow_doc: WorkflowDocument | None = None
         regular_attachments: list[dict] = []
+        skill_groups: list[str] | None = None
 
         for att in attachments:
             if att.get("type") == "workflow":
@@ -449,6 +451,12 @@ class RpcHandler:
                     logger.warning("Failed to parse workflow attachment: %s", e)
                     # Fall back to treating it as a regular file.
                     regular_attachments.append(att)
+            elif att.get("type") == "skill":
+                # Extract skill groups to activate.
+                groups = att.get("skill_groups") or []
+                if groups:
+                    # Merge: keep "core" always available.
+                    skill_groups = list(set(groups + ["core"]))
             else:
                 regular_attachments.append(att)
 
@@ -491,7 +499,7 @@ class RpcHandler:
 
         async def _drive():
             try:
-                async for event in agent.run(message, context=ctx, workflow=workflow_doc):
+                async for event in agent.run(message, context=ctx, workflow=workflow_doc, active_skill_groups=skill_groups):
                     # Promote the lock owner now that we know the run_id.
                     if self._workspace_locks.get(lock_key) == "pending":
                         rid = (ctx.meta or {}).get("run_id")
@@ -603,7 +611,7 @@ class RpcHandler:
 
         return {"status": "cancelled" if cancelled else "idle"}
 
-    # ---- A4: workspace revert ----------------------------------------
+    # ─── A4: workspace revert ──────────────────────────────────────────
 
     async def _handle_workspace_revert_run(self, params: dict) -> Any:
         """Reset the workspace to a previous run's pre-run snapshot.
@@ -646,7 +654,7 @@ class RpcHandler:
             return {"status": "error", "message": str(e)}
         return {"status": "ok", "reset_to": pre_sha, "run_id": run_id}
 
-    # ---- C3: run listing / inspection / replay -----------------------
+    # ─── C3: run listing / inspection / replay ──────────────────────────────────────────
 
     async def _handle_runs_list(self, params: dict) -> Any:
         workspace = params.get("workspace_path")
@@ -703,7 +711,7 @@ class RpcHandler:
             }
         )
 
-    # ---- Agent helpers ----
+    # ─── Agent helpers ───
     
     def _ensure_agent(self) -> GISAgent:
         if self._agent is None:
@@ -724,6 +732,10 @@ class RpcHandler:
         if not conversation_id:
             logger.debug("Title generation skipped: no conversation_id")
             return
+        if conversation_id in self._titled_conversations:
+            logger.debug("Title generation skipped: already titled for %s", conversation_id)
+            return
+        self._titled_conversations.add(conversation_id)
         if not settings.llm_api_key:
             logger.warning(
                 "Title generation skipped: llm_api_key is empty. Model=%s, base_url=%s",
@@ -980,7 +992,7 @@ class RpcHandler:
         except Exception as e:
             print(f"[RpcHandler] notify failed: {e}")
 
-    # ---- JSON-RPC Helpers ----
+    # ─── JSON-RPC Helpers ───
 
     async def _send_result(self, request_id: str, result: Any) -> None:
         await self.ws.send_text(

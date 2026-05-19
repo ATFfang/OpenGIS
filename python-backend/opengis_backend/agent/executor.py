@@ -42,9 +42,9 @@ from opengis_backend.agent.agent_loop import CodeExecResult
 _IS_WINDOWS = sys.platform == "win32"
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Configuration
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -72,9 +72,9 @@ class SubprocessExecutorConfig:
     kill_grace: float = 2.0
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Exceptions
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 class SubprocessExecutorError(RuntimeError):
@@ -89,9 +89,9 @@ class ExecTimeout(SubprocessExecutorError):
     """A single exec call exceeded ``config.exec_timeout``."""
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Executor
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 class SubprocessPythonExecutor:
@@ -140,9 +140,9 @@ class SubprocessPythonExecutor:
         self._shutdown = threading.Event()
         self._async_loop: Optional[asyncio.AbstractEventLoop] = None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Agent loop protocol
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def send_tools(self, tools: dict[str, Any]) -> None:
         """Register tools and re-init the child with their names.
@@ -255,9 +255,9 @@ class SubprocessPythonExecutor:
                 self._async_loop.close()
                 self._async_loop = None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Interrupt (called by agent.cancel in Stage 4+)
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def interrupt(self) -> None:
         """Ask the child to stop what it's doing, SIGKILL if it won't.
@@ -299,9 +299,9 @@ class SubprocessPythonExecutor:
         else:
             self._terminate(proc)
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Internals: subprocess lifecycle
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def _ensure_child(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
@@ -376,9 +376,9 @@ class SubprocessPythonExecutor:
         except Exception as e:
             self._log_stderr(f"[executor] terminate failed: {e}\n")
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Internals: IPC primitives
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def _send(self, obj: dict) -> None:
         if self._proc is None or self._proc.stdin is None:
@@ -506,9 +506,9 @@ class SubprocessPythonExecutor:
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
     # Internals: tool bridge
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def _handle_tool_call(self, msg: dict) -> None:
         """Invoke a registered tool on behalf of the child."""

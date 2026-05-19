@@ -1,3 +1,4 @@
+/** Python backend client. 通过 WebSocket 连接 Python 后端的 JSON-RPC 客户端。 */
 import { v4 as uuid } from 'uuid'
 import {
   getMethodChannel,
@@ -225,7 +226,7 @@ export class PythonClient {
     return () => this.notificationHandlers.delete(handler)
   }
 
-  // ---- Private methods ----
+  // ─── Private methods ───
 
   private _connect(): void {
     try {

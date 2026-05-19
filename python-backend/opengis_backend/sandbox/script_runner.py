@@ -89,13 +89,13 @@ class ScriptRunner:
         self._current_executor: Optional[SubprocessPythonExecutor] = None
         self._current_run_id: Optional[str] = None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     @property
     def is_running(self) -> bool:
         return self._current_executor is not None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     async def run(
         self,
@@ -280,7 +280,7 @@ class ScriptRunner:
             self._current_executor = None
             self._current_run_id = None
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     def cancel(self) -> bool:
         """Interrupt the running script, if any.
@@ -299,7 +299,7 @@ class ScriptRunner:
             logger.warning("executor interrupt failed: %s", e)
             return False
 
-    # ------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────────
 
     async def _safe_notify(self, method: str, params: dict) -> None:
         if not self._notify_fn:
@@ -310,7 +310,7 @@ class ScriptRunner:
             logger.warning("notify %s failed: %s", method, e)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 
 def _jsonable(value: Any) -> Any:

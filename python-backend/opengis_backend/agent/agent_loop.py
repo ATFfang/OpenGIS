@@ -36,9 +36,9 @@ from opengis_backend.constants import (  # noqa: E402 module-level import
 
 logger = logging.getLogger(__name__)
 
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Code block extraction
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 # We support both markdown fences and <code> tags for code extraction.
 # The LLM is prompted to use ```python fences (more natural than <code>
@@ -76,9 +76,9 @@ def extract_thought(text: str) -> str:
     return cleaned.strip()
 
 
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Streaming parser — splits token deltas into thought vs code as they arrive
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 # Recognise an opening Python fence: ``` optionally followed by python/py
 # and the rest of the line. We scan the buffer manually rather than with
@@ -338,9 +338,9 @@ class StreamingParser:
                 logger.exception("on_code_end callback raised")
 
 
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Step result from executor
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 @dataclass
 class CodeExecResult:
@@ -351,9 +351,9 @@ class CodeExecResult:
     is_final_answer: bool = False
 
 
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # Step callback protocol
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 @dataclass
 class AgentStep:
@@ -369,9 +369,9 @@ class AgentStep:
     duration_ms: float = 0.0
 
 
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 # The Agent Loop
-# ----------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────
 
 @dataclass
 class AgentLoop:

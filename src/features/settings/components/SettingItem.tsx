@@ -1,9 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 
-/* ============================================
-   VSCode-style Setting Item Components
-   ============================================ */
+// ─── VSCode-style Setting Item Components ──────────────────────
 
 interface SettingItemProps {
   id: string

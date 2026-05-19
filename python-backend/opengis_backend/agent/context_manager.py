@@ -563,7 +563,7 @@ class ContextManager:
 
         return saved_tokens
 
-    # --- Gap #2: File re-reading after compression ---
+    # ─── Gap #2: File re-reading after compression ───
 
     def track_file_edit(self, file_path: str) -> None:
         """Record that a file was edited."""
@@ -610,7 +610,7 @@ class ContextManager:
         
         return "\n".join(parts) if len(parts) > 1 else None
 
-    # --- Gap #4: Multi-language support ---
+    # ─── Gap #4: Multi-language support ───
 
     def _detect_language(self, messages: list[dict]) -> str:
         """Detect the primary language of the conversation.

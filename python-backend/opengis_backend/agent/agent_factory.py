@@ -73,6 +73,7 @@ def build_agent_loop(
     on_reasoning_start: Optional[Callable[[int], None]] = None,
     on_reasoning_end: Optional[Callable[[int], None]] = None,
     on_reasoning_promote: Optional[Callable[[int], None]] = None,
+    skill_groups: Optional[list[str]] = None,
 ) -> tuple[AgentLoop, Any]:
     """Build a fresh AgentLoop + subprocess executor.
 
@@ -111,6 +112,10 @@ def build_agent_loop(
         it owns a subprocess handle.
     """
     registered = skills.list_registered()
+
+    # Filter by skill groups if specified (e.g. only expose 'core' + 'qgis' skills).
+    if skill_groups is not None:
+        registered = [s for s in registered if s.schema.group in skill_groups]
 
     # Build tool callables — each needs_ctx skill receives *this* ctx.
     tool_callables = build_tool_callables(registered, ctx_provider=lambda: ctx)

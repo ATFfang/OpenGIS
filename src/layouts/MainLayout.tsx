@@ -33,8 +33,20 @@ export function MainLayout() {
   const [activeSidebarTab, setActiveSidebarTab] = useState<string>('layers')
   const [showBottomPanel, setShowBottomPanel] = useState(false)
   const [showChat, setShowChat] = useState(true)
+  const [mapFullscreen, setMapFullscreen] = useState(false)
 
   const isSettingsView = activeSidebarTab === 'settings'
+
+  const toggleFullscreen = () => setMapFullscreen((v) => !v)
+
+  // Fullscreen mode: render only MapView
+  if (mapFullscreen) {
+    return (
+      <div className="h-screen w-screen overflow-hidden">
+        <MapView onToggleFullscreen={toggleFullscreen} isFullscreen />
+      </div>
+    )
+  }
 
   // Determine if sidebar content panel should be shown
   const showSidebarContent = !isSettingsView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'skills' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
@@ -69,7 +81,7 @@ export function MainLayout() {
             <PanelGroup direction="horizontal" className="flex-1">
               {/* Primary panel: Map + Code tab container */}
               <Panel defaultSize={showChat ? 60 : 100} minSize={30}>
-                <PrimaryPanel />
+                <PrimaryPanel onToggleFullscreen={toggleFullscreen} />
               </Panel>
 
               {showChat && (
@@ -194,7 +206,7 @@ function PythonStatusIndicator() {
  * switch between Map view and Code viewer. Supports split view
  * (map + code side by side or top/bottom).
  */
-function PrimaryPanel() {
+function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }) {
   const tabs = useViewStore((s) => s.tabs)
   const activeTabId = useViewStore((s) => s.activeTabId)
   const setActiveTab = useViewStore((s) => s.setActiveTab)
@@ -210,7 +222,7 @@ function PrimaryPanel() {
 
   // No code tabs — just show the map
   if (codeTabs.length === 0) {
-    return <MapView />
+    return <MapView onToggleFullscreen={onToggleFullscreen} />
   }
 
   // Split view: map + code side by side or top/bottom
@@ -218,7 +230,7 @@ function PrimaryPanel() {
     return (
       <PanelGroup direction={splitDirection} className="h-full">
         <Panel defaultSize={50} minSize={20}>
-          <MapView />
+          <MapView onToggleFullscreen={onToggleFullscreen} />
         </Panel>
         <PanelResizeHandle
           className={
@@ -302,11 +314,11 @@ function PrimaryPanel() {
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTabId === 'map' ? (
-          <MapView />
+          <MapView onToggleFullscreen={onToggleFullscreen} />
         ) : activeCodeTab ? (
           <CodeTabContent tab={activeCodeTab} />
         ) : (
-          <MapView />
+          <MapView onToggleFullscreen={onToggleFullscreen} />
         )}
       </div>
     </div>

@@ -498,6 +498,115 @@ def update_layer_style(
 
 
 # ──────────────────────────────────────────────────────────────────────
+# set_graduated_style  (choropleth / graduated renderer)
+# ──────────────────────────────────────────────────────────────────────
+
+_COLOR_RAMPS = [
+    "viridis", "plasma", "inferno", "magma",
+    "reds", "blues", "greens", "oranges",
+    "RdYlGn", "RdYlBu", "spectral", "Tableau10",
+]
+
+
+@skill(
+    name="set_graduated_style",
+    display_name="Set Graduated Style",
+    description=(
+        "Apply graduated (choropleth) styling to a vector layer. "
+        "Colors features by a numeric field using classification."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "The layer id to style."},
+        {"name": "field", "type": "string", "required": True,
+         "description": "Numeric field name to classify by (e.g. 'population', 'area')."},
+        {"name": "method", "type": "string", "required": False, "default": "quantile",
+         "description": "Classification method: 'quantile', 'equal-interval', 'jenks', or 'manual'."},
+        {"name": "classes", "type": "number", "required": False, "default": 5,
+         "description": "Number of classes (2-12)."},
+        {"name": "palette", "type": "string", "required": False, "default": "viridis",
+         "description": f"Color ramp name. Options: {', '.join(_COLOR_RAMPS)}."},
+    ],
+    returns="True when the style was applied.",
+    examples=["Style districts layer by population with 5 quantile classes", "Choropleth the provinces layer by GDP using blues palette"],
+    tags=["map", "style", "choropleth", "graduated"],
+    needs_context=True,
+)
+def set_graduated_style(
+    ctx: SkillContext,
+    layer_id: str,
+    field: str,
+    method: str = "quantile",
+    classes: int = 5,
+    palette: str = "viridis",
+) -> bool:
+    run_async_from_sync(ctx.notify(
+        "rpc.ui.map.set_layer_renderer",
+        {
+            "layer_id": layer_id,
+            "renderer": "graduated",
+            "graduated": {
+                "field": field,
+                "method": method,
+                "classes": int(classes),
+                "palette": [palette],  # frontend resolves ramp name → colors
+            },
+        },
+    ))
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# set_categorized_style  (categorical renderer)
+# ──────────────────────────────────────────────────────────────────────
+
+@skill(
+    name="set_categorized_style",
+    display_name="Set Categorized Style",
+    description=(
+        "Apply categorized styling to a vector layer. "
+        "Assigns unique colors to each unique value of a text/enum field."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "The layer id to style."},
+        {"name": "field", "type": "string", "required": True,
+         "description": "Categorical field name (e.g. 'type', 'land_use')."},
+        {"name": "max_categories", "type": "number", "required": False, "default": 10,
+         "description": "Max unique categories before grouping as 'other' (1-64)."},
+        {"name": "other_color", "type": "string", "required": False, "default": "#cccccc",
+         "description": "Color for values beyond max_categories."},
+    ],
+    returns="True when the style was applied.",
+    examples=["Color land_use layer by type", "Categorize roads layer by road_class"],
+    tags=["map", "style", "categorized"],
+    needs_context=True,
+)
+def set_categorized_style(
+    ctx: SkillContext,
+    layer_id: str,
+    field: str,
+    max_categories: int = 10,
+    other_color: str = "#cccccc",
+) -> bool:
+    run_async_from_sync(ctx.notify(
+        "rpc.ui.map.set_layer_renderer",
+        {
+            "layer_id": layer_id,
+            "renderer": "categorized",
+            "categorized": {
+                "field": field,
+                "maxCategories": int(max_categories),
+                "otherColor": other_color,
+            },
+        },
+    ))
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────
 # add_raster
 # ──────────────────────────────────────────────────────────────────────
 @skill(
