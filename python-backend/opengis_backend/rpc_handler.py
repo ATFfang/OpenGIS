@@ -167,6 +167,9 @@ class RpcHandler:
             "rpc.agent.interrupt": self._handle_agent_cancel,
             "rpc.agent.set_llm_config": self._handle_agent_configure,
             "rpc.agent.test_connection": self._handle_agent_test_connection,
+            # user_instructions — global personalization prompt
+            "user_instructions.get": self._handle_ui_get,
+            "user_instructions.set": self._handle_ui_set,
             # A4 + C3 — workspace / run inspection & control
             "rpc.workspace.revert_run": self._handle_workspace_revert_run,
             "rpc.runs.list": self._handle_runs_list,
@@ -431,6 +434,9 @@ class RpcHandler:
         if not message:
             raise ValueError("Missing required parameter: message")
 
+        # Optional user instructions — global personalization prompt
+        user_instructions = params.get("user_instructions") or None
+
         # Optional workspace root — used by ScriptArchive to decide where
         # to persist step scripts. None means "no workspace open → fall
         # back to appdata/agent-runs/<run_id>/".
@@ -499,7 +505,7 @@ class RpcHandler:
 
         async def _drive():
             try:
-                async for event in agent.run(message, context=ctx, workflow=workflow_doc, active_skill_groups=skill_groups):
+                async for event in agent.run(message, context=ctx, workflow=workflow_doc, active_skill_groups=skill_groups, user_instructions=user_instructions):
                     # Promote the lock owner now that we know the run_id.
                     if self._workspace_locks.get(lock_key) == "pending":
                         rid = (ctx.meta or {}).get("run_id")
@@ -991,6 +997,20 @@ class RpcHandler:
                 await self._send_notification(method, params)
         except Exception as e:
             print(f"[RpcHandler] notify failed: {e}")
+
+    # ─── User Instructions ───
+
+    async def _handle_ui_get(self, params: dict) -> Any:
+        """Return the current user instructions."""
+        from opengis_backend.user_prefs.store import load
+        return {"content": load()}
+
+    async def _handle_ui_set(self, params: dict) -> Any:
+        """Replace user instructions (called from Settings UI)."""
+        from opengis_backend.user_prefs.store import save
+        content = params.get("content", "")
+        save(str(content))
+        return {"status": "ok"}
 
     # ─── JSON-RPC Helpers ───
 

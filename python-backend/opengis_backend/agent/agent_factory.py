@@ -74,6 +74,7 @@ def build_agent_loop(
     on_reasoning_end: Optional[Callable[[int], None]] = None,
     on_reasoning_promote: Optional[Callable[[int], None]] = None,
     skill_groups: Optional[list[str]] = None,
+    user_instructions: Optional[str] = None,
 ) -> tuple[AgentLoop, Any]:
     """Build a fresh AgentLoop + subprocess executor.
 
@@ -169,6 +170,7 @@ def build_agent_loop(
         on_reasoning_end=on_reasoning_end,
         on_reasoning_promote=on_reasoning_promote,
         context=context if context is not None else ContextManager(),
+        user_instructions=user_instructions,
     )
 
     return agent_loop, executor

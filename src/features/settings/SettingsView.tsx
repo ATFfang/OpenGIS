@@ -96,6 +96,19 @@ export function SettingsView() {
     loadFromElectron()
   }, [loadFromElectron])
 
+  // Load user instructions from backend (source of truth)
+  useEffect(() => {
+    let cancelled = false
+    pythonClient.send('user_instructions.get', {})
+      .then((res: any) => {
+        if (!cancelled && res?.content) {
+          useSettingsStore.getState().updateAgent({ customInstructions: res.content })
+        }
+      })
+      .catch(() => { /* backend may not be ready yet */ })
+    return () => { cancelled = true }
+  }, [])
+
   // Monitor Python backend status
   useEffect(() => {
     // Fetch initial status
@@ -919,15 +932,26 @@ export function SettingsView() {
                   <SettingItem
                     id="agent-instructions"
                     label="Custom Instructions"
-                    description="Additional instructions appended to the system prompt. Use this to customize the agent's behavior, persona, or domain knowledge."
+                    description="Global personalization prompt injected into every conversation. Agent can also auto-learn your preferences and append [agent] entries."
                   >
                     <SettingTextArea
                       id="agent-instructions"
                       value={agent.customInstructions}
-                      onChange={(v) => setAgent({ customInstructions: v })}
-                      placeholder="e.g., Always use EPSG:4326 for output coordinate systems. Prefer GeoPandas over raw GDAL for vector operations."
-                      rows={5}
+                      onChange={async (v) => {
+                        const trimmed = v.slice(0, 2000)
+                        setAgent({ customInstructions: trimmed })
+                        try {
+                          await pythonClient.send('user_instructions.set', { content: trimmed })
+                        } catch (e) {
+                          console.warn('[Settings] user_instructions.set failed:', e)
+                        }
+                      }}
+                      placeholder="[user] Default to Chinese.&#10;[user] Use CGCS2000 (EPSG:4490).&#10;[agent] User prefers seaborn for charts."
+                      rows={8}
                     />
+                    <div className="text-[10px] text-text-muted mt-1 text-right">
+                      {agent.customInstructions.length} / 2000
+                    </div>
                   </SettingItem>
                 </SettingSection>
               </div>

@@ -24,7 +24,7 @@ import { useViewStore, type ViewTab } from '@/stores/viewStore'
  * ┌─────────┬────────────┬──────────────────────────────┬──────────────────┐
  * │         │  Sidebar   │  Primary Panel               │  Secondary Panel │
  * │  Icons  │  Content   │  (Map / Code tab view)       │  (Chat)          │
- * │  (52px) │  (240px)   │                              │                  │
+ * │  (52px) │  (200px)   │                              │                  │
  * │         │            ├──────────────────────────────┴──────────────────┤
  * │         │            │  Bottom Panel (Data Table)                      │
  * └─────────┴────────────┴────────────────────────────────────────────────┘
@@ -63,7 +63,7 @@ export function MainLayout() {
 
       {/* Sidebar Content Panel (Layer Panel, Files, Skills) */}
       {showSidebarContent && (
-        <div className="w-[240px] h-full border-r border-border shrink-0 relative">
+        <div className="w-[200px] h-full border-r border-border shrink-0 relative">
           <SidebarContent activeTab={activeSidebarTab} />
         </div>
       )}
@@ -80,7 +80,7 @@ export function MainLayout() {
             {/* Top panels: Primary (Map/Code) + Chat */}
             <PanelGroup direction="horizontal" className="flex-1">
               {/* Primary panel: Map + Code tab container */}
-              <Panel defaultSize={showChat ? 60 : 100} minSize={30}>
+              <Panel defaultSize={showChat ? 68 : 100} minSize={30}>
                 <PrimaryPanel onToggleFullscreen={toggleFullscreen} />
               </Panel>
 
@@ -89,7 +89,7 @@ export function MainLayout() {
                   <PanelResizeHandle className="w-[3px] bg-border hover:bg-accent-primary transition-colors duration-150 cursor-col-resize" />
 
                   {/* Secondary panel: Chat */}
-                  <Panel defaultSize={40} minSize={25}>
+                  <Panel defaultSize={32} minSize={20}>
                     <ChatView />
                   </Panel>
                 </>

@@ -2,7 +2,6 @@
 out/
 dist/
 build/
-qgis/
 *.tsbuildinfo
 
 # ===== Dependencies =====

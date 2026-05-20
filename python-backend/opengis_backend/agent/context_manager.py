@@ -295,13 +295,14 @@ class ContextManager:
             },
         })
 
-    def build_messages(self, system_prompt: str) -> list[dict[str, str]]:
+    def build_messages(self, system_prompt: str, user_instructions: str | None = None) -> list[dict[str, str]]:
         """Build the messages list for an LLM call.
 
         Structure:
         1. System prompt (always first)
-        2. Summary of older turns (if compressed)
-        3. Recent messages (from _summary_cutoff onward)
+        2. User preferences (if provided)
+        3. Summary of older turns (if compressed)
+        4. Recent messages (from _summary_cutoff onward)
 
         Internal-only fields (anything starting with ``_``, e.g. ``_meta``
         used by tool-result pruning) are stripped before returning.
@@ -309,6 +310,12 @@ class ContextManager:
         result: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
         ]
+
+        if user_instructions and user_instructions.strip():
+            result.append({
+                "role": "system",
+                "content": f"## User Preferences\n{user_instructions.strip()[:2000]}",
+            })
 
         if self._summary:
             result.append({

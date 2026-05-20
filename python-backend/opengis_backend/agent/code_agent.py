@@ -103,6 +103,7 @@ class GISCodeAgent:
         context: SkillContext | None = None,
         workflow: WorkflowDocument | None = None,
         active_skill_groups: list[str] | None = None,
+        user_instructions: str | None = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         """
         Run the agent on a user message. Yields AgentEvents.
@@ -374,6 +375,7 @@ class GISCodeAgent:
                 on_reasoning_end=_on_reasoning_end,
                 on_reasoning_promote=_on_reasoning_promote,
                 skill_groups=active_skill_groups,
+                user_instructions=user_instructions,
             )
 
         # Expose the executor and loop for cancellation.

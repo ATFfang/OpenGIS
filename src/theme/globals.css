@@ -142,6 +142,25 @@ body {
   background-color: var(--bg-hover) !important;
 }
 
+/* Scale bar */
+.maplibregl-ctrl-scale {
+  background: rgba(18, 21, 28, 0.75) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-color) !important;
+  border-top: none !important;
+  border-radius: 0 0 6px 6px !important;
+  padding: 2px 8px !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary) !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0.02em;
+}
+
+.light .maplibregl-ctrl-scale {
+  background: rgba(255, 255, 255, 0.8) !important;
+}
+
 /* ============================================
    Utility Classes
    ============================================ */

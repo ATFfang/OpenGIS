@@ -430,6 +430,7 @@ class AgentLoop:
     on_reasoning_end: Optional[Callable[[int], None]] = None
     on_reasoning_promote: Optional[Callable[[int], None]] = None  # round became a text reply
     context: ContextManager = field(default_factory=ContextManager)
+    user_instructions: Optional[str] = None
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point. Checked at the top of each iteration.
     _interrupted: bool = field(default=False, init=False, repr=False)
@@ -460,7 +461,7 @@ class AgentLoop:
                 logger.info("Agent loop interrupted externally after %d code steps.", code_steps)
                 return "(Task interrupted by user.)"
             # 1. Build messages with context compression.
-            messages = self.context.build_messages(self.system_prompt)
+            messages = self.context.build_messages(self.system_prompt, user_instructions=self.user_instructions)
 
             # 2. Call LLM — notify the UI that we're waiting.
             if self.progress_callback:

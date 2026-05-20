@@ -625,6 +625,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
           return
         }
 
+        const { useSettingsStore: settingsStore } = await import('./settingsStore')
+        const userInstructions = settingsStore.getState().agent.customInstructions || undefined
+
         await pythonClient.send('chat.user_message', {
           message: text,
           conversation_id: conversationId,
@@ -635,6 +638,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             type: a.type,
             ...(a.skill_groups ? { skill_groups: a.skill_groups } : {}),
           })) || undefined,
+          user_instructions: userInstructions,
         })
       } catch (error: any) {
         console.error('[chatStore] chat.user_message 失败:', error)
