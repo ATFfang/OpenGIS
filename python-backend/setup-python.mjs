@@ -5,7 +5,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { resolve, join } from 'node:path'
+import { join } from 'node:path'
 import { execSync } from 'node:child_process'
 import { platform } from 'node:os'
 
@@ -14,7 +14,6 @@ const venvDir = join(backendDir, '.venv')
 const isWin = platform() === 'win32'
 const pythonCmd = isWin ? 'python' : 'python3'
 const venvPython = isWin ? join(venvDir, 'Scripts', 'python.exe') : join(venvDir, 'bin', 'python')
-const venvPip = isWin ? join(venvDir, 'Scripts', 'pip.exe') : join(venvDir, 'bin', 'pip')
 
 function run(cmd) {
   console.log(`  > ${cmd}`)
@@ -31,7 +30,7 @@ if (!existsSync(venvPython)) {
 
 // Step 2: Install dependencies
 console.log('[setup:python] Installing dependencies...')
-run(`"${venvPip}" install --upgrade pip`)
-run(`"${venvPip}" install -e "${backendDir}"`)
+run(`"${venvPython}" -m pip install --upgrade pip`)
+run(`"${venvPython}" -m pip install -e "${backendDir}"`)
 
 console.log(`\n[setup:python] Done. Python: ${venvPython}`)
