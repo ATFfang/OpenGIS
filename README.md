@@ -379,8 +379,7 @@ def my_analysis(ctx: SkillContext, input_layer_id: str, radius: float) -> dict:
 | 桌面壳 | Electron 30.x | 跨平台桌面 |
 | 前端 | React 18 + TypeScript 5 | UI |
 | 构建 | Vite 5 + electron-vite | 三入口（main / preload / renderer）HMR + 打包 |
-| 地图 | MapLibre GL JS 4.x + Deck.gl 9.x | WebGL 渲染 |
-| 图表 | ECharts 5.x | 统计可视化 |
+| 地图 | MapLibre GL JS 4.x | WebGL 渲染 |
 | 状态 | Zustand 4.x | 轻量状态管理 |
 | 样式 | Tailwind CSS 3.x | utility-first |
 | 编辑器 | Monaco Editor | 代码查看 / 编辑 / 重跑 |
