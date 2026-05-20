@@ -26,8 +26,6 @@
     "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^0.0.66",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
     "@tmcw/togeojson": "^7.1.2",
     "ai": "^3.4.7",
@@ -45,7 +43,7 @@
     "shapefile": "^0.6.6",
     "tailwind-merge": "^2.5.3",
     "uuid": "^10.0.0",
-        "zod": "^3.25.76",
+    "zod": "^3.25.76",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
