@@ -73,9 +73,11 @@ export function MapView({
   const showMapLabels = useSettingsStore((s) => s.appearance.showMapLabels)
 
   // 新增：应用 showMapLabels 设置（处理 raster 和 vector 底图）
-  const applyShowMapLabels = useCallback((showLabels: boolean, currentBasemap: BasemapSource) => {
+  // 读取当前 basemap 从 store 而非闭包，避免在 style reload 期间拿到过期引用。
+  const applyShowMapLabels = useCallback((showLabels: boolean) => {
     const store = useMapStore.getState()
-    
+    const currentBasemap = store.basemap
+
     if (currentBasemap.type === 'raster-tiles') {
       // Raster 底图：切换到 vector 底图变体
       const targetId = showLabels ? 'carto-voyager' : 'carto-voyager-nolabels'
@@ -85,7 +87,7 @@ export function MapView({
       }
       return
     }
-    
+
     // Vector 底图：尝试 -nolabels 变体
     const currentId = currentBasemap.id
     if (!showLabels) {
@@ -103,7 +105,7 @@ export function MapView({
         return
       }
     }
-    
+
     // 降级：直接切换 symbol 图层
     const map = mapEngine.getMap()
     if (map && map.isStyleLoaded()) {
@@ -136,7 +138,7 @@ export function MapView({
     // they get removed from the store. (Stage 3.9 bug: "删除图层但地图
     // 还在".)
     map.on('load', () => {
-      const currentLayers = useMapStore.getState().layers
+      const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
       for (const layer of currentLayers) {
         mapEngine.syncLayer(layer)
         prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
@@ -145,8 +147,8 @@ export function MapView({
       
       // 新增：应用 showMapLabels 设置（从持久化存储读取）
       // 这确保地图初始化时就能正确应用用户的 label 显示偏好
-      const { appearance, basemap } = useSettingsStore.getState()
-      applyShowMapLabels(appearance.showMapLabels, basemap)
+      const { appearance } = useSettingsStore.getState()
+      applyShowMapLabels(appearance.showMapLabels)
 
       // 注意：identify / box-select controller 的挂载不再依赖此回调，
       // MapEngine 自身在 init() 里订阅 map.once('load') 翻 ready 标志，
@@ -155,7 +157,7 @@ export function MapView({
 
     // Register style-reload callback so user layers survive basemap switches.
     mapEngine.setOnStyleReload(() => {
-      const currentLayers = useMapStore.getState().layers
+      const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
       prevRenderTypeRef.current.clear()
       for (const layer of currentLayers) {
         mapEngine.syncLayer(layer)
@@ -182,6 +184,40 @@ export function MapView({
   // Attach box-select controller
   useBoxSelect()
 
+  // ─── Apply persisted basemap on startup ─────────────────────────
+  // settingsStore persists the user's basemap choice (appearance.basemapId)
+  // across sessions, but mapStore always inits with DEFAULT_BASEMAP.
+  // Once the persisted value loads from electron-store, apply it to mapStore.
+
+  const persistedBasemapId = useSettingsStore((s) => s.appearance.basemapId)
+  // Track which basemap we've already applied, so we don't redundantly set
+  // on every render but DO re-apply when loadFromElectron brings in the
+  // real persisted value (which differs from the store default).
+  const appliedBasemapRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!persistedBasemapId) return
+    // Composite key so we re-apply when EITHER basemapId or showMapLabels changes
+    // after loadFromElectron finishes (both may change in the same batch).
+    const key = `${persistedBasemapId}:${showMapLabels}`
+    if (appliedBasemapRef.current === key) return
+    appliedBasemapRef.current = key
+
+    let target = BUILTIN_BASEMAPS.find((b) => b.id === persistedBasemapId)
+    if (!target) return
+
+    // Respect showMapLabels: if false, prefer the -nolabels variant.
+    if (!showMapLabels && target.type === 'vector-style' && !target.id.endsWith('-nolabels')) {
+      const nolabelsId = target.id + '-nolabels'
+      const nolabels = BUILTIN_BASEMAPS.find((b) => b.id === nolabelsId)
+      if (nolabels) target = nolabels
+    }
+
+    if (target.id !== basemap.id) {
+      useMapStore.getState().setBasemap(target)
+    }
+  }, [persistedBasemapId, showMapLabels])
+
   // ─── Sync basemap changes ─────────────────────────────────────
 
   const prevBasemapRef = useRef(basemap.id)
@@ -198,7 +234,7 @@ export function MapView({
     const map = mapEngine.getMap()
     if (map) {
       map.once('style.load', () => {
-        const currentLayers = useMapStore.getState().layers
+        const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
         for (const layer of currentLayers) {
           mapEngine.syncLayer(layer)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
@@ -281,6 +317,8 @@ export function MapView({
     syncLayersToMap(layers)
 
     function syncLayersToMap(currentLayers: typeof layers) {
+      // Extension layers manage their own MapLibre resources — skip base sync.
+      currentLayers = currentLayers.filter((l) => !l.extension)
       const currentIds = new Set(currentLayers.map((l) => l.id))
       const prevIds = new Set(prevLayerIdsRef.current)
 

@@ -8,6 +8,7 @@ import {
   globalRegistry,
   registerAllHandlers,
 } from '@/services/rpc'
+import { installExtensions } from '@/features/map/extensions'
 
 function App() {
   const loadFromElectron = useSettingsStore((s) => s.loadFromElectron)
@@ -26,6 +27,7 @@ function App() {
     // "method already registered" on re-mount.
     registerAllHandlers(globalRegistry, { override: true })
     pythonClient.setDispatcher(globalDispatcher)
+    installExtensions()
 
     // Signal the main process that React has painted.
     // The main process waits for this before closing the loading window.

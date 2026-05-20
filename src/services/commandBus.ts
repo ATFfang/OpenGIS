@@ -138,6 +138,14 @@ const handlers: Record<string, CommandHandler> = {
       store.updateLayerStyle(layer_id, { color } as any)
     }
   },
+
+  // ── User Instructions ───────────────────────────────────────────
+  'user_instructions.updated': async (params) => {
+    const { content } = params || {}
+    if (typeof content !== 'string') return
+    const { useSettingsStore } = await import('@/stores/settingsStore')
+    useSettingsStore.getState().updateAgent({ customInstructions: content })
+  },
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────

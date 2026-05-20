@@ -109,7 +109,7 @@ export class MapEngine {
 
     // 添加控件
     this.map.addControl(new maplibregl.NavigationControl(), 'top-right')
-    this.map.addControl(new maplibregl.ScaleControl(), 'bottom-left')
+    this.map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
     this.map.addControl(
       new maplibregl.AttributionControl({ compact: true }),
       'bottom-right'

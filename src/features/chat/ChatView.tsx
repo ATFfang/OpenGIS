@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
 import {
   Send,
   Paperclip,
@@ -6,8 +6,6 @@ import {
   ChevronDown,
   Plus,
   Globe,
-  BarChart3,
-  Layers,
   Cpu,
   MessageSquare,
   Zap,
@@ -739,7 +737,7 @@ function MessageGroup({
 }: {
   role: MessageRole
   runId?: string
-  children: React.ReactNode
+  children: ReactNode
 }) {
   if (role === 'system') {
     // 细条系统消息（token/cost 指示）不占头像位。
@@ -838,40 +836,14 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
   const workspacePath = useAssetStore((s) => s.workspacePath)
   const hasWorkspace = !!workspacePath
 
-  const suggestions = [
-    {
-      text: 'Load the shapefile and show it on the map',
-      icon: <Globe className="w-4 h-4" />,
-      desc: 'Data Loading',
-      gradient: 'from-blue-500/10 to-cyan-500/10',
-      iconColor: 'text-blue-400',
-      borderColor: 'hover:border-blue-500/20',
-    },
-    {
-      text: 'Create a 500m buffer around all schools',
-      icon: <Layers className="w-4 h-4" />,
-      desc: 'Spatial Analysis',
-      gradient: 'from-emerald-500/10 to-teal-500/10',
-      iconColor: 'text-emerald-400',
-      borderColor: 'hover:border-emerald-500/20',
-    },
-    {
-      text: 'Calculate the slope from this DEM raster',
-      icon: <BarChart3 className="w-4 h-4" />,
-      desc: 'Terrain Analysis',
-      gradient: 'from-amber-500/10 to-orange-500/10',
-      iconColor: 'text-amber-400',
-      borderColor: 'hover:border-amber-500/20',
-    },
-    {
-      text: 'Show me the spatial distribution of population',
-      icon: <MessageSquare className="w-4 h-4" />,
-      desc: 'Visualization',
-      gradient: 'from-purple-500/10 to-pink-500/10',
-      iconColor: 'text-purple-400',
-      borderColor: 'hover:border-purple-500/20',
-    },
-  ]
+  const suggestions: Array<{
+    text: string
+    icon: ReactNode
+    desc: string
+    gradient: string
+    iconColor: string
+    borderColor: string
+  }> = []
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -906,6 +878,7 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
       )}
 
       {/* Suggestion cards */}
+      {suggestions.length > 0 && (
       <div className="grid grid-cols-1 gap-2 w-full max-w-[360px] animate-slide-up">
         {suggestions.map((s, i) => (
           <button
@@ -930,12 +903,9 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
           </button>
         ))}
       </div>
+      )}
 
       {/* Powered by badge */}
-      <div className="mt-8 flex items-center gap-2 text-[10px] text-text-muted/40 animate-fade-in">
-        <Zap className="w-3 h-3" />
-        <span>Ask anything about your geospatial data</span>
-      </div>
     </div>
   )
 }
@@ -1216,7 +1186,7 @@ function AttachPanel({
         {/* Hint */}
         <div className="px-2 pt-2 pb-1">
           <p className="text-[10px] text-text-muted/60 leading-relaxed">
-            💡 {t.common.success === '成功'
+            💡 {['成功', 'Success'].includes(t.common.success)
               ? '附加工作流来引导 Agent 按预定义的流程执行，或附加数据文件提供上下文。'
               : 'Attach a workflow to guide the agent through a predefined pipeline, or attach data files for context.'}
           </p>

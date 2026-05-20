@@ -252,6 +252,8 @@ export interface MapLayerDefinition {
   meta: DataSourceMeta
   /** Timestamp when the layer was added */
   addedAt: number
+  /** If set, this layer is managed by an extension (base sync skips it) */
+  extension?: string
 }
 
 // ─── Basemap Configuration ────────────────────────────────────────
