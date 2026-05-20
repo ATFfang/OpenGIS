@@ -18,7 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "electron-builder install-app-deps",
-    "setup:python": "bash python-backend/setup.sh",
+    "setup:python": "node python-backend/setup-python.mjs",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
