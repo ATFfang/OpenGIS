@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { ProtocolType, ModelPreset } from '@/stores/settingsStore'
 import { BUILTIN_BASEMAPS } from '@/services/geo'
@@ -57,6 +58,7 @@ const NAV_SECTIONS: NavSection[] = [
 // ─── SettingsView ──────────────────────────────────────────────
 
 export function SettingsView() {
+  const t = useT()
   const [searchQuery, setSearchQuery] = useState('')
   const [activeSection, setActiveSection] = useState('model')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -412,26 +414,26 @@ export function SettingsView() {
       <div className="shrink-0 border-b border-border">
         {/* Title bar */}
         <div className="h-9 flex items-center px-5 gap-3">
-          <span className="text-sm font-medium text-text-primary">Settings</span>
+          <span className="text-sm font-medium text-text-primary">{t.settings.title}</span>
           <div className="flex-1" />
           {/* Save status indicator */}
           <div className="flex items-center gap-1.5 text-xs">
             {saveStatus === 'saving' && (
               <>
                 <Loader2 className="w-3 h-3 text-text-muted animate-spin" />
-                <span className="text-text-muted">Saving...</span>
+                <span className="text-text-muted">{t.settings.saving}</span>
               </>
             )}
             {saveStatus === 'saved' && (
               <>
                 <CheckCircle2 className="w-3 h-3 text-accent-success" />
-                <span className="text-accent-success">Saved</span>
+                <span className="text-accent-success">{t.settings.saved}</span>
               </>
             )}
             {saveStatus === 'error' && (
               <>
                 <AlertCircle className="w-3 h-3 text-accent-danger" />
-                <span className="text-accent-danger">Save failed</span>
+                <span className="text-accent-danger">{t.settings.saveFailed}</span>
               </>
             )}
           </div>
@@ -445,7 +447,7 @@ export function SettingsView() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search settings..."
+              placeholder={t.settings.searchPlaceholder}
               className="
                 w-full h-[30px] pl-8 pr-8 text-sm
                 bg-bg-tertiary text-text-primary
@@ -493,7 +495,7 @@ export function SettingsView() {
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-4 bg-accent-primary rounded-r-full" />
                 )}
                 <Icon className="w-4 h-4 shrink-0" strokeWidth={isActive ? 2 : 1.5} />
-                <span className="text-[13px] font-medium">{section.label}</span>
+                <span className="text-[13px] font-medium">{(t.settings as any)[section.id] ?? section.label}</span>
               </button>
             )
           })}
@@ -512,7 +514,7 @@ export function SettingsView() {
                 id="section-model"
                 ref={(el) => { sectionRefs.current['model'] = el }}
               >
-                <SettingSection title="Model Configuration">
+                <SettingSection title={t.settings.modelConfig}>
                   {/* ── Preset cards grid ── */}
                   {presets.length > 0 && (
                     <div className="py-3 px-1 border-b border-border">
@@ -778,7 +780,7 @@ export function SettingsView() {
                   </div>
                 </SettingSection>
 
-                <SettingSection title="Model Parameters">
+                <SettingSection title={t.settings.modelParams}>
                   {/* Temperature */}
                   <SettingItem
                     id="model-temperature"
@@ -838,7 +840,7 @@ export function SettingsView() {
                 id="section-agent"
                 ref={(el) => { sectionRefs.current['agent'] = el }}
               >
-                <SettingSection title="Agent Behavior">
+                <SettingSection title={t.settings.agentBehavior}>
                   {/* Max Iterations */}
                   <SettingItem
                     id="agent-maxiter"
@@ -927,7 +929,7 @@ export function SettingsView() {
                   </SettingItem>
                 </SettingSection>
 
-                <SettingSection title="Custom Instructions">
+                <SettingSection title={t.settings.customInstructions}>
                   {/* Custom Instructions */}
                   <SettingItem
                     id="agent-instructions"
@@ -963,12 +965,12 @@ export function SettingsView() {
                 id="section-appearance"
                 ref={(el) => { sectionRefs.current['appearance'] = el }}
               >
-                <SettingSection title="Appearance">
+                <SettingSection title={t.settings.appearance}>
                   {/* Theme */}
                   <SettingItem
                     id="appearance-theme"
-                    label="Color Theme"
-                    description="Controls the overall color theme of the application."
+                    label={t.settings.theme}
+                    description={t.settings.themeDesc}
                   >
                     <SettingSelect
                       id="appearance-theme"
@@ -985,8 +987,8 @@ export function SettingsView() {
                   {/* Language */}
                   <SettingItem
                     id="appearance-language"
-                    label="Language"
-                    description="Display language for the application interface."
+                    label={t.settings.language}
+                    description={t.settings.languageDesc}
                   >
                     <SettingSelect
                       id="appearance-language"
@@ -1002,8 +1004,8 @@ export function SettingsView() {
                   {/* Font Size */}
                   <SettingItem
                     id="appearance-fontsize"
-                    label="Font Size"
-                    description="Controls the font size in pixels for the editor and UI elements."
+                    label={t.settings.fontSize}
+                    description={t.settings.fontSizeDesc}
                   >
                     <SettingSlider
                       id="appearance-fontsize"
@@ -1019,8 +1021,8 @@ export function SettingsView() {
                   {/* Basemap Source */}
                   <SettingItem
                     id="appearance-basemap"
-                    label="Basemap Source"
-                    description="Select the default basemap tile source for the map view. Changes apply immediately."
+                    label={t.settings.basemap}
+                    description={t.settings.basemapDesc}
                   >
                     <SettingSelect
                       id="appearance-basemap"
@@ -1131,7 +1133,7 @@ export function SettingsView() {
                 id="section-python"
                 ref={(el) => { sectionRefs.current['python'] = el }}
               >
-                <SettingSection title="Python Environment">
+                <SettingSection title={t.settings.pythonEnv}>
                   {/* Backend Status */}
                   <SettingItem
                     id="python-backend-status"

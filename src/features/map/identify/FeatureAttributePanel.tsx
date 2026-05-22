@@ -19,6 +19,7 @@ import {
   Copy,
   Check,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ export function FeatureAttributePanel({
   onClose,
   visible,
 }: FeatureAttributePanelProps) {
+  const t = useT()
   const [currentIndex, setCurrentIndex] = useState(0)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
 
@@ -156,7 +158,7 @@ export function FeatureAttributePanel({
           <button
             onClick={onClose}
             className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
-            title="Close"
+            title={t.map.close}
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -170,7 +172,7 @@ export function FeatureAttributePanel({
                 setCurrentIndex((i) => (i - 1 + features.length) % features.length)
               }
               className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-              title="Previous feature"
+              title={t.map.previousFeature}
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
@@ -188,7 +190,7 @@ export function FeatureAttributePanel({
                 setCurrentIndex((i) => (i + 1) % features.length)
               }
               className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-              title="Next feature"
+              title={t.map.nextFeature}
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
@@ -202,17 +204,17 @@ export function FeatureAttributePanel({
               <div className="w-10 h-10 rounded-full bg-bg-tertiary flex items-center justify-center mb-2">
                 <MapPin className="w-4 h-4" />
               </div>
-              <span className="text-xs">No attributes available</span>
+              <span className="text-xs">{t.map.noAttributes}</span>
             </div>
           ) : (
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-bg-secondary border-b border-border">
                   <th className="text-left px-3 py-1.5 text-text-muted font-medium w-[38%]">
-                    Field
+                    {t.map.field}
                   </th>
                   <th className="text-left px-3 py-1.5 text-text-muted font-medium">
-                    Value
+                    {t.map.value}
                   </th>
                   <th className="w-7" />
                 </tr>
@@ -236,7 +238,7 @@ export function FeatureAttributePanel({
                       <button
                         onClick={() => handleCopy(key, value)}
                         className="w-5 h-5 rounded flex items-center justify-center text-text-muted/0 group-hover:text-text-muted hover:!text-accent-primary hover:bg-accent-primary/10 transition-all"
-                        title="Copy value"
+                        title={t.map.copyValue}
                       >
                         {copiedKey === key ? (
                           <Check className="w-3 h-3 text-accent-success" />
@@ -255,8 +257,8 @@ export function FeatureAttributePanel({
         {/* ─── Footer ─────────────────────────────────────────── */}
         <div className="px-3 py-1.5 border-t border-border bg-bg-tertiary/30 shrink-0">
           <span className="text-[10px] text-text-muted">
-            {filteredProps.length} field{filteredProps.length !== 1 ? 's' : ''}
-            {features.length > 1 && ` · ${features.length} features at this point`}
+            {filteredProps.length} {t.map.fields}
+            {features.length > 1 && ` · ${features.length} ${t.map.featuresAtPoint}`}
           </span>
         </div>
       </div>
