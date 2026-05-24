@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, nativeImage, nativeTheme } from 'electron'
 import { join } from 'path'
 import { PythonManager } from './ipc/pythonManager'
 import { registerFileHandlers } from './ipc/fileHandlers'
@@ -88,8 +88,15 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    frame: process.platform === 'darwin' ? false : true,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    frame: false,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    ...(process.platform === 'win32' ? {
+      titleBarOverlay: {
+        color: '#0a0c10',
+        symbolColor: '#e2e8f0',
+        height: 32,
+      },
+    } : {}),
     backgroundColor: '#0a0c10',
     webPreferences: {
       nodeIntegration: false,
@@ -187,6 +194,27 @@ app.whenReady().then(async () => {
   // Register IPC handlers
   registerFileHandlers()
   registerSettingsHandlers()
+
+  // ── Windows title bar overlay theme ───────────────────────────
+  if (process.platform === 'win32') {
+    // Renderer notifies main process when theme changes
+    ipcMain.on('window:set-titlebar-theme', (_event, isDark: boolean) => {
+      mainWindow?.setTitleBarOverlay({
+        color: isDark ? '#0a0c10' : '#ffffff',
+        symbolColor: isDark ? '#e2e8f0' : '#1e293b',
+        height: 32,
+      })
+    })
+
+    // Listen for OS system theme changes (for 'system' theme mode)
+    nativeTheme.on('updated', () => {
+      mainWindow?.setTitleBarOverlay({
+        color: nativeTheme.shouldUseDarkColors ? '#0a0c10' : '#ffffff',
+        symbolColor: nativeTheme.shouldUseDarkColors ? '#e2e8f0' : '#1e293b',
+        height: 32,
+      })
+    })
+  }
 
   // ── renderer:ready handler ────────────────────────────────
   // The renderer (React) sends this when it has painted the UI.

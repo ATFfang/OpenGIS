@@ -109,10 +109,16 @@ export const useMapStore = create<MapStore>((set, get) => ({
   // ─── 图层操作方法实现 ─────────────────────────────────────────
 
   addLayer: (layer) =>
-    set((state) => ({
-      layers: [...state.layers, layer],
-      activeLayerId: layer.id,
-    })),
+    set((state) => {
+      const idx = state.layers.findIndex((l) => l.id === layer.id)
+      if (idx !== -1) {
+        // Replace existing entry with same ID
+        const layers = [...state.layers]
+        layers[idx] = layer
+        return { layers, activeLayerId: layer.id }
+      }
+      return { layers: [...state.layers, layer], activeLayerId: layer.id }
+    }),
 
   addLayers: (layers) =>
     set((state) => ({

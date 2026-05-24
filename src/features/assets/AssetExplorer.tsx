@@ -346,6 +346,7 @@ interface FileTreeNodeProps {
 }
 
 function FileTreeNode({ node, depth }: FileTreeNodeProps) {
+  const t = useT()
   const isExpanded = useAssetStore((s) => s.isExpanded(node.path))
   const toggleExpanded = useAssetStore((s) => s.toggleExpanded)
   const selectedPath = useAssetStore((s) => s.selectedPath)
@@ -439,7 +440,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
     } catch (err) {
       console.error('[AssetExplorer] Add to Map failed:', err)
       alert({
-        title: 'Failed to add layer',
+        title: t.assets.failedToAddLayer,
         message: `Could not add "${node.name}" to the map:\n\n${(err as Error)?.message || String(err)}`,
         severity: 'error',
       })
@@ -589,7 +590,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
         {!isLoadingToMap && isLayerLoaded && (
           <div
             className="w-1.5 h-1.5 rounded-full bg-accent-geo shrink-0"
-            title="Loaded as layer"
+            title={t.assets.loadedAsLayer}
           />
         )}
 
@@ -597,7 +598,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
         {!isLoadingToMap && isGisFile && !isLayerLoaded && (
           <div
             className="w-1.5 h-1.5 rounded-full bg-accent-primary/40 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-            title="GIS file — double-click to add to map"
+            title={t.assets.gisFileHint}
           />
         )}
       </div>
@@ -613,7 +614,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
               className="text-2xs text-text-muted/50 italic py-1"
               style={{ paddingLeft: paddingLeft + 20 }}
             >
-              Empty folder
+              {t.assets.emptyFolder}
             </div>
           )}
         </div>
@@ -637,7 +638,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
             } catch (err) {
               console.error('[AssetExplorer] Add to Map failed:', err)
               alert({
-                title: 'Failed to add layer',
+                title: t.assets.failedToAddLayer,
                 message: `Could not add "${node.name}" to the map:\n\n${(err as Error)?.message || String(err)}`,
                 severity: 'error',
               })
@@ -720,6 +721,7 @@ function ContextMenu({
   onRename,
   onAddToMap,
 }: ContextMenuProps) {
+  const t = useT()
   const removeNode = useAssetStore((s) => s.removeNode)
   const menuRef = useRef<HTMLDivElement>(null)
   const { confirm } = useDialog()
@@ -749,9 +751,9 @@ function ContextMenu({
     if (!window.electronAPI) return
 
     const confirmed = await confirm({
-      title: 'Delete file',
-      message: `Delete "${node.name}"? This cannot be undone.`,
-      okLabel: 'Delete',
+      title: t.assets.deleteFile,
+      message: t.assets.deleteConfirm.replace('{name}', node.name),
+      okLabel: t.assets.delete,
       danger: true,
     })
     if (!confirmed) return
@@ -787,7 +789,7 @@ function ContextMenu({
       {isGisFile && !isLayerLoaded && node.type === 'file' && (
         <ContextMenuItem
           icon={<MapPin className="w-3.5 h-3.5" />}
-          label="Add to Map"
+          label={t.assets.addToMap}
           onClick={onAddToMap}
           accent
         />
@@ -796,7 +798,7 @@ function ContextMenu({
       {isLayerLoaded && node.type === 'file' && (
         <ContextMenuItem
           icon={<Layers className="w-3.5 h-3.5" />}
-          label="Already on Map"
+          label={t.assets.alreadyOnMap}
           onClick={onClose}
           disabled
         />
@@ -806,7 +808,7 @@ function ContextMenu({
       {node.type === 'file' && isViewableInTab(node.extension.toLowerCase()) && (
         <ContextMenuItem
           icon={<FileCode className="w-3.5 h-3.5" />}
-          label="View Code"
+          label={t.assets.viewCode}
           onClick={() => {
             onClose()
             openFileInViewer(node)
@@ -821,14 +823,14 @@ function ContextMenu({
       {/* Rename */}
       <ContextMenuItem
         icon={<Pencil className="w-3.5 h-3.5" />}
-        label="Rename"
+        label={t.assets.rename}
         onClick={onRename}
       />
 
       {/* Copy path */}
       <ContextMenuItem
         icon={<FileText className="w-3.5 h-3.5" />}
-        label="Copy Path"
+        label={t.assets.copyPath}
         onClick={handleCopyPath}
       />
 
@@ -837,7 +839,7 @@ function ContextMenu({
       {/* Delete */}
       <ContextMenuItem
         icon={<Trash2 className="w-3.5 h-3.5" />}
-        label="Delete"
+        label={t.assets.delete}
         onClick={handleDelete}
         danger
       />
@@ -893,6 +895,7 @@ function SortMenu({
   onSelect: (mode: SortMode) => void
   onClose: () => void
 }) {
+  const t = useT()
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -906,10 +909,10 @@ function SortMenu({
   }, [onClose])
 
   const options: { mode: SortMode; label: string }[] = [
-    { mode: 'name', label: 'Name' },
-    { mode: 'type', label: 'Type' },
-    { mode: 'modified', label: 'Date Modified' },
-    { mode: 'size', label: 'Size' },
+    { mode: 'name', label: t.assets.sortName },
+    { mode: 'type', label: t.assets.sortType },
+    { mode: 'modified', label: t.assets.sortDate },
+    { mode: 'size', label: t.assets.sortSize },
   ]
 
   return (
@@ -918,7 +921,7 @@ function SortMenu({
       className="absolute right-0 top-full mt-1 bg-bg-secondary border border-border rounded-lg shadow-xl py-1 min-w-[140px] z-50 animate-fade-in"
     >
       <div className="px-3 py-1 text-2xs text-text-muted font-medium uppercase tracking-wider">
-        Sort by
+        {t.assets.sortBy}
       </div>
       {options.map(({ mode, label }) => (
         <button
@@ -945,19 +948,20 @@ function SortMenu({
 // ─── State Components ───────────────────────────────────────────
 
 function EmptyState({ onOpenFolder }: { onOpenFolder: () => void }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-primary/10 flex items-center justify-center mx-auto mb-3">
           <FolderOpen className="w-5 h-5 text-accent-primary/50" />
         </div>
-        <p className="text-xs text-text-muted mb-2">No workspace folder</p>
+        <p className="text-xs text-text-muted mb-2">{t.assets.noWorkspace}</p>
         <button
           onClick={onOpenFolder}
           className="text-2xs text-accent-primary hover:text-accent-primary/80 transition-colors flex items-center gap-1 mx-auto"
         >
           <FolderPlus className="w-3 h-3" />
-          Open Folder
+          {t.assets.openWorkspace}
         </button>
       </div>
     </div>
@@ -965,30 +969,32 @@ function EmptyState({ onOpenFolder }: { onOpenFolder: () => void }) {
 }
 
 function LoadingState() {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <RefreshCw className="w-5 h-5 text-text-muted animate-spin mx-auto mb-2" />
-        <p className="text-xs text-text-muted">Loading files...</p>
+        <p className="text-xs text-text-muted">{t.assets.loadingFiles}</p>
       </div>
     </div>
   )
 }
 
 function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-danger/10 flex items-center justify-center mx-auto mb-3">
           <X className="w-5 h-5 text-accent-danger/50" />
         </div>
-        <p className="text-xs text-text-muted mb-1">Failed to load</p>
+        <p className="text-xs text-text-muted mb-1">{t.assets.failedToLoad}</p>
         <p className="text-2xs text-text-muted/60 mb-2 max-w-[180px] truncate">{error}</p>
         <button
           onClick={onRetry}
           className="text-2xs text-accent-primary hover:text-accent-primary/80 transition-colors"
         >
-          Retry
+          {t.common.retry}
         </button>
       </div>
     </div>
@@ -996,11 +1002,12 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
 }
 
 function NoResultsState({ query }: { query: string }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <Search className="w-5 h-5 text-text-muted/30 mx-auto mb-2" />
-        <p className="text-xs text-text-muted">No files matching</p>
+        <p className="text-xs text-text-muted">{t.assets.noFilesMatching}</p>
         <p className="text-2xs text-accent-primary truncate max-w-[160px]">"{query}"</p>
       </div>
     </div>
@@ -1008,11 +1015,12 @@ function NoResultsState({ query }: { query: string }) {
 }
 
 function EmptyFolderState() {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <FolderOpen className="w-5 h-5 text-text-muted/30 mx-auto mb-2" />
-        <p className="text-xs text-text-muted">Empty folder</p>
+        <p className="text-xs text-text-muted">{t.assets.emptyFolder}</p>
       </div>
     </div>
   )

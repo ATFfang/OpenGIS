@@ -92,6 +92,9 @@ const electronAPI = {
 
   // ---- Lifecycle ----
   signalRendererReady: () => ipcRenderer.send('renderer:ready'),
+
+  // ---- Window ----
+  setTitleBarTheme: (isDark: boolean) => ipcRenderer.send('window:set-titlebar-theme', isDark),
 }
 
 // Expose to renderer

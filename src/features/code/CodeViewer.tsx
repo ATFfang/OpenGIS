@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { useViewStore, type CodeExecutionResult } from '@/stores/viewStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
 
 // ─── Syntax highlighter themes ──────────────────────────────────
@@ -74,6 +75,7 @@ interface CodeViewerProps {
 }
 
 export function CodeViewer({ tab }: CodeViewerProps) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   const [showResult, setShowResult] = useState(!!tab.executionResult)
 
@@ -124,7 +126,7 @@ export function CodeViewer({ tab }: CodeViewerProps) {
         {tab.isExecuting && (
           <div className="flex items-center gap-1 text-xs text-accent-warning">
             <Clock className="w-3 h-3 animate-spin" />
-            <span>Running...</span>
+            <span>{t.codeViewer.running}</span>
           </div>
         )}
         {tab.executionResult && !tab.isExecuting && (
@@ -149,7 +151,7 @@ export function CodeViewer({ tab }: CodeViewerProps) {
                 ? 'text-accent-primary bg-accent-primary/10'
                 : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
             }`}
-            title={showResult ? 'Hide output' : 'Show output'}
+            title={showResult ? t.codeViewer.hideOutput : t.codeViewer.showOutput}
           >
             <Terminal className="w-3.5 h-3.5" />
           </button>
@@ -159,7 +161,7 @@ export function CodeViewer({ tab }: CodeViewerProps) {
         <button
           onClick={handleCopy}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title="Copy code"
+          title={t.codeViewer.copyCode}
         >
           {copied ? (
             <Check className="w-3.5 h-3.5 text-accent-success" />
@@ -215,6 +217,7 @@ interface ExecutionResultPanelProps {
 }
 
 function ExecutionResultPanel({ result, onClose }: ExecutionResultPanelProps) {
+  const t = useT()
   const [activeSection, setActiveSection] = useState<'stdout' | 'stderr' | 'result'>(
     result.error ? 'stderr' : 'stdout'
   )
@@ -233,7 +236,7 @@ function ExecutionResultPanel({ result, onClose }: ExecutionResultPanelProps) {
           <AlertCircle className="w-3.5 h-3.5 text-accent-danger shrink-0" />
         )}
         <span className="text-xs text-text-secondary">
-          {result.success ? 'Executed successfully' : `Error: ${result.error_type || 'Unknown'}`}
+          {result.success ? t.codeViewer.executedSuccessfully : t.codeViewer.errorType.replace('{type}', result.error_type || t.codeViewer.unknown)}
         </span>
         <span className="text-2xs text-text-muted">
           {Math.round(result.execution_time_ms)}ms
@@ -246,14 +249,14 @@ function ExecutionResultPanel({ result, onClose }: ExecutionResultPanelProps) {
             <SectionTab
               active={activeSection === 'stdout'}
               onClick={() => setActiveSection('stdout')}
-              label="Output"
+              label={t.codeViewer.output}
             />
           )}
           {hasStderr && (
             <SectionTab
               active={activeSection === 'stderr'}
               onClick={() => setActiveSection('stderr')}
-              label="Stderr"
+              label={t.codeViewer.stderr}
               hasError
             />
           )}
@@ -261,7 +264,7 @@ function ExecutionResultPanel({ result, onClose }: ExecutionResultPanelProps) {
             <SectionTab
               active={activeSection === 'result'}
               onClick={() => setActiveSection('result')}
-              label="Result"
+              label={t.codeViewer.result}
             />
           )}
         </div>
@@ -285,12 +288,12 @@ function ExecutionResultPanel({ result, onClose }: ExecutionResultPanelProps) {
       <div className="flex-1 overflow-auto min-h-0 p-3">
         {activeSection === 'stdout' && (
           <pre className="text-xs text-text-primary font-mono whitespace-pre-wrap break-words">
-            {result.stdout || '(no output)'}
+            {result.stdout || t.codeViewer.noOutput}
           </pre>
         )}
         {activeSection === 'stderr' && (
           <pre className="text-xs text-accent-warning font-mono whitespace-pre-wrap break-words">
-            {result.stderr || '(no stderr)'}
+            {result.stderr || t.codeViewer.noStderr}
           </pre>
         )}
         {activeSection === 'result' && (

@@ -135,12 +135,15 @@ function App() {
     const root = document.documentElement
 
     const applyTheme = () => {
+      let isDark: boolean
       if (theme === 'system') {
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        root.classList.toggle('light', !prefersDark)
+        isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
       } else {
-        root.classList.toggle('light', theme === 'light')
+        isDark = theme === 'dark'
       }
+      root.classList.toggle('light', !isDark)
+      // Notify Electron main process to update Windows title bar overlay
+      ;(window as any).electronAPI?.setTitleBarTheme?.(isDark)
     }
 
     applyTheme()

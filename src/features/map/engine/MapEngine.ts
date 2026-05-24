@@ -215,6 +215,32 @@ export class MapEngine {
     return this.map
   }
 
+  /**
+   * 追踪扩展直接添加的 MapLibre layer，使其受 setBasemapVisible /
+   * setLabelsVisible 保护（跳过而不被意外切换可见性）。
+   */
+  trackExternalLayer(layerId: string): void {
+    this.managedLayerIds.add(layerId)
+  }
+
+  /**
+   * 追踪扩展直接添加的 MapLibre source，保持 managedSourceIds 一致。
+   */
+  trackExternalSource(sourceId: string): void {
+    this.managedSourceIds.add(sourceId)
+  }
+
+  /**
+   * 移除外部追踪。
+   */
+  untrackExternalLayer(layerId: string): void {
+    this.managedLayerIds.delete(layerId)
+  }
+
+  untrackExternalSource(sourceId: string): void {
+    this.managedSourceIds.delete(sourceId)
+  }
+
   // ─── 底图可见性 ──────────────────────────────────────
 
   /**

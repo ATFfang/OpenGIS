@@ -7,6 +7,7 @@ import {
   GitBranch,
   ListRestart,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 
 interface SidebarProps {
   activeTab: string
@@ -15,20 +16,22 @@ interface SidebarProps {
   onToggleChat: () => void
 }
 
-const sidebarTabs = [
-  { id: 'files', icon: FolderOpen, label: 'Files' },
-  { id: 'layers', icon: Layers, label: 'Layers' },
-  { id: 'workflows', icon: GitBranch, label: 'Workflows' },
-  { id: 'runs', icon: ListRestart, label: 'Runs' },
-  { id: 'skills', icon: Wrench, label: 'Skills' },
-  { id: 'settings', icon: Settings, label: 'Settings' },
-]
-
 /**
  * Left sidebar with icon-based navigation tabs.
  * Compact mode: 52px wide, icon only.
  */
 export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: SidebarProps) {
+  const t = useT()
+
+  const sidebarTabs = [
+    { id: 'files', icon: FolderOpen, label: t.sidebar.files },
+    { id: 'layers', icon: Layers, label: t.sidebar.layers },
+    { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
+    { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
+    { id: 'skills', icon: Wrench, label: t.sidebar.skills },
+    { id: 'settings', icon: Settings, label: t.sidebar.settings },
+  ]
+
   return (
     <div className="w-[52px] h-full bg-bg-secondary border-r border-border flex flex-col items-center py-2 select-none">
       {/* Navigation tabs */}
@@ -73,7 +76,7 @@ export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: Side
             ? 'text-accent-primary bg-accent-primary/10'
             : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
         }`}
-        title={showChat ? 'Hide AI Chat' : 'Show AI Chat'}
+        title={showChat ? t.sidebar.hideChat : t.sidebar.showChat}
       >
         <MessageSquare className="w-[18px] h-[18px]" strokeWidth={showChat ? 2.2 : 1.8} />
       </button>

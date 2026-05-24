@@ -48,17 +48,17 @@ interface NavSection {
   keywords: string[]
 }
 
-const NAV_SECTIONS: NavSection[] = [
-  { id: 'model', label: 'Model', icon: Bot, keywords: ['llm', 'api', 'key', 'protocol', 'model', 'temperature', 'token'] },
-  { id: 'agent', label: 'Agent', icon: Cpu, keywords: ['agent', 'iteration', 'confirmation', 'timeout', 'instructions'] },
-  { id: 'appearance', label: 'Appearance', icon: Palette, keywords: ['theme', 'font', 'language', 'map', 'dark', 'light'] },
-  { id: 'python', label: 'Python', icon: Terminal, keywords: ['python', 'path', 'environment', 'interpreter'] },
-]
-
 // ─── SettingsView ──────────────────────────────────────────────
 
 export function SettingsView() {
   const t = useT()
+
+  const NAV_SECTIONS: NavSection[] = [
+    { id: 'model', label: t.settings.model, icon: Bot, keywords: ['llm', 'api', 'key', 'protocol', 'model', 'temperature', 'token'] },
+    { id: 'agent', label: t.settings.agent, icon: Cpu, keywords: ['agent', 'iteration', 'confirmation', 'timeout', 'instructions'] },
+    { id: 'appearance', label: t.settings.appearance, icon: Palette, keywords: ['theme', 'font', 'language', 'map', 'dark', 'light'] },
+    { id: 'python', label: t.settings.python, icon: Terminal, keywords: ['python', 'path', 'environment', 'interpreter'] },
+  ]
   const [searchQuery, setSearchQuery] = useState('')
   const [activeSection, setActiveSection] = useState('model')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -74,6 +74,24 @@ export function SettingsView() {
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const providerDropdownRef = useRef<HTMLDivElement>(null)
+
+  // Per-protocol config cache — switching providers restores previous settings
+  const providerCache = useRef<Record<string, Partial<typeof model>>>({})
+  const getCurrentCacheKey = () => model.baseURL || model.protocol
+  const saveToCache = () => {
+    const key = getCurrentCacheKey()
+    if (!key) return
+    const { protocol, baseURL, modelName, apiKey } = model
+    providerCache.current[key] = { protocol, baseURL, modelName, apiKey }
+  }
+  const restoreFromCache = (key: string) => {
+    const cached = providerCache.current[key]
+    if (cached) {
+      setModel(cached)
+      return true
+    }
+    return false
+  }
 
   // Close provider dropdown on outside click
   useEffect(() => {
@@ -224,14 +242,18 @@ export function SettingsView() {
 
   const handleProviderSelect = useCallback(
     (provider: ProviderConfig) => {
-      setModel({
-        protocol: provider.protocol,
-        baseURL: provider.baseURL,
-        modelName: model.modelName || provider.defaultModel,
-      })
+      saveToCache()
+      const cacheKey = provider.baseURL || provider.protocol
+      if (!restoreFromCache(cacheKey)) {
+        setModel({
+          protocol: provider.protocol,
+          baseURL: provider.baseURL,
+          modelName: model.modelName || provider.defaultModel,
+        })
+      }
       setShowProviderDropdown(false)
     },
-    [setModel, model.modelName],
+    [setModel, model],
   )
 
   const loadPreset = useCallback(
@@ -648,10 +670,13 @@ export function SettingsView() {
                       id="model-protocol"
                       value={model.protocol}
                       onChange={(v) => {
-                        setModel({
-                          protocol: v as ProtocolType,
-                          baseURL: '',
-                        })
+                        saveToCache()
+                        if (!restoreFromCache(v as string)) {
+                          setModel({
+                            protocol: v as ProtocolType,
+                            baseURL: '',
+                          })
+                        }
                       }}
                       options={PROTOCOL_OPTIONS.map((p) => ({
                         value: p.value,
@@ -727,10 +752,10 @@ export function SettingsView() {
                       {testStatus === 'testing' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                       {testStatus === 'success' && <CheckCircle2 className="w-3.5 h-3.5 text-accent-success" />}
                       {testStatus === 'error' && <AlertCircle className="w-3.5 h-3.5 text-accent-danger" />}
-                      {testStatus === 'idle' && 'Test Connection'}
-                      {testStatus === 'testing' && 'Testing...'}
-                      {testStatus === 'success' && 'Connected'}
-                      {testStatus === 'error' && 'Failed'}
+                      {testStatus === 'idle' && t.settings.testConnection}
+                      {testStatus === 'testing' && t.settings.testing}
+                      {testStatus === 'success' && t.settings.connected}
+                      {testStatus === 'error' && t.common.failed}
                     </button>
                   </SettingItem>
 

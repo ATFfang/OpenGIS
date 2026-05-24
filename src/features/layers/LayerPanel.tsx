@@ -491,7 +491,7 @@ function LayerItem({
                   className="mt-2 w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-2xs font-medium text-accent-primary bg-accent-primary/10 hover:bg-accent-primary/20 rounded-lg transition-colors"
                 >
                   <BarChart3 className="w-3 h-3" />
-                  Classification Renderer
+                  {t.layers.classificationRenderer}
                 </button>
               )}
             </>
@@ -543,6 +543,7 @@ function ClassifiedStyleSummary({
   onEditClassification,
   onResetToSingle,
 }: ClassifiedStyleSummaryProps) {
+  const t = useT()
   const { style } = layer
   const isGraduated = style.renderType === 'graduated'
   const fillOpacity = style.fillOpacity ?? style.opacity
@@ -568,7 +569,7 @@ function ClassifiedStyleSummary({
       {/* Header with mode badge */}
       <div className="flex items-center gap-1.5 text-2xs text-text-muted mt-0.5 mb-1">
         <BarChart3 className="w-3 h-3" />
-        <span>{isGraduated ? 'Graduated' : 'Categorized'}</span>
+        <span>{isGraduated ? t.layers.graduated : t.layers.categorized}</span>
         <span className="text-text-muted/40">·</span>
         <span className="truncate">
           {isGraduated ? style.graduated?.field : style.categorized?.field}
@@ -591,7 +592,7 @@ function ClassifiedStyleSummary({
           ))}
           {legendItems.length > 6 && (
             <div className="text-2xs text-text-muted italic">
-              …{legendItems.length - 6} more
+              …{legendItems.length - 6} {t.layers.more}
             </div>
           )}
         </div>
@@ -600,7 +601,7 @@ function ClassifiedStyleSummary({
       {/* Common paint controls — always available regardless of classification */}
       {/* Stroke color — fills + points */}
       {(isFillGeom || isPointGeom) && (
-        <StyleRow label="Stroke">
+        <StyleRow label={t.layers.stroke}>
           <ColorSwatch
             color={style.strokeColor}
             onChange={(strokeColor) => onStyleChange({ strokeColor })}
@@ -613,7 +614,7 @@ function ClassifiedStyleSummary({
       )}
 
       {/* Stroke width */}
-      <StyleRow label="Width">
+      <StyleRow label={t.layers.width}>
         <input
           type="range"
           min={0}
@@ -632,7 +633,7 @@ function ClassifiedStyleSummary({
 
       {/* Point radius — point geometry only */}
       {isPointGeom && (
-        <StyleRow label="Radius">
+        <StyleRow label={t.layers.radius}>
           <input
             type="range"
             min={1}
@@ -650,7 +651,7 @@ function ClassifiedStyleSummary({
 
       {/* Fill-opacity — polygon geometry only */}
       {isFillGeom && (
-        <StyleRow label="Fill α">
+        <StyleRow label={t.layers.fillAlpha}>
           <input
             type="range"
             min={0}
@@ -669,7 +670,7 @@ function ClassifiedStyleSummary({
       )}
 
       {/* Global opacity */}
-      <StyleRow label="Opacity">
+      <StyleRow label={t.layers.opacity}>
         <input
           type="range"
           min={0}
@@ -691,15 +692,15 @@ function ClassifiedStyleSummary({
           className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-2xs font-medium text-accent-primary bg-accent-primary/10 hover:bg-accent-primary/20 rounded-lg transition-colors"
         >
           <BarChart3 className="w-3 h-3" />
-          Edit Classification
+          {t.layers.editClassification}
         </button>
         <button
           onClick={onResetToSingle}
           className="flex items-center justify-center gap-1 px-2 py-1.5 text-2xs text-text-muted hover:text-text-secondary bg-bg-secondary hover:bg-bg-hover rounded-lg transition-colors"
-          title="Switch to single-color rendering"
+          title={t.layers.switchToSingle}
         >
           <ArrowLeftRight className="w-3 h-3" />
-          Single
+          {t.layers.single}
         </button>
       </div>
     </div>
@@ -736,6 +737,7 @@ function StylePanel({
   onStyleChange,
   onOpacityChange,
 }: StylePanelProps) {
+  const t = useT()
   const { style } = layer
   const isRaster = style.renderType === 'raster'
 
@@ -750,12 +752,12 @@ function StylePanel({
       {/* Header */}
       <div className="flex items-center gap-1.5 text-2xs text-text-muted mt-0.5 mb-1">
         <Palette className="w-3 h-3" />
-        <span>Style</span>
+        <span>{t.layers.style}</span>
       </div>
 
       {/* Main color (fill for polygons/points, line for polylines) */}
       {!isRaster && (
-        <StyleRow label={isFillLayer || isPointLayer ? 'Fill' : 'Color'}>
+        <StyleRow label={isFillLayer || isPointLayer ? t.layers.fill : t.layers.color}>
           <ColorSwatch
             color={style.color}
             onChange={(color) => onStyleChange({ color })}
@@ -769,7 +771,7 @@ function StylePanel({
 
       {/* Stroke color — fills + circles */}
       {(isFillLayer || isPointLayer) && (
-        <StyleRow label="Stroke">
+        <StyleRow label={t.layers.stroke}>
           <ColorSwatch
             color={style.strokeColor}
             onChange={(strokeColor) => onStyleChange({ strokeColor })}
@@ -783,7 +785,7 @@ function StylePanel({
 
       {/* Stroke width (always unless raster) */}
       {!isRaster && (
-        <StyleRow label="Width">
+        <StyleRow label={t.layers.width}>
           <input
             type="range"
             min={0}
@@ -803,7 +805,7 @@ function StylePanel({
 
       {/* Point radius — circle only */}
       {isPointLayer && (
-        <StyleRow label="Radius">
+        <StyleRow label={t.layers.radius}>
           <input
             type="range"
             min={1}
@@ -821,7 +823,7 @@ function StylePanel({
 
       {/* Fill-opacity — fills only (separate from layer opacity) */}
       {isFillLayer && (
-        <StyleRow label="Fill α">
+        <StyleRow label={t.layers.fillAlpha}>
           <input
             type="range"
             min={0}
@@ -840,7 +842,7 @@ function StylePanel({
       )}
 
       {/* Global opacity (applies to everything) */}
-      <StyleRow label="Opacity">
+      <StyleRow label={t.layers.opacity}>
         <input
           type="range"
           min={0}
@@ -974,18 +976,19 @@ function normaliseHex(color: string): string {
 // ─── Empty State ────────────────────────────────────────────────
 
 function LayerEmptyState({ isDragOver }: { isDragOver: boolean }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-geo/10 flex items-center justify-center mx-auto mb-3">
           <MapPin className="w-5 h-5 text-accent-geo/50" />
         </div>
-        <p className="text-xs text-text-muted mb-1">No layers</p>
+        <p className="text-xs text-text-muted mb-1">{t.layers.noLayers}</p>
         <p className="text-2xs text-text-muted/70">
-          Click <Plus className="w-3 h-3 inline" /> or drop files here
+          {t.layers.noLayersHint}
         </p>
         {isDragOver && (
-          <p className="text-2xs text-accent-primary mt-2">Drop to add as layer</p>
+          <p className="text-2xs text-accent-primary mt-2">{t.layers.dropToAdd}</p>
         )}
       </div>
     </div>

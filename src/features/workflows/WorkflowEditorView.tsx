@@ -328,7 +328,7 @@ function GuidedWorkflowEditor({ path }: { path: string }) {
     const newNode: WorkflowNode = {
       ...step,
       id: `step_${Date.now().toString(36)}`,
-      title: `${step.title} (copy)`,
+      title: `${step.title} ${t.workflow.editor.copySuffix}`,
       position: { x: step.position.x, y: step.position.y + 100 },
     }
 
@@ -558,6 +558,7 @@ function StepCard({
   onRemove,
   onDuplicate,
 }: StepCardProps) {
+  const t = useT()
   const hasDescription = !!step.description?.trim()
   const hasHooks = (step.hooks?.length ?? 0) > 0
   const hasParams = Object.keys(step.params || {}).length > 0
@@ -577,7 +578,7 @@ function StepCard({
         {/* Drag handle */}
         <div
           className="w-5 h-7 flex items-center justify-center shrink-0 cursor-grab active:cursor-grabbing text-text-muted/40 hover:text-text-muted mt-0.5"
-          title="Drag to reorder"
+          title={t.workflow.dragToReorder}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <GripVertical className="w-3.5 h-3.5" />
@@ -599,7 +600,7 @@ function StepCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-medium text-text-primary truncate">
-              {step.title || 'Untitled Step'}
+              {step.title || t.workflow.editor.untitledStep}
             </span>
             {/* Status badges */}
             <div className="flex items-center gap-1">
@@ -829,7 +830,7 @@ function WorkflowOverview({ path, steps }: WorkflowOverviewProps) {
                       {i + 1}
                     </div>
                     <span className="text-2xs text-text-secondary truncate flex-1">
-                      {step.title || 'Untitled'}
+                      {step.title || t.workflow.editor.untitled}
                     </span>
                     {step.description?.trim() ? (
                       <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
