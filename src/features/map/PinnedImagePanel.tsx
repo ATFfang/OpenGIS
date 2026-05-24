@@ -12,6 +12,7 @@
  */
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
 import { X, Maximize2, GripHorizontal, Pencil, Check } from 'lucide-react'
+import { useT } from '@/i18n'
 import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ const DEFAULT_HEIGHT = 360
 // ─── Component ──────────────────────────────────────────────────────
 
 export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImagePanelProps) => {
+  const t = useT()
   const [pos, setPos] = useState(image.position)
   const [size, setSize] = useState({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT })
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -219,7 +221,7 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
               <h3
                 className="flex-1 text-xs font-semibold text-text-primary truncate min-w-0 cursor-text group"
                 onDoubleClick={(e) => { e.stopPropagation(); startEditing() }}
-                title="Double-click to rename"
+                title={t.map.doubleClickRename}
               >
                 {image.name}
                 <Pencil className="w-2.5 h-2.5 text-text-muted/40 inline ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -231,7 +233,7 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
                 type="button"
                 onClick={() => setPreviewOpen(true)}
                 className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
-                title="Fullscreen preview"
+                title={t.map.fullscreenPreview}
               >
                 <Maximize2 className="w-3 h-3" />
               </button>
@@ -239,7 +241,7 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
                 type="button"
                 onClick={() => onClose(image.id)}
                 className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
-                title="Close"
+                title={t.map.close}
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -250,7 +252,7 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
           <div className="p-2 bg-bg-tertiary/30 relative" style={{ height: size.height }}>
             {!imgLoaded && (
               <div className="flex items-center justify-center h-full text-text-muted text-xs">
-                Loading…
+                {t.map.loadingImage}
               </div>
             )}
             <img
@@ -270,7 +272,7 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
             <div
               className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize group"
               onMouseDown={onResizeMouseDown}
-              title="Drag to resize"
+              title={t.map.dragToResize}
             >
               {/* Three diagonal lines as resize indicator */}
               <svg

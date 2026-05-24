@@ -35,6 +35,7 @@ import {
   ChevronRight,
   FileCode,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { useAssetStore } from '@/stores/assetStore'
 import {
   useRunsStore,
@@ -48,6 +49,7 @@ import { useViewStore } from '@/stores/viewStore'
 // ─── Main panel ───────────────────────────────────────────────────
 
 export function RunsPanel() {
+  const t = useT()
   const workspacePath = useAssetStore((s) => s.workspacePath)
   const runs = useRunsStore((s) => s.runs)
   const isLoading = useRunsStore((s) => s.isLoading)
@@ -66,12 +68,12 @@ export function RunsPanel() {
       {/* Header */}
       <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-1">
         <span className="text-xs font-semibold text-text-secondary flex-1 truncate">
-          Runs
+          {t.runs.title}
         </span>
         <button
           onClick={() => refresh()}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title="Refresh run history"
+          title={t.runs.refreshHistory}
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
@@ -98,6 +100,7 @@ export function RunsPanel() {
 // ─── Row ──────────────────────────────────────────────────────────
 
 function RunRow({ run }: { run: RunSummary }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -127,12 +130,10 @@ function RunRow({ run }: { run: RunSummary }) {
     if (busy) return
 
     const ok = await confirm({
-      title: 'Revert this run?',
+      title: t.runs.revertTitle,
       message:
-        'This will reset the workspace to the git commit recorded ' +
-        'before the run started. Any file changes made during or ' +
-        'after the run will be lost.',
-      okLabel: 'Revert',
+        t.runs.revertMessage,
+      okLabel: t.runs.revertButton,
       danger: true,
     })
     if (!ok) return
@@ -141,12 +142,12 @@ function RunRow({ run }: { run: RunSummary }) {
     try {
       await revertRun(run.run_id)
       await alert({
-        title: 'Workspace reverted',
-        message: `The workspace has been reset to the state before run ${run.run_id.slice(0, 8)}.`,
+        title: t.runs.workspaceReverted,
+        message: t.runs.workspaceRevertedMsg.replace('{runId}', run.run_id.slice(0, 8)),
       })
     } catch (err: any) {
       await alert({
-        title: 'Revert failed',
+        title: t.runs.revertFailed,
         message: err?.message || String(err),
       })
     } finally {
@@ -166,7 +167,7 @@ function RunRow({ run }: { run: RunSummary }) {
       // new messages arriving.
     } catch (err: any) {
       await alert({
-        title: 'Replay failed',
+        title: t.runs.replayFailed,
         message: err?.message || String(err),
       })
     } finally {
@@ -199,7 +200,7 @@ function RunRow({ run }: { run: RunSummary }) {
             </span>
           </div>
           <div className="text-xs text-text-secondary truncate mt-0.5 leading-snug">
-            {run.prompt || <span className="text-text-muted/60 italic">(empty prompt)</span>}
+            {run.prompt || <span className="text-text-muted/60 italic">{t.runs.emptyPrompt}</span>}
           </div>
         </div>
 
@@ -209,7 +210,7 @@ function RunRow({ run }: { run: RunSummary }) {
             onClick={handleReplay}
             disabled={!!busy}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors disabled:opacity-40"
-            title="Replay this run with the same prompt"
+            title={t.runs.replayTitle}
           >
             {busy === 'replay' ? (
               <RefreshCw className="w-3 h-3 animate-spin" />
@@ -222,8 +223,8 @@ function RunRow({ run }: { run: RunSummary }) {
             disabled={!!busy || !run.pre_sha}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-muted"
             title={run.pre_sha
-              ? 'Revert workspace to the commit before this run'
-              : 'No pre-run snapshot recorded for this run'}
+              ? t.runs.revertTooltip
+              : t.runs.noSnapshotTooltip}
           >
             {busy === 'revert' ? (
               <RefreshCw className="w-3 h-3 animate-spin" />
@@ -241,13 +242,13 @@ function RunRow({ run }: { run: RunSummary }) {
             {loadingDetail ? (
               <div className="py-2 text-2xs text-text-muted flex items-center gap-1.5">
                 <RefreshCw className="w-3 h-3 animate-spin" />
-                Loading run detail...
+                {t.runs.loadingDetail}
               </div>
             ) : detail ? (
               <RunDetailView detail={detail} />
             ) : (
               <div className="py-2 text-2xs text-text-muted/70">
-                (no detail available)
+                {t.runs.noDetail}
               </div>
             )}
           </div>
@@ -260,6 +261,7 @@ function RunRow({ run }: { run: RunSummary }) {
 // ─── Detail view ──────────────────────────────────────────────────
 
 function RunDetailView({ detail }: { detail: RunDetail }) {
+  const t = useT()
   const openFile = useCallback((absPath: string) => {
     const view = useViewStore.getState()
     // Reuse existing tab if already open.
@@ -305,7 +307,7 @@ function RunDetailView({ detail }: { detail: RunDetail }) {
       {detail.steps && detail.steps.length > 0 && (
         <div className="space-y-0.5">
           <div className="text-2xs font-semibold text-text-muted uppercase tracking-wider">
-            Steps ({detail.steps.length})
+            {t.runs.steps} ({detail.steps.length})
           </div>
           {detail.steps.map((step, i) => (
             <StepRow key={i} step={step} onOpenFile={openFile} />
@@ -317,7 +319,7 @@ function RunDetailView({ detail }: { detail: RunDetail }) {
       {detail.final_answer && (
         <div className="space-y-0.5">
           <div className="text-2xs font-semibold text-text-muted uppercase tracking-wider">
-            Final answer
+            {t.runs.finalAnswer}
           </div>
           <div className="text-2xs text-text-secondary whitespace-pre-wrap break-words bg-bg-secondary/60 rounded px-2 py-1 max-h-40 overflow-y-auto scrollbar-thin">
             {detail.final_answer}
@@ -329,7 +331,7 @@ function RunDetailView({ detail }: { detail: RunDetail }) {
       {detail.risky_ops && detail.risky_ops.length > 0 && (
         <div className="space-y-0.5">
           <div className="text-2xs font-semibold text-text-muted uppercase tracking-wider">
-            Risky ops ({detail.risky_ops.length})
+            {t.runs.riskyOps} ({detail.risky_ops.length})
           </div>
           {detail.risky_ops.slice(0, 10).map((op, i) => (
             <div key={i} className="text-2xs text-text-muted/80 font-mono break-all">
@@ -339,7 +341,7 @@ function RunDetailView({ detail }: { detail: RunDetail }) {
           ))}
           {detail.risky_ops.length > 10 && (
             <div className="text-2xs text-text-muted/60 italic">
-              +{detail.risky_ops.length - 10} more
+              +{detail.risky_ops.length - 10} {t.runs.more}
             </div>
           )}
         </div>
@@ -368,7 +370,7 @@ function StepRow({
           <button
             onClick={() => onOpenFile(step.script_path as string)}
             className="inline-flex items-center gap-1 text-accent-primary hover:underline font-mono break-all text-left"
-            title="Open script in a new tab"
+            title={t.runs.openScript}
           >
             <FileCode className="w-3 h-3 shrink-0" />
             <span className="truncate">
@@ -432,6 +434,7 @@ function formatTime(iso: string): string {
 // ─── Empty / loading / error ──────────────────────────────────────
 
 function EmptyState({ hasWorkspace }: { hasWorkspace: boolean }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
@@ -443,12 +446,12 @@ function EmptyState({ hasWorkspace }: { hasWorkspace: boolean }) {
           )}
         </div>
         <p className="text-xs text-text-muted mb-1">
-          {hasWorkspace ? 'No runs yet' : 'No workspace folder'}
+          {hasWorkspace ? t.runs.noRuns : t.runs.noWorkspace}
         </p>
         <p className="text-2xs text-text-muted/60 max-w-[180px]">
           {hasWorkspace
-            ? 'Your agent runs will appear here after the first chat message.'
-            : 'Open a workspace to keep per-project run history.'}
+            ? t.runs.noRunsHint
+            : t.runs.noWorkspaceHint}
         </p>
       </div>
     </div>
@@ -456,24 +459,26 @@ function EmptyState({ hasWorkspace }: { hasWorkspace: boolean }) {
 }
 
 function LoadingState() {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <RefreshCw className="w-5 h-5 text-text-muted animate-spin mx-auto mb-2" />
-        <p className="text-xs text-text-muted">Loading runs...</p>
+        <p className="text-xs text-text-muted">{t.runs.loadingRuns}</p>
       </div>
     </div>
   )
 }
 
 function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-danger/10 flex items-center justify-center mx-auto mb-3">
           <AlertCircle className="w-5 h-5 text-accent-danger/50" />
         </div>
-        <p className="text-xs text-text-muted mb-1">Failed to load</p>
+        <p className="text-xs text-text-muted mb-1">{t.runs.failedToLoad}</p>
         <p className="text-2xs text-text-muted/60 mb-2 max-w-[180px] truncate">
           {message}
         </p>
@@ -481,7 +486,7 @@ function ErrorRow({ message, onRetry }: { message: string; onRetry: () => void }
           onClick={onRetry}
           className="text-2xs text-accent-primary hover:text-accent-primary/80 transition-colors"
         >
-          Retry
+          {t.common.retry}
         </button>
       </div>
     </div>

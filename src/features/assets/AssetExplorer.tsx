@@ -38,6 +38,7 @@ import {
   ScrollText,
   Loader2,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { useAssetStore, type FileNode, type SortMode } from '@/stores/assetStore'
 import { useMapStore } from '@/stores/mapStore'
 import { useViewStore } from '@/stores/viewStore'
@@ -77,6 +78,7 @@ function isCodeScript(ext: string): boolean {
 // ─── Main Component ───────────────────────────────────────────────
 
 export function AssetExplorer() {
+  const t = useT()
   const workspacePath = useAssetStore((s) => s.workspacePath)
   const rootNodes = useAssetStore((s) => s.rootNodes)
   const isLoading = useAssetStore((s) => s.isLoading)
@@ -210,7 +212,7 @@ export function AssetExplorer() {
       {/* Header */}
       <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-1">
         <span className="text-xs font-semibold text-text-secondary flex-1 truncate">
-          {workspaceName || 'Explorer'}
+          {workspaceName || t.assets.explorer}
         </span>
 
         {/* Search toggle */}
@@ -221,7 +223,7 @@ export function AssetExplorer() {
               ? 'text-accent-primary bg-accent-primary/10'
               : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
           }`}
-          title="Search files"
+          title={t.assets.searchFiles}
         >
           <Search className="w-3.5 h-3.5" />
         </button>
@@ -231,7 +233,7 @@ export function AssetExplorer() {
           <button
             onClick={() => setShowSortMenu(!showSortMenu)}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-            title="Sort files"
+            title={t.assets.sortFiles}
           >
             <ArrowUpDown className="w-3.5 h-3.5" />
           </button>
@@ -249,7 +251,7 @@ export function AssetExplorer() {
           <button
             onClick={handleRefresh}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-            title="Refresh"
+            title={t.assets.refresh}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -260,7 +262,7 @@ export function AssetExplorer() {
           <button
             onClick={collapseAll}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-            title="Collapse all"
+            title={t.assets.collapseAll}
           >
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
@@ -270,7 +272,7 @@ export function AssetExplorer() {
         <button
           onClick={handleOpenLogs}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title="Reveal logs folder"
+          title={t.assets.revealLogs}
         >
           <ScrollText className="w-3.5 h-3.5" />
         </button>
@@ -279,7 +281,7 @@ export function AssetExplorer() {
         <button
           onClick={handleOpenFolder}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title="Open folder"
+          title={t.assets.openFolder}
         >
           <FolderPlus className="w-3.5 h-3.5" />
         </button>
@@ -295,7 +297,7 @@ export function AssetExplorer() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter files..."
+              placeholder={t.assets.filterPlaceholder}
               className="flex-1 bg-transparent text-xs text-text-primary placeholder:text-text-muted/50 outline-none"
             />
             {searchQuery && (
