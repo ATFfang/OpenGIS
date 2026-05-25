@@ -1,10 +1,30 @@
 import { app, BrowserWindow, shell, ipcMain, nativeImage, nativeTheme } from 'electron'
 import { join } from 'path'
+import { readFileSync, existsSync } from 'fs'
 import { PythonManager } from './ipc/pythonManager'
 import { registerFileHandlers } from './ipc/fileHandlers'
 import { registerSettingsHandlers } from './ipc/settingsHandlers'
 import { createMenu } from './menu'
 import { initLogger, getLogDir } from './logger'
+
+/**
+ * Read the saved theme from settings.json synchronously (before any window opens).
+ * Returns 'dark' | 'light' based on saved preference or system default.
+ */
+function getStartupTheme(): 'dark' | 'light' {
+  try {
+    const settingsPath = join(app.getPath('userData'), 'settings.json')
+    if (existsSync(settingsPath)) {
+      const raw = readFileSync(settingsPath, 'utf-8')
+      const settings = JSON.parse(raw)
+      const theme = settings?.appearance?.theme
+      if (theme === 'light') return 'light'
+      if (theme === 'dark') return 'dark'
+      // 'system' — follow OS
+    }
+  } catch { /* ignore */ }
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+}
 
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock()
@@ -26,13 +46,15 @@ function getAppIcon(): Electron.NativeImage {
 
 function createLoadingWindow(): Promise<void> {
   const appIcon = getAppIcon()
+  const startupTheme = getStartupTheme()
+  const isDarkLoading = startupTheme === 'dark'
 
   loadingWindow = new BrowserWindow({
     width: 480,
     height: 580,
     resizable: false,
     frame: false,
-    backgroundColor: '#ffffff',
+    backgroundColor: isDarkLoading ? '#0a0c10' : '#ffffff',
     show: true,
     center: true,
     alwaysOnTop: true,
@@ -64,6 +86,7 @@ function createLoadingWindow(): Promise<void> {
   return new Promise((resolve) => {
     loadingWindow!.webContents.once('did-finish-load', () => {
       console.log('[loading] did-finish-load — sending step 0')
+      loadingWindow?.webContents.send('loading:theme', startupTheme)
       updateLoadingProgress(0, 'Initializing application…')
       resolve()
     })

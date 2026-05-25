@@ -30,6 +30,7 @@ import logoImg from '@/assets/logo.png'
 import thinkingGif from '@/assets/thinking.gif'
 import machineAvatar from '@/assets/machine.png'
 import ChatRow from './components/ChatRow'
+import OrbLogo from './components/OrbLogo'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
 import type { UIMessage } from '@/types/chat'
 import { groupMessages, type MessageRole } from './groupMessages'
@@ -845,11 +846,9 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
-      {/* Logo */}
+      {/* Animated orb logo */}
       <div className="relative mb-8 animate-fade-in">
-        <div className="w-20 h-20 rounded-2xl overflow-hidden flex items-center justify-center">
-          <img src={logoImg} alt="OpenGIS" className="w-20 h-20 object-contain" />
-        </div>
+        <OrbLogo size={80} />
       </div>
 
       <h2 className="text-xl font-bold text-text-primary mb-2 animate-fade-in">

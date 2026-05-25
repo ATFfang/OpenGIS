@@ -133,6 +133,7 @@ class RpcHandler:
         self, websocket: WebSocket, skill_registry: SkillRegistry
     ):
         self.ws = websocket
+        self._ws_write_lock = asyncio.Lock()  # Protect concurrent send_text
         self.skills = skill_registry
         # Reusable agent instance — built lazily once we know the LLM config.
         self._agent: GISAgent | None = None
@@ -537,84 +538,85 @@ class RpcHandler:
         return {"status": "completed", "run_id": (ctx.meta or {}).get("run_id")}
 
     async def _handle_agent_cancel(self, params: dict) -> Any:
-        """Interrupt the running agent — kill the subprocess and release locks.
+        """Interrupt the running agent — kill the subprocess and release locks."""
+        import time as _time
+        _t0 = _time.perf_counter()
+        def _elapsed():
+            return f"+{(_time.perf_counter() - _t0)*1000:.1f}ms"
 
-        Order matters:
-          1. Ask the subprocess executor to die (``interrupt()``) so any
-             ``pip install`` / training loop stops burning CPU. On
-             Windows this escalates to ``taskkill /F /T /PID`` if the
-             child ignores CTRL_BREAK.
-          2. Cancel the asyncio task driving the event loop, which lets
-             the ``finally`` in ``_drive()`` release the workspace lock.
-          3. Force-release all workspace locks as a safety net — the
-             ``finally`` block in ``_drive()`` should handle this, but
-             if the task is stuck we need a fallback.
-          4. Wait briefly for the task to actually finish so the next
-             message doesn't race with the dying task.
-        """
+        logger.info("[CANCEL-DEBUG] %s _handle_agent_cancel ENTERED", _elapsed())
         cancelled = False
         agent = self._agent
+        logger.info("[CANCEL-DEBUG] %s agent=%s, _current_agent_task=%s",
+                    _elapsed(), agent is not None,
+                    self._current_agent_task is not None and not self._current_agent_task.done()
+                    if self._current_agent_task else None)
+
         if agent is not None:
             # Signal the agent loop to stop at the next iteration.
             current_loop = getattr(agent, "_current_loop", None)
+            logger.info("[CANCEL-DEBUG] %s current_loop=%s, _interrupted_before=%s",
+                        _elapsed(), current_loop is not None,
+                        getattr(current_loop, "_interrupted", "N/A") if current_loop else "N/A")
             if current_loop is not None and hasattr(current_loop, "interrupt"):
                 try:
                     current_loop.interrupt()
-                    logger.info("[agent_cancel] agent loop interrupted")
+                    logger.info("[CANCEL-DEBUG] %s loop.interrupt() done, _interrupted=%s",
+                                _elapsed(), current_loop._interrupted)
                 except Exception as e:
-                    logger.warning("[agent_cancel] loop.interrupt failed: %s", e)
+                    logger.warning("[CANCEL-DEBUG] %s loop.interrupt failed: %s", _elapsed(), e)
 
             executor = getattr(agent, "current_executor", None)
+            logger.info("[CANCEL-DEBUG] %s executor=%s, proc=%s",
+                        _elapsed(), executor is not None,
+                        getattr(getattr(executor, "_proc", None), "pid", None) if executor else None)
             if executor is not None:
                 try:
                     executor.interrupt()
-                    logger.info("[agent_cancel] executor.interrupt() sent")
+                    logger.info("[CANCEL-DEBUG] %s executor.interrupt() done", _elapsed())
                 except Exception as e:
-                    logger.warning("[agent_cancel] executor.interrupt failed: %s", e)
-                # Also force cleanup the executor to kill the subprocess tree.
+                    logger.warning("[CANCEL-DEBUG] %s executor.interrupt failed: %s", _elapsed(), e)
                 try:
                     executor.cleanup()
-                    logger.info("[agent_cancel] executor.cleanup() done")
+                    logger.info("[CANCEL-DEBUG] %s executor.cleanup() done", _elapsed())
                 except Exception as e:
-                    logger.warning("[agent_cancel] executor.cleanup failed: %s", e)
-                # Clear the reference so the next run creates a fresh executor.
+                    logger.warning("[CANCEL-DEBUG] %s executor.cleanup failed: %s", _elapsed(), e)
                 agent.current_executor = None
 
-            # Interrupt the worker thread blocked on an LLM HTTP call.
-            # This is the last-resort mechanism — the normal path (loop.interrupt
-            # + executor.interrupt + task.cancel) handles most cases, but when
-            # the thread is stuck on a long-running HTTP request we need to
-            # inject an exception to unblock it.
             current_runner = getattr(agent, "_current_runner", None)
+            logger.info("[CANCEL-DEBUG] %s current_runner=%s, worker_thread_id=%s",
+                        _elapsed(), current_runner is not None,
+                        getattr(current_runner, "_worker_thread_id", None) if current_runner else None)
             if current_runner is not None:
                 try:
-                    current_runner.interrupt_worker_thread()
+                    result = current_runner.interrupt_worker_thread()
+                    logger.info("[CANCEL-DEBUG] %s interrupt_worker_thread() returned %s", _elapsed(), result)
                 except Exception as e:
-                    logger.warning("[agent_cancel] thread interrupt failed: %s", e)
+                    logger.warning("[CANCEL-DEBUG] %s thread interrupt failed: %s", _elapsed(), e)
 
         if self._current_agent_task and not self._current_agent_task.done():
             self._current_agent_task.cancel()
             cancelled = True
-            logger.info("[agent_cancel] asyncio task cancelled")
-            # Wait briefly for the task to actually finish so the next
-            # user message doesn't race with the dying task.
+            logger.info("[CANCEL-DEBUG] %s asyncio task cancelled, waiting...", _elapsed())
             try:
                 await asyncio.wait_for(
                     asyncio.shield(self._current_agent_task),
                     timeout=TITLE_GEN_TIMEOUT,
                 )
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+                logger.info("[CANCEL-DEBUG] %s task finished gracefully", _elapsed())
+            except (TimeoutError, asyncio.CancelledError, Exception) as e:
+                logger.info("[CANCEL-DEBUG] %s task wait ended with: %s(%s)", _elapsed(), type(e).__name__, e)
             self._current_agent_task = None
+        else:
+            logger.info("[CANCEL-DEBUG] %s NO active agent task to cancel!", _elapsed())
 
-        # Safety net: force-release all workspace locks. The _drive()
-        # finally block should do this, but if the task is stuck or the
-        # cancel doesn't propagate fast enough, we release here.
         if self._workspace_locks:
             released = list(self._workspace_locks.keys())
             self._workspace_locks.clear()
-            logger.info("[agent_cancel] force-released locks: %s", released)
+            logger.info("[CANCEL-DEBUG] %s force-released locks: %s", _elapsed(), released)
 
+        logger.info("[CANCEL-DEBUG] %s _handle_agent_cancel DONE, returning status=%s",
+                    _elapsed(), "cancelled" if cancelled else "idle")
         return {"status": "cancelled" if cancelled else "idle"}
 
     # ─── A4: workspace revert ──────────────────────────────────────────
@@ -1015,37 +1017,40 @@ class RpcHandler:
     # ─── JSON-RPC Helpers ───
 
     async def _send_result(self, request_id: str, result: Any) -> None:
-        await self.ws.send_text(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": result,
-                },
-                cls=NumpyEncoder,
+        async with self._ws_write_lock:
+            await self.ws.send_text(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": result,
+                    },
+                    cls=NumpyEncoder,
+                )
             )
-        )
 
     async def _send_error(self, request_id: str | None, code: int, message: str) -> None:
-        await self.ws.send_text(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": code, "message": message},
-                },
-                cls=NumpyEncoder,
+        async with self._ws_write_lock:
+            await self.ws.send_text(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": code, "message": message},
+                    },
+                    cls=NumpyEncoder,
+                )
             )
-        )
 
     async def _send_notification(self, method: str, params: dict) -> None:
-        await self.ws.send_text(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": params,
-                },
-                cls=NumpyEncoder,
+        async with self._ws_write_lock:
+            await self.ws.send_text(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": method,
+                        "params": params,
+                    },
+                    cls=NumpyEncoder,
+                )
             )
-        )

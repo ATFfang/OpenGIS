@@ -215,15 +215,13 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   // Nothing to show — skip the row entirely.
   if (!hasOutput && !hasError) return null
 
-  // ── Success path: render bare pre, no card, no header. ──
-  // The step number + script link already live in the preceding
-  // CodeStepRow's header, so duplicating it here just adds noise.
+  // ── Success path: render as normal readable text, no card/frame. ──
   if (!hasError) {
     return (
       <div className="ml-[30px] -mt-1">
-        <pre className="text-[12px] p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[260px] overflow-y-auto scrollbar-thin font-mono leading-relaxed text-text-secondary">
-          <code>{output}</code>
-        </pre>
+        <div className="text-[13px] py-2 px-1 whitespace-pre-wrap break-words leading-[1.7] text-text-primary/85">
+          {output}
+        </div>
       </div>
     )
   }

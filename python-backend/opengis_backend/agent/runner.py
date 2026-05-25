@@ -57,16 +57,24 @@ def run_agent_safely(
     Worker-thread entry: drives ``loop.run(user_message)`` synchronously
     and *always* posts a terminating sentinel so the drain loop in
     :meth:`AgentRunner.drive` can exit cleanly.
-
-    If ``thread_id_holder`` is provided, stores the current thread's
-    ident so the caller can interrupt a blocked LLM call from outside.
     """
+    tid = threading.get_ident()
     if thread_id_holder is not None:
-        thread_id_holder.append(threading.get_ident())
+        thread_id_holder.append(tid)
+    logger.info("[RUNNER-DEBUG] run_agent_safely START, thread=%d", tid)
     try:
-        return loop.run(user_message)
+        result = loop.run(user_message)
+        logger.info("[RUNNER-DEBUG] run_agent_safely loop.run() returned normally, thread=%d, result_len=%d",
+                    tid, len(result) if result else 0)
+        return result
+    except KeyboardInterrupt:
+        logger.info("[RUNNER-DEBUG] run_agent_safely caught KeyboardInterrupt in thread=%d", tid)
+        return "(Task interrupted by user.)"
+    except Exception as e:
+        logger.error("[RUNNER-DEBUG] run_agent_safely caught %s: %s in thread=%d", type(e).__name__, e, tid)
+        raise
     finally:
-        # Post the sentinel via the owning loop.
+        logger.info("[RUNNER-DEBUG] run_agent_safely FINALLY, posting sentinel, thread=%d", tid)
         try:
             if not event_loop.is_closed():
                 event_loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -102,29 +110,26 @@ class AgentRunner:
     def interrupt_worker_thread(self) -> bool:
         """Inject a KeyboardInterrupt into the worker thread to unblock
         a stuck LLM HTTP call.  Returns True if the signal was sent.
-
-        This is a last-resort mechanism — the normal interrupt path
-        (loop.interrupt + executor.interrupt + task.cancel) handles
-        most cases.  This only fires when the thread is blocked on a
-        long-running HTTP request and won't return on its own.
         """
         tid = self._worker_thread_id
+        logger.info("[RUNNER-DEBUG] interrupt_worker_thread called, tid=%d", tid)
         if not tid:
+            logger.info("[RUNNER-DEBUG] no worker thread id, returning False")
             return False
         try:
             res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
                 ctypes.c_ulong(tid), ctypes.py_object(KeyboardInterrupt)
             )
             if res == 1:
-                logger.info("[interrupt] KeyboardInterrupt injected into thread %d", tid)
+                logger.info("[RUNNER-DEBUG] KeyboardInterrupt injected into thread %d SUCCESS", tid)
                 return True
             elif res > 1:
-                # Reset if multiple threads matched (shouldn't happen).
                 ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), None)
-                logger.warning("[interrupt] multiple threads matched, reset")
+                logger.warning("[RUNNER-DEBUG] multiple threads matched, reset")
+            logger.info("[RUNNER-DEBUG] injection returned res=%d", res)
             return False
         except Exception as e:
-            logger.warning("[interrupt] failed to inject into thread %d: %s", tid, e)
+            logger.warning("[RUNNER-DEBUG] failed to inject into thread %d: %s", tid, e)
             return False
 
     async def drive(

@@ -86,6 +86,7 @@ export interface UIMessage {
 
   // Progress indicator — filled for say='progress'.
   progressStage?: string
+  progressDetail?: string
 
   // Model attribution
   modelInfo?: {

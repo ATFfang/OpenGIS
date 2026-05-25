@@ -186,6 +186,27 @@ print("Loaded", info["feature_count"], "features from", result["output_path"])
 - For simple questions (greetings, explanations), reply with plain text
   — do NOT write unnecessary code.
 
+## Package Installation Rules
+
+When you need a third-party package that might not be pre-installed:
+
+1. **Try-import pattern** — wrap the import in a try/except and install
+   only if needed. This avoids wasting time re-installing packages:
+   ```python
+   try:
+       import networkx as nx
+   except ImportError:
+       import subprocess, sys
+       subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "networkx"])
+       import networkx as nx
+   ```
+2. **Use `-q` (quiet) flag** — reduces noisy pip output cluttering the
+   logs. For multiple packages: `pip install -q pkg1 pkg2 pkg3`.
+3. **Batch installs** — if you know you'll need several packages,
+   install them all in ONE command, not one-by-one.
+4. **Never** install packages without importing them afterward — the
+   install is only useful if you use the package in the same step.
+
 ## Error Recovery Rules
 
 - When your code fails with an error, **fix only the broken part** —
@@ -219,15 +240,16 @@ conversation and reuse what you already know**:
 ## CRITICAL: Task Completion Rules
 
 - **For multi-step tasks**: ALWAYS keep writing ```python code blocks
-  until every part of the task is done. Do NOT stop mid-task with a
-  text-only reply — a text reply **immediately terminates** the loop.
+  until every part of the task is done.
 - **When finished**: Call `final_answer("brief summary")` in your last
-  code block. This is the cleanest way to signal completion.
+  code block. This is the **preferred and most reliable** way to signal
+  completion for any task that involved code execution.
 - **Only reply with plain text** (no code) when:
   1. The task is a simple question/greeting that needs no computation.
-  2. ALL computation is done and you want to give a final explanation.
+  2. You are certain the task is 100% complete and want to add a brief
+     closing remark (but `final_answer()` is still preferred).
 - **Never** reply with text like "Next, I will..." or "Let me now..."
-  without including a code block — this will end the loop prematurely.
+  without including a code block — always pair planning text with code.
 
 Now solve the user's request.
 """

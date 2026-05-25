@@ -9,10 +9,12 @@ lets the LLM autonomously decide at each step whether to:
 
 Termination strategy (aligned with mainstream open-source agents):
 - Explicit tool termination: final_answer() in code -> loop exits.
-- Response format detection: pure text reply -> task considered done.
-  No extra LLM self-evaluation call. This matches OpenHands, Cline, and
-  Claude Code's approach -- zero overhead, relies on strong system prompt
-  guidance to ensure the LLM only emits plain text when truly finished.
+- Response format detection: pure text reply -> task considered done,
+  BUT only immediately when code_steps == 0 (simple conversation).
+  When code_steps > 0, the loop nudges the LLM once to continue or
+  call final_answer() explicitly. If it still replies with text, accept.
+  This prevents premature termination from mid-task text explanations
+  while adding at most one extra LLM call overhead.
 
 References:
 - CodeAct paper: "Executable Code Actions Elicit Better LLM Agents" (Wang et al., 2024)
@@ -381,11 +383,11 @@ class AgentLoop:
     Code is executed in the subprocess sandbox; results feed back as
     observations for the next step.
 
-    Termination uses the mainstream "explicit tool + response format"
-    strategy (same as OpenHands, Cline, Claude Code):
-    - final_answer() in code -> explicit termination
-    - Pure text reply -> implicit termination (task considered done)
-    - No extra LLM self-evaluation call
+    Termination uses a layered "nudge" strategy:
+    - final_answer() in code -> explicit termination (preferred)
+    - Pure text reply at code_steps==0 -> immediate exit (conversation)
+    - Pure text reply at code_steps>0 -> nudge once, then accept
+    - No extra LLM self-evaluation call (at most one nudge)
 
     Parameters
     ----------
@@ -434,9 +436,12 @@ class AgentLoop:
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point. Checked at the top of each iteration.
     _interrupted: bool = field(default=False, init=False, repr=False)
+    _nudged_this_turn: bool = field(default=False, init=False, repr=False)
 
     def interrupt(self) -> None:
         """Signal the loop to stop at the next safe point."""
+        import threading
+        logger.info("[LOOP-DEBUG] interrupt() called from thread=%d, setting _interrupted=True", threading.get_ident())
         self._interrupted = True
 
     # -- Public API --------------------------------------------------
@@ -454,10 +459,14 @@ class AgentLoop:
 
         code_steps = 0  # Only count code execution steps toward the limit.
         reasoning_round_seq = 0  # Monotonic id for reasoning bubbles.
+        self._nudged_this_turn = False  # Reset nudge state for this run.
 
         for iteration in range(self.max_steps * AGENT_LOOP_SAFETY_MULTIPLIER):  # Safety cap on total iterations
             # Check for external interruption.
+            logger.info("[LOOP-DEBUG] iteration=%d, code_steps=%d, _interrupted=%s, thread=%d",
+                        iteration, code_steps, self._interrupted, __import__('threading').get_ident())
             if self._interrupted:
+                logger.info("[LOOP-DEBUG] EXITING due to _interrupted=True at iteration top")
                 logger.info("Agent loop interrupted externally after %d code steps.", code_steps)
                 return "(Task interrupted by user.)"
             # 1. Build messages with context compression.
@@ -570,6 +579,7 @@ class AgentLoop:
             def _on_llm_delta(piece: str) -> None:
                 parser.feed(piece)
 
+            logger.info("[LOOP-DEBUG] LLM call START, _interrupted=%s", self._interrupted)
             try:
                 response = self.llm_call(messages, on_delta=_on_llm_delta)
                 parser.finish()
@@ -583,10 +593,12 @@ class AgentLoop:
                     except Exception as e:
                         logger.warning("on_thought_delta failed: %s", e)
             except Exception as e:
-                logger.error("LLM call failed: %s", e)
+                logger.error("[LOOP-DEBUG] LLM call EXCEPTION: %s(%s), _interrupted=%s", type(e).__name__, e, self._interrupted)
                 raise
 
             duration_ms = (time.monotonic() - t0) * 1000
+            logger.info("[LOOP-DEBUG] LLM call END, duration=%.0fms, _interrupted=%s, response_len=%d",
+                        duration_ms, self._interrupted, len(response) if response else 0)
 
             # 3. Parse response: extract thought + code block.
             code_block = extract_code_block(response)
@@ -594,14 +606,37 @@ class AgentLoop:
 
             # 4a. Pure text reply -- no code block.
             #
-            # Termination strategy (mainstream approach):
-            #   - If the LLM chose to reply with plain text, it considers
-            #     the current interaction complete. Trust the LLM's judgement.
-            #   - The system prompt strongly instructs the LLM to keep writing
-            #     code blocks until the task is fully done, and to only emit
-            #     plain text when finished or for simple conversations.
-            #   - No extra LLM self-evaluation call -- zero overhead.
+            # Termination strategy (layered):
+            #   - code_steps == 0: Simple conversation / greeting. The LLM
+            #     chose not to write code at all -> trust it, exit immediately.
+            #   - code_steps > 0: The agent is mid-task. A text-only reply
+            #     is likely an accidental pause (LLM explaining next steps
+            #     instead of writing code). We give it ONE nudge to continue.
+            #     If it replies with text again, accept that as completion.
+            #   - No extra LLM self-evaluation call -- at most one nudge.
             if code_block is None:
+                # Mid-task nudge: if we've already executed code and haven't
+                # nudged yet this turn, push the LLM to continue or finish
+                # explicitly. This prevents premature termination when the
+                # LLM emits "Next I will..." without a code block.
+                if code_steps > 0 and not getattr(self, '_nudged_this_turn', False):
+                    self._nudged_this_turn = True
+                    logger.info(
+                        "Text-only reply mid-task (code_steps=%d) -- nudging LLM to continue.",
+                        code_steps,
+                    )
+                    # Close reasoning bubble for this intermediate text.
+                    _close_reasoning_if_open()
+                    self.context.add_assistant_message(response)
+                    self.context.add_user_message(
+                        "[System] You are mid-task. Either write a ```python code block "
+                        "to continue, or call final_answer(\"summary\") to finish. "
+                        "A plain text reply will end the task."
+                    )
+                    continue
+
+                # Genuine completion: either first-turn text or post-nudge text.
+                self._nudged_this_turn = False  # Reset for next run.
                 # No code arrived this round -> the streamed reasoning IS
                 # the final answer. Ask the UI to convert the reasoning
                 # bubble into a normal text bubble.
@@ -633,11 +668,23 @@ class AgentLoop:
 
             # 4b. Code block found -> execute.
             code_steps += 1
+            self._nudged_this_turn = False  # Reset: next text-only gets a fresh nudge.
             # If the LLM wrote some text *after* the code fence (post-code
             # thought / explanation), close that reasoning bubble too \u2014
             # we don't promote it because the round did contain code.
             _close_reasoning_if_open()
             self.context.add_assistant_message(response)
+
+            # Auto-install missing packages before execution.
+            try:
+                from opengis_backend.agent.auto_install import auto_install_missing
+                auto_install_missing(
+                    code_block,
+                    python_executable=None,  # uses sys.executable (same as subprocess)
+                    progress_callback=self.progress_callback,
+                )
+            except Exception:
+                logger.debug("auto_install check failed (non-fatal)", exc_info=True)
 
             # Notify the UI that code is about to execute.
             if self.progress_callback:
@@ -650,13 +697,18 @@ class AgentLoop:
                     pass
 
             t1 = time.monotonic()
+            logger.info("[LOOP-DEBUG] CODE EXEC START step=%d, _interrupted=%s, code_len=%d",
+                        code_steps, self._interrupted, len(code_block))
             try:
                 result = self.executor_call(code_block)
             except Exception as e:
                 # Executor-level failure (child died, timeout, etc.)
                 error_msg = f"{type(e).__name__}: {e}"
+                logger.info("[LOOP-DEBUG] CODE EXEC EXCEPTION: %s, _interrupted=%s", error_msg, self._interrupted)
                 result = CodeExecResult(error=error_msg)
             exec_duration_ms = (time.monotonic() - t1) * 1000
+            logger.info("[LOOP-DEBUG] CODE EXEC END step=%d, duration=%.0fms, error=%s, is_final=%s, _interrupted=%s",
+                        code_steps, exec_duration_ms, result.error is not None, result.is_final_answer, self._interrupted)
 
             # Build the step record.
             step = AgentStep(

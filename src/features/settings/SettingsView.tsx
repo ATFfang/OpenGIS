@@ -75,12 +75,14 @@ export function SettingsView() {
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const providerDropdownRef = useRef<HTMLDivElement>(null)
 
-  // Per-protocol config cache — switching providers restores previous settings
+  // Per-provider config cache — switching providers restores previous settings.
+  // Cache key uses a composite "protocol::baseURL" so providers sharing the
+  // same protocol but different baseURLs never collide. Protocol changes and
+  // Provider changes write to different cache slots — no cross-contamination.
   const providerCache = useRef<Record<string, Partial<typeof model>>>({})
-  const getCurrentCacheKey = () => model.baseURL || model.protocol
+  const getCurrentCacheKey = () => `${model.protocol}::${model.baseURL || ''}`
   const saveToCache = () => {
     const key = getCurrentCacheKey()
-    if (!key) return
     const { protocol, baseURL, modelName, apiKey } = model
     providerCache.current[key] = { protocol, baseURL, modelName, apiKey }
   }
@@ -243,12 +245,13 @@ export function SettingsView() {
   const handleProviderSelect = useCallback(
     (provider: ProviderConfig) => {
       saveToCache()
-      const cacheKey = provider.baseURL || provider.protocol
+      // Use composite key matching getCurrentCacheKey format
+      const cacheKey = `${provider.protocol}::${provider.baseURL || ''}`
       if (!restoreFromCache(cacheKey)) {
         setModel({
           protocol: provider.protocol,
           baseURL: provider.baseURL,
-          modelName: model.modelName || provider.defaultModel,
+          modelName: provider.defaultModel || model.modelName,
         })
       }
       setShowProviderDropdown(false)
@@ -670,12 +673,14 @@ export function SettingsView() {
                       id="model-protocol"
                       value={model.protocol}
                       onChange={(v) => {
+                        const newProtocol = v as ProtocolType
+                        if (newProtocol === model.protocol) return
                         saveToCache()
-                        if (!restoreFromCache(v as string)) {
-                          setModel({
-                            protocol: v as ProtocolType,
-                            baseURL: '',
-                          })
+                        // Try to restore a previous config with same baseURL but new protocol
+                        const cacheKey = `${newProtocol}::${model.baseURL || ''}`
+                        if (!restoreFromCache(cacheKey)) {
+                          // Only change protocol — leave baseURL, modelName, apiKey intact
+                          setModel({ protocol: newProtocol })
                         }
                       }}
                       options={PROTOCOL_OPTIONS.map((p) => ({

@@ -87,14 +87,14 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
               onClick={handlePin}
               disabled={!path || pinState === 'pinning'}
               title={path ? 'Pin to map' : 'No path available'}
-              className="px-2 py-1 rounded-md bg-bg-primary/85 backdrop-blur border border-border text-[11px] text-text-primary hover:bg-accent-primary/15 hover:border-accent-primary/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+              className="px-2 py-1 rounded-md bg-white/90 border border-black/10 text-[11px] text-gray-800 hover:bg-white hover:border-blue-400/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1 shadow-md"
             >
               {pinState === 'pinning' ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
+                <Loader2 className="w-3 h-3 animate-spin text-gray-600" />
               ) : pinState === 'pinned' ? (
-                <Check className="w-3 h-3 text-accent-success" />
+                <Check className="w-3 h-3 text-green-600" />
               ) : (
-                <MapPin className="w-3 h-3" />
+                <MapPin className="w-3 h-3 text-gray-600" />
               )}
               <span>
                 {pinState === 'pinned'
@@ -111,7 +111,7 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
               type="button"
               onClick={() => setPreviewOpen(true)}
               title="Open fullsize"
-              className="p-1 rounded-md bg-bg-primary/85 backdrop-blur border border-border text-text-primary hover:bg-bg-tertiary transition-colors"
+              className="p-1 rounded-md bg-white/90 border border-black/10 text-gray-800 hover:bg-white transition-colors shadow-md"
             >
               <Maximize2 className="w-3 h-3" />
             </button>
