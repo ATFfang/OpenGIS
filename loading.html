@@ -11,6 +11,7 @@
     :root {
       --bg: #ffffff;
       --bg-card: #f8f9fb;
+      --bg-hover: #f0f2f5;
       --text: #1a1a2e;
       --text-sub: #8c8c9a;
       --text-dim: #b0b0be;
@@ -20,8 +21,10 @@
       --step-color: #c0c0cc;
       --accent: #3b82f6;
       --accent-glow: rgba(59, 130, 246, 0.25);
+      --accent-hover: #2563eb;
       --success: #22c55e;
       --track: #f0f0f5;
+      --danger: #ef4444;
       --orb-1: rgba(59, 130, 246, 0.6);
       --orb-2: rgba(99, 102, 241, 0.5);
       --orb-3: rgba(6, 182, 212, 0.4);
@@ -30,6 +33,7 @@
     .dark {
       --bg: #0a0c10;
       --bg-card: #12151c;
+      --bg-hover: #1a1e2a;
       --text: #e8eaed;
       --text-sub: #9aa0ad;
       --text-dim: #5f6573;
@@ -39,8 +43,10 @@
       --step-color: #5f6573;
       --accent: #3b82f6;
       --accent-glow: rgba(59, 130, 246, 0.35);
+      --accent-hover: #60a5fa;
       --success: #22c55e;
       --track: #1a1e2a;
+      --danger: #ef4444;
       --orb-1: rgba(59, 130, 246, 0.7);
       --orb-2: rgba(99, 102, 241, 0.6);
       --orb-3: rgba(6, 182, 212, 0.5);
@@ -57,29 +63,32 @@
       justify-content: center;
       overflow: hidden;
       transition: background 0.3s ease, color 0.3s ease;
+      -webkit-app-region: drag;
     }
+    button, input, .project-item, .project-item-info, .project-item-actions { -webkit-app-region: no-drag; }
+
     .container {
       text-align: center;
-      max-width: 420px;
+      max-width: 480px;
       width: 100%;
-      padding: 48px 32px;
+      padding: 40px 32px;
     }
 
     /* ─── Siri-like orb animation ─── */
     .orb-wrapper {
       position: relative;
-      width: 150px;
-      height: 150px;
-      margin: 0 auto 32px;
+      width: 120px;
+      height: 120px;
+      margin: 0 auto 24px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     .orb-canvas {
       position: absolute;
-      inset: -16px;
+      inset: -12px;
       border-radius: 50%;
-      filter: blur(16px);
+      filter: blur(14px);
       opacity: 0.85;
       animation: orb-rotate 6s ease-in-out infinite;
     }
@@ -88,46 +97,31 @@
       border-radius: 50%;
       mix-blend-mode: screen;
     }
-    .dark .orb-blob {
-      mix-blend-mode: screen;
-    }
     .orb-blob:nth-child(1) {
-      width: 80%;
-      height: 80%;
-      top: 5%;
-      left: 10%;
+      width: 80%; height: 80%; top: 5%; left: 10%;
       background: radial-gradient(circle, var(--orb-1), transparent 70%);
       animation: orb-drift-1 4s ease-in-out infinite;
     }
     .orb-blob:nth-child(2) {
-      width: 70%;
-      height: 70%;
-      top: 15%;
-      left: 20%;
+      width: 70%; height: 70%; top: 15%; left: 20%;
       background: radial-gradient(circle, var(--orb-2), transparent 70%);
       animation: orb-drift-2 5s ease-in-out infinite;
     }
     .orb-blob:nth-child(3) {
-      width: 65%;
-      height: 65%;
-      top: 20%;
-      left: 5%;
+      width: 65%; height: 65%; top: 20%; left: 5%;
       background: radial-gradient(circle, var(--orb-3), transparent 70%);
       animation: orb-drift-3 4.5s ease-in-out infinite;
     }
     .orb-blob:nth-child(4) {
-      width: 60%;
-      height: 60%;
-      top: 10%;
-      left: 28%;
+      width: 60%; height: 60%; top: 10%; left: 28%;
       background: radial-gradient(circle, var(--orb-4), transparent 70%);
       animation: orb-drift-4 5.5s ease-in-out infinite;
     }
     .orb-center {
       position: relative;
       z-index: 2;
-      width: 64px;
-      height: 64px;
+      width: 56px;
+      height: 56px;
       border-radius: 50%;
       background: var(--bg-card);
       border: 1.5px solid var(--border);
@@ -136,11 +130,7 @@
       justify-content: center;
       box-shadow: 0 6px 32px var(--accent-glow);
     }
-    .orb-center img {
-      width: 38px;
-      height: 38px;
-      object-fit: contain;
-    }
+    .orb-center img { width: 34px; height: 34px; object-fit: contain; }
 
     @keyframes orb-rotate {
       0%, 100% { transform: rotate(0deg) scale(1); }
@@ -170,84 +160,231 @@
     }
 
     .title {
-      font-size: 26px;
+      font-size: 24px;
       font-weight: 700;
       letter-spacing: -0.5px;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       color: var(--text);
     }
     .subtitle {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-sub);
-      margin-bottom: 44px;
+      margin-bottom: 32px;
       font-weight: 400;
     }
-    .steps { text-align: left; margin-bottom: 36px; }
+
+    /* ─── Loading phase ─── */
+    #loading-phase { transition: opacity 0.3s ease; }
+    #loading-phase.hidden { opacity: 0; pointer-events: none; position: absolute; }
+
+    .steps { text-align: left; margin-bottom: 28px; }
     .step {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 9px 0;
-      font-size: 13px;
-      color: var(--text-dim);
-      transition: color 0.35s ease;
+      display: flex; align-items: center; gap: 12px;
+      padding: 8px 0; font-size: 13px;
+      color: var(--text-dim); transition: color 0.35s ease;
     }
     .step.active { color: var(--text); font-weight: 500; }
     .step.done { color: var(--text-sub); }
     .step-icon {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      transition: all 0.4s ease;
+      width: 8px; height: 8px; border-radius: 50%;
+      flex-shrink: 0; transition: all 0.4s ease;
     }
-    .step.pending .step-icon {
-      background: var(--step-border);
-    }
+    .step.pending .step-icon { background: var(--step-border); }
     .step.active .step-icon {
       background: var(--accent);
       box-shadow: 0 0 8px var(--accent-glow), 0 0 3px var(--accent);
       animation: pulse-dot 1.5s ease-in-out infinite;
     }
-    .step.done .step-icon {
-      background: var(--accent);
-      opacity: 0.6;
-    }
+    .step.done .step-icon { background: var(--accent); opacity: 0.6; }
     @keyframes pulse-dot {
       0%, 100% { transform: scale(1); opacity: 1; }
       50% { transform: scale(1.3); opacity: 0.7; }
     }
-    .progress-wrapper { margin-bottom: 16px; }
+    .progress-wrapper { margin-bottom: 12px; }
     .progress-track {
-      width: 100%;
-      height: 3px;
-      background: var(--track);
-      border-radius: 2px;
-      overflow: hidden;
+      width: 100%; height: 3px; background: var(--track);
+      border-radius: 2px; overflow: hidden;
     }
     .progress-fill {
-      height: 100%;
-      width: 0%;
+      height: 100%; width: 0%;
       background: linear-gradient(90deg, #3b82f6, #6366f1);
       border-radius: 2px;
       transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .status-text {
-      font-size: 12px;
-      color: var(--text-sub);
-      min-height: 18px;
+    .status-text { font-size: 12px; color: var(--text-sub); min-height: 18px; }
+
+    /* ─── Project selector phase ─── */
+    #project-phase {
+      display: none;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      text-align: left;
     }
+    #project-phase.visible { display: block; opacity: 1; }
+
+    .section-title {
+      font-size: 13px; font-weight: 600; color: var(--text-sub);
+      margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+
+    .project-list {
+      max-height: 240px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .project-list::-webkit-scrollbar { width: 4px; }
+    .project-list::-webkit-scrollbar-thumb {
+      background: var(--text-dim); border-radius: 2px;
+    }
+
+    .project-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s ease;
+    }
+    .project-item:last-child { border-bottom: none; }
+    .project-item:hover { background: var(--bg-hover); }
+    .project-item-info { flex: 1; min-width: 0; }
+    .project-item-name {
+      font-size: 14px; font-weight: 500; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .project-item-path {
+      font-size: 11px; color: var(--text-dim); margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .project-item-actions { display: flex; gap: 6px; margin-left: 8px; }
+    .project-item-actions button {
+      width: 24px; height: 24px; border: none; border-radius: 4px;
+      background: transparent; color: var(--text-dim); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; transition: all 0.15s;
+    }
+    .project-item-actions button:hover { background: var(--bg-hover); color: var(--text); }
+    .project-item-actions button.danger:hover { color: var(--danger); }
+
+    .empty-state {
+      text-align: center; padding: 32px 16px; color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    .actions { display: flex; gap: 10px; }
+    .btn {
+      flex: 1; padding: 9px 14px; border-radius: 6px;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      border: 1px solid var(--border); transition: all 0.15s ease;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .btn-primary {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary {
+      background: var(--bg-card); color: var(--text);
+    }
+    .btn-secondary:hover { background: var(--bg-hover); }
+
+    /* ─── Title bar (custom close button) ─── */
+    .title-bar {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 32px; display: flex; align-items: center;
+      justify-content: flex-end; padding: 0 4px;
+      -webkit-app-region: drag; z-index: 999;
+    }
+    .title-bar-btn {
+      -webkit-app-region: no-drag;
+      width: 32px; height: 28px; border: none; background: transparent;
+      color: var(--text-sub); cursor: pointer; display: flex;
+      align-items: center; justify-content: center; border-radius: 4px;
+      transition: all 0.12s ease;
+    }
+    .title-bar-btn:hover { background: var(--bg-hover); color: var(--text); }
+    .title-bar-btn.close:hover { background: #e81123; color: #fff; }
+
+    /* ─── New project modal ─── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.4); z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px; width: 380px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.3);
+    }
+    .modal h3 {
+      font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text);
+    }
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block; font-size: 12px; font-weight: 500;
+      color: var(--text-sub); margin-bottom: 6px;
+    }
+    .form-group input {
+      width: 100%; padding: 8px 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 13px; outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-group input:focus { border-color: var(--accent); }
+    .path-input-row { display: flex; gap: 8px; }
+    .path-input-row input { flex: 1; }
+    .path-input-row button {
+      padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg-hover); color: var(--text); font-size: 12px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .path-input-row button:hover { background: var(--border); }
+    .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+
     .footer {
-      position: absolute;
-      bottom: 28px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 11.5px;
-      color: var(--text-dim);
+      position: absolute; bottom: 20px; left: 50%;
+      transform: translateX(-50%); font-size: 11px; color: var(--text-dim);
+    }
+
+    /* ─── Project opening overlay ─── */
+    .opening-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: var(--bg);
+      flex-direction: column; align-items: center; justify-content: center;
+      opacity: 0; transition: opacity 0.35s ease;
+    }
+    .opening-overlay.visible { display: flex; opacity: 1; }
+    .opening-overlay .orb-wrapper {
+      width: 100px; height: 100px; margin-bottom: 20px;
+    }
+    .opening-overlay .orb-center {
+      width: 48px; height: 48px;
+    }
+    .opening-overlay .orb-center img { width: 28px; height: 28px; }
+    .opening-text {
+      font-size: 15px; font-weight: 500; color: var(--text);
+      margin-bottom: 6px;
+    }
+    .opening-subtext {
+      font-size: 12px; color: var(--text-sub);
+      animation: opening-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes opening-pulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
     }
   </style>
 </head>
 <body>
+  <!-- Custom title bar with close button -->
+  <div class="title-bar">
+    <button class="title-bar-btn close" id="btnClose" title="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+        <line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/>
+      </svg>
+    </button>
+  </div>
   <div class="container">
     <div class="orb-wrapper">
       <div class="orb-canvas">
@@ -263,37 +400,200 @@
     <div class="title">OpenGIS</div>
     <div class="subtitle">AI-powered GIS Workspace</div>
 
-    <div class="steps">
-      <div class="step pending" id="step-init">
-        <span class="step-icon"></span>
-        <span class="step-label">Initializing application</span>
+    <!-- Loading Phase -->
+    <div id="loading-phase">
+      <div class="steps">
+        <div class="step pending" id="step-init">
+          <span class="step-icon"></span>
+          <span class="step-label">Initializing application</span>
+        </div>
+        <div class="step pending" id="step-window">
+          <span class="step-icon"></span>
+          <span class="step-label">Preparing workspace</span>
+        </div>
+        <div class="step pending" id="step-python">
+          <span class="step-icon"></span>
+          <span class="step-label">Starting Python backend</span>
+        </div>
+        <div class="step pending" id="step-ready">
+          <span class="step-icon"></span>
+          <span class="step-label">Ready</span>
+        </div>
       </div>
-      <div class="step pending" id="step-window">
-        <span class="step-icon"></span>
-        <span class="step-label">Preparing workspace</span>
+      <div class="progress-wrapper">
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
       </div>
-      <div class="step pending" id="step-python">
-        <span class="step-icon"></span>
-        <span class="step-label">Starting Python backend</span>
-      </div>
-      <div class="step pending" id="step-ready">
-        <span class="step-icon"></span>
-        <span class="step-label">Ready</span>
-      </div>
+      <div class="status-text" id="statusText"></div>
     </div>
 
-    <div class="progress-wrapper">
-      <div class="progress-track">
-        <div class="progress-fill" id="progressFill"></div>
+    <!-- Project Selector Phase -->
+    <div id="project-phase">
+      <div class="section-title">Select a Project</div>
+      <div class="project-list" id="projectList">
+        <div class="empty-state">No projects yet. Create one to get started.</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="btnOpenFolder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Open Folder
+        </button>
+        <button class="btn btn-primary" id="btnNewProject">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Project
+        </button>
       </div>
     </div>
-    <div class="status-text" id="statusText"></div>
+  </div>
+
+  <!-- New Project Modal -->
+  <div class="modal-overlay" id="newProjectModal">
+    <div class="modal">
+      <h3>New Project</h3>
+      <div class="form-group">
+        <label for="inputProjectName">Project Name</label>
+        <input type="text" id="inputProjectName" placeholder="My GIS Project" />
+      </div>
+      <div class="form-group">
+        <label for="inputProjectPath">Location</label>
+        <div class="path-input-row">
+          <input type="text" id="inputProjectPath" placeholder="Select a folder..." readonly />
+          <button id="btnBrowse">Browse</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelModal">Cancel</button>
+        <button class="btn btn-primary" id="btnCreateProject">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project opening overlay -->
+  <div class="opening-overlay" id="openingOverlay">
+    <div class="orb-wrapper">
+      <div class="orb-canvas">
+        <div class="orb-blob"></div>
+        <div class="orb-blob"></div>
+        <div class="orb-blob"></div>
+        <div class="orb-blob"></div>
+      </div>
+      <div class="orb-center">
+        <img src="./logo.png" alt="OpenGIS">
+      </div>
+    </div>
+    <div class="opening-text" id="openingText"></div>
+    <div class="opening-subtext" id="openingSubtext"></div>
   </div>
 
   <div class="footer">v4.0 - Powered by LiteLLM</div>
 
   <script>
     const { ipcRenderer } = require('electron')
+    const path = require('path')
+    const fs = require('fs')
+
+    // ─── Language detection ───
+    // Read language from settings.json to determine locale for loading page
+    let lang = 'zh' // default Chinese
+    try {
+      const os = require('os')
+      const appName = 'opengis'
+      let userDataPath
+      if (process.platform === 'win32') {
+        userDataPath = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), appName)
+      } else if (process.platform === 'darwin') {
+        userDataPath = path.join(os.homedir(), 'Library', 'Application Support', appName)
+      } else {
+        userDataPath = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), appName)
+      }
+      const settingsPath = path.join(userDataPath, 'settings.json')
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+        if (settings?.appearance?.language === 'en') lang = 'en'
+      }
+    } catch(e) {
+      // Fallback to Chinese
+    }
+
+    const i18n = {
+      zh: {
+        initApp: '正在初始化应用',
+        prepareWorkspace: '准备工作区',
+        startPython: '启动 Python 后端',
+        ready: '就绪',
+        initializing: '正在初始化...',
+        selectProject: '选择工程',
+        noProjects: '暂无工程，请新建一个工程开始使用。',
+        openFolder: '打开文件夹',
+        newProject: '新建工程',
+        newProjectTitle: '新建工程',
+        projectName: '工程名称',
+        projectNamePlaceholder: '我的 GIS 工程',
+        location: '位置',
+        selectFolder: '选择文件夹...',
+        browse: '浏览',
+        cancel: '取消',
+        create: '创建',
+        rename: '重命名',
+        remove: '移除',
+        renamePrompt: '重命名工程：',
+        removeConfirm: '确定从列表中移除此工程吗？（文件不会被删除）',
+        nameAndPathRequired: '请填写工程名称和文件夹路径。',
+        poweredBy: 'v4.0 - Powered by LiteLLM',
+        openingProject: '正在打开工程...',
+        pleaseWait: '正在加载工作区，请稍候',
+      },
+      en: {
+        initApp: 'Initializing application',
+        prepareWorkspace: 'Preparing workspace',
+        startPython: 'Starting Python backend',
+        ready: 'Ready',
+        initializing: 'Initializing...',
+        selectProject: 'Select a Project',
+        noProjects: 'No projects yet. Create one to get started.',
+        openFolder: 'Open Folder',
+        newProject: 'New Project',
+        newProjectTitle: 'New Project',
+        projectName: 'Project Name',
+        projectNamePlaceholder: 'My GIS Project',
+        location: 'Location',
+        selectFolder: 'Select a folder...',
+        browse: 'Browse',
+        cancel: 'Cancel',
+        create: 'Create',
+        rename: 'Rename',
+        remove: 'Remove',
+        renamePrompt: 'Rename project:',
+        removeConfirm: 'Remove this project from the list? (Files will not be deleted)',
+        nameAndPathRequired: 'Please provide both a name and a folder path.',
+        poweredBy: 'v4.0 - Powered by LiteLLM',
+        openingProject: 'Opening project...',
+        pleaseWait: 'Loading workspace, please wait',
+      }
+    }
+    const t = i18n[lang] || i18n.zh
+
+    // Apply i18n texts to DOM
+    document.getElementById('step-init').querySelector('.step-label').textContent = t.initApp
+    document.getElementById('step-window').querySelector('.step-label').textContent = t.prepareWorkspace
+    document.getElementById('step-python').querySelector('.step-label').textContent = t.startPython
+    document.getElementById('step-ready').querySelector('.step-label').textContent = t.ready
+    document.querySelector('.section-title').textContent = t.selectProject
+    // Buttons with SVG icons — only replace the text node, keep the SVG
+    const btnOpen = document.getElementById('btnOpenFolder')
+    btnOpen.childNodes[btnOpen.childNodes.length - 1].textContent = ' ' + t.openFolder
+    const btnNew = document.getElementById('btnNewProject')
+    btnNew.childNodes[btnNew.childNodes.length - 1].textContent = ' ' + t.newProject
+    document.querySelector('.modal h3').textContent = t.newProjectTitle
+    document.querySelector('[for="inputProjectName"]').textContent = t.projectName
+    document.querySelector('[for="inputProjectPath"]').textContent = t.location
+    document.getElementById('inputProjectName').placeholder = t.projectNamePlaceholder
+    document.getElementById('inputProjectPath').placeholder = t.selectFolder
+    document.getElementById('btnBrowse').textContent = t.browse
+    document.getElementById('btnCancelModal').textContent = t.cancel
+    document.getElementById('btnCreateProject').textContent = t.create
+    document.querySelector('.footer').textContent = t.poweredBy
 
     // ─── Theme handling ───
     ipcRenderer.on('loading:theme', (event, theme) => {
@@ -304,10 +604,12 @@
       }
     })
 
-    // ─── Progress logic ───
+    // ─── Loading progress ───
     const steps = ['step-init', 'step-window', 'step-python', 'step-ready']
     const progressFill = document.getElementById('progressFill')
     const statusText = document.getElementById('statusText')
+    const loadingPhase = document.getElementById('loading-phase')
+    const projectPhase = document.getElementById('project-phase')
 
     const _buf = []
     let _ready = false
@@ -317,33 +619,23 @@
       steps.forEach((id, i) => {
         const el = document.getElementById(id)
         let state = 'pending'
-        if (i < doneCount) {
-          state = 'done'
-        } else if (i === doneCount && currentStep) {
-          state = 'active'
-        } else if (i === doneCount && !currentStep) {
-          state = 'done'
-        }
+        if (i < doneCount) state = 'done'
+        else if (i === doneCount && currentStep) state = 'active'
+        else if (i === doneCount && !currentStep) state = 'done'
         el.className = 'step ' + state
       })
-
       const pct = Math.round(((doneCount + (currentStep ? 0.5 : 0)) / steps.length) * 100)
       progressFill.style.width = Math.max(pct, (doneCount / steps.length) * 100) + '%'
-
       if (statusMsg) statusText.textContent = statusMsg
       _ready = true
-      while (_buf.length) {
-        const d = _buf.shift()
-        _applyProgress(d)
-      }
+      while (_buf.length) { _applyProgress(_buf.shift()) }
     }
 
     function _applyProgress(data) {
       if (data.step !== undefined) updateStep(data.step, true, data.status)
       if (data.done !== undefined) updateStep(data.done, false, data.status)
-      if (data.status === 'Ready!') {
-        updateStep(steps.length, false, data.status)
-      } else if (data.status && data.step === undefined && data.done === undefined) {
+      if (data.status === 'Ready!') updateStep(steps.length, false, data.status)
+      else if (data.status && data.step === undefined && data.done === undefined) {
         statusText.textContent = data.status
       }
     }
@@ -353,8 +645,141 @@
       _applyProgress(data)
     })
 
-    // Initial state
-    updateStep(0, true, 'Initializing...')
+    updateStep(0, true, t.initializing)
+
+    // ─── Project selector ───
+    let projects = []
+
+    function renderProjects() {
+      const list = document.getElementById('projectList')
+      if (!projects.length) {
+        list.innerHTML = `<div class="empty-state">${t.noProjects}</div>`
+        return
+      }
+      // Sort by lastOpenedAt desc
+      const sorted = [...projects].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
+      list.innerHTML = sorted.map(p => `
+        <div class="project-item" data-id="${p.id}">
+          <div class="project-item-info" onclick="selectProject('${p.id}')">
+            <div class="project-item-name">${escapeHtml(p.name)}</div>
+            <div class="project-item-path">${escapeHtml(p.path)}</div>
+          </div>
+          <div class="project-item-actions">
+            <button title="${t.rename}" onclick="renameProject('${p.id}')">✎</button>
+            <button class="danger" title="${t.remove}" onclick="deleteProject('${p.id}')">✕</button>
+          </div>
+        </div>
+      `).join('')
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    }
+
+    let _projectOpening = false
+
+    function selectProject(id) {
+      if (_projectOpening) return
+      const project = projects.find(p => p.id === id)
+      if (project) {
+        _projectOpening = true
+        project.lastOpenedAt = Date.now()
+        // Show opening overlay
+        document.getElementById('openingText').textContent = t.openingProject
+        document.getElementById('openingSubtext').textContent = t.pleaseWait
+        const overlay = document.getElementById('openingOverlay')
+        overlay.style.display = 'flex'
+        requestAnimationFrame(() => overlay.classList.add('visible'))
+        ipcRenderer.send('loading:project-selected', project)
+      }
+    }
+
+    async function renameProject(id) {
+      const project = projects.find(p => p.id === id)
+      if (!project) return
+      const newName = prompt(t.renamePrompt, project.name)
+      if (newName && newName.trim()) {
+        project.name = newName.trim()
+        await ipcRenderer.invoke('projects:rename', id, newName.trim())
+        renderProjects()
+      }
+    }
+
+    async function deleteProject(id) {
+      if (!confirm(t.removeConfirm)) return
+      await ipcRenderer.invoke('projects:delete', id)
+      projects = projects.filter(p => p.id !== id)
+      renderProjects()
+    }
+
+    // Show projects phase
+    ipcRenderer.on('loading:show-projects', (event, data) => {
+      projects = data.projects || []
+      loadingPhase.classList.add('hidden')
+      setTimeout(() => {
+        projectPhase.classList.add('visible')
+        renderProjects()
+      }, 300)
+    })
+
+    // ─── New Project Modal ───
+    const modal = document.getElementById('newProjectModal')
+    const inputName = document.getElementById('inputProjectName')
+    const inputPath = document.getElementById('inputProjectPath')
+
+    document.getElementById('btnNewProject').onclick = () => {
+      inputName.value = ''
+      inputPath.value = ''
+      modal.classList.add('visible')
+      inputName.focus()
+    }
+
+    document.getElementById('btnCancelModal').onclick = () => {
+      modal.classList.remove('visible')
+    }
+
+    document.getElementById('btnBrowse').onclick = async () => {
+      const result = await ipcRenderer.invoke('projects:browse-folder')
+      if (result && !result.canceled && result.path) {
+        inputPath.value = result.path
+        if (!inputName.value) {
+          inputName.value = path.basename(result.path)
+        }
+      }
+    }
+
+    document.getElementById('btnCreateProject').onclick = async () => {
+      const name = inputName.value.trim()
+      const projPath = inputPath.value.trim()
+      if (!name || !projPath) {
+        alert(t.nameAndPathRequired)
+        return
+      }
+      const entry = await ipcRenderer.invoke('projects:create', name, projPath)
+      projects.unshift(entry)
+      modal.classList.remove('visible')
+      renderProjects()
+      // Auto-open the new project
+      selectProject(entry.id)
+    }
+
+    // ─── Close button ───
+    document.getElementById('btnClose').onclick = () => {
+      ipcRenderer.send('loading:close-window')
+    }
+
+    // ─── Open Folder (quick add) ───
+    document.getElementById('btnOpenFolder').onclick = async () => {
+      const result = await ipcRenderer.invoke('projects:browse-folder')
+      if (result && !result.canceled && result.path) {
+        const folderPath = result.path
+        const name = path.basename(folderPath)
+        const entry = await ipcRenderer.invoke('projects:create', name, folderPath)
+        projects.unshift(entry)
+        renderProjects()
+        selectProject(entry.id)
+      }
+    }
   </script>
 </body>
 </html>

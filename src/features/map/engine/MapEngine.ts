@@ -340,10 +340,24 @@ export class MapEngine {
     const style = this.buildStyle(basemap)
     this.currentBasemap = basemap
 
+    // 保存当前 camera，避免 setStyle 因远程 style JSON 中的
+    // center/zoom 字段重置用户视图
+    const savedCenter = this.map.getCenter()
+    const savedZoom = this.map.getZoom()
+    const savedBearing = this.map.getBearing()
+    const savedPitch = this.map.getPitch()
+
     this.map.setStyle(style)
 
-    // 样式加载后重新添加用户图层
+    // 样式加载后恢复 camera 并重新添加用户图层
     this.map.once('style.load', () => {
+      // 恢复 camera
+      this.map?.jumpTo({
+        center: savedCenter,
+        zoom: savedZoom,
+        bearing: savedBearing,
+        pitch: savedPitch,
+      })
       // 清空跟踪集合 — 图层将在下面重新挂载
       this.managedSourceIds.clear()
       this.managedLayerIds.clear()
@@ -481,6 +495,40 @@ export class MapEngine {
 
     console.log(
       '[MapEngine] Removed layer:',
+      layerId,
+      'render-layers:',
+      layerIdsToRemove,
+    )
+  }
+
+  /**
+   * 仅移除渲染图层，保留 source（用于 renderType 切换时，
+   * 避免 source 重新解析导致 match 表达式在数据未就绪时失效）
+   */
+  removeRenderLayersOnly(layerId: string): void {
+    if (!this.map) {
+      console.warn('[MapEngine] removeRenderLayersOnly called but map is null, layerId:', layerId)
+      return
+    }
+
+    const layerPrefix = `layer-${layerId}-`
+    const layerIdsToRemove: string[] = []
+    for (const id of this.managedLayerIds) {
+      if (id.startsWith(layerPrefix)) {
+        layerIdsToRemove.push(id)
+      }
+    }
+
+    for (const id of layerIdsToRemove) {
+      if (this.map.getLayer(id)) {
+        this.map.removeLayer(id)
+      }
+      this.managedLayerIds.delete(id)
+      this.renderLayerToDef.delete(id)
+    }
+
+    console.log(
+      '[MapEngine] Removed render layers only (kept source):',
       layerId,
       'render-layers:',
       layerIdsToRemove,

@@ -69,7 +69,9 @@ export const AddRasterFromFileSchema = z.object({
 /** 分级专题 / 分类专题 / 热力图 / 聚合 / 3D 拔起 的配置 —— 与 LayerStyle 对应字段一致 */
 const GraduatedSchema = z.object({
   field: z.string().min(1),
-  method: z.enum(['quantile', 'equal-interval', 'jenks', 'manual']),
+  method: z.string().transform((v) => v.replace(/_/g, '-')).pipe(
+    z.enum(['quantile', 'equal-interval', 'jenks', 'manual']),
+  ),
   classes: z.number().int().min(2).max(12).optional(),
   breaks: z.array(z.number()).optional(),
   palette: z.array(z.string()).optional(),

@@ -9,6 +9,7 @@ import {
 import type { UIMessage } from '@/types/chat'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { useChatCodeTheme } from './useChatCodeTheme'
+import MarkdownBlock from './MarkdownBlock'
 
 interface CodeStepRowProps {
   message: UIMessage
@@ -215,12 +216,13 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   // Nothing to show — skip the row entirely.
   if (!hasOutput && !hasError) return null
 
-  // ── Success path: render as normal readable text, no card/frame. ──
+  // ── Success path: render output as Markdown for rich formatting
+  //    (tables, lists, bold, code blocks, etc.). ──
   if (!hasError) {
     return (
       <div className="ml-[30px] -mt-1">
-        <div className="text-[13px] py-2 px-1 whitespace-pre-wrap break-words leading-[1.7] text-text-primary/85">
-          {output}
+        <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
+          <MarkdownBlock markdown={output} />
         </div>
       </div>
     )

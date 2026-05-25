@@ -12,6 +12,8 @@ import {
   AlertCircle,
   Loader2,
   Plus,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -34,10 +36,7 @@ import {
 
 // ─── Protocol options ──────────────────────────────────────────
 
-const PROTOCOL_OPTIONS: { value: ProtocolType; label: string; description: string }[] = [
-  { value: 'openai', label: 'OpenAI Compatible', description: 'OpenAI-style API (chat/completions)' },
-  { value: 'anthropic', label: 'Anthropic Compatible', description: 'Anthropic-style API (messages)' },
-]
+// Protocol options are now generated inside the component to use translations
 
 // ─── Navigation sections ───────────────────────────────────────
 
@@ -52,6 +51,11 @@ interface NavSection {
 
 export function SettingsView() {
   const t = useT()
+
+  const PROTOCOL_OPTIONS: { value: ProtocolType; label: string; description: string }[] = [
+    { value: 'openai', label: t.settings.openaiProtocol, description: t.settings.openaiProtocolDesc },
+    { value: 'anthropic', label: t.settings.anthropicProtocol, description: t.settings.anthropicProtocolDesc },
+  ]
 
   const NAV_SECTIONS: NavSection[] = [
     { id: 'model', label: t.settings.model, icon: Bot, keywords: ['llm', 'api', 'key', 'protocol', 'model', 'temperature', 'token'] },
@@ -69,31 +73,12 @@ export function SettingsView() {
   const [showSaveAsNew, setShowSaveAsNew] = useState(false)
   const [newPresetName, setNewPresetName] = useState('')
   const [showProviderDropdown, setShowProviderDropdown] = useState(false)
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
 
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const providerDropdownRef = useRef<HTMLDivElement>(null)
-
-  // Per-provider config cache — switching providers restores previous settings.
-  // Cache key uses a composite "protocol::baseURL" so providers sharing the
-  // same protocol but different baseURLs never collide. Protocol changes and
-  // Provider changes write to different cache slots — no cross-contamination.
-  const providerCache = useRef<Record<string, Partial<typeof model>>>({})
-  const getCurrentCacheKey = () => `${model.protocol}::${model.baseURL || ''}`
-  const saveToCache = () => {
-    const key = getCurrentCacheKey()
-    const { protocol, baseURL, modelName, apiKey } = model
-    providerCache.current[key] = { protocol, baseURL, modelName, apiKey }
-  }
-  const restoreFromCache = (key: string) => {
-    const cached = providerCache.current[key]
-    if (cached) {
-      setModel(cached)
-      return true
-    }
-    return false
-  }
 
   // Close provider dropdown on outside click
   useEffect(() => {
@@ -117,6 +102,14 @@ export function SettingsView() {
   useEffect(() => {
     loadFromElectron()
   }, [loadFromElectron])
+
+  // Initialize selectedProviderId from current baseURL
+  useEffect(() => {
+    if (model.baseURL && !selectedProviderId) {
+      const match = PROVIDERS.find(p => p.baseURL === model.baseURL)
+      if (match) setSelectedProviderId(match.id)
+    }
+  }, [model.baseURL]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load user instructions from backend (source of truth)
   useEffect(() => {
@@ -162,7 +155,7 @@ export function SettingsView() {
       // Flush any pending debounced save so the restart reads the latest settings
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
-        saveTimeoutRef.current = null
+        saveTimeoutRef.current = undefined
       }
       await saveToElectron()
 
@@ -226,16 +219,6 @@ export function SettingsView() {
   // Preset helpers
   const presets = model.presets || []
 
-  const activePresetId = useMemo(() => {
-    return presets.find(
-      (p) =>
-        p.protocol === model.protocol &&
-        p.modelName === model.modelName &&
-        p.apiKey === model.apiKey &&
-        p.baseURL === model.baseURL,
-    )?.id
-  }, [presets, model.protocol, model.modelName, model.apiKey, model.baseURL])
-
   // Resolve icon for a provider id
   const loadProviderIcon = useCallback((providerId?: string) => {
     if (!providerId) return null
@@ -244,19 +227,22 @@ export function SettingsView() {
 
   const handleProviderSelect = useCallback(
     (provider: ProviderConfig) => {
-      saveToCache()
-      // Use composite key matching getCurrentCacheKey format
-      const cacheKey = `${provider.protocol}::${provider.baseURL || ''}`
-      if (!restoreFromCache(cacheKey)) {
-        setModel({
-          protocol: provider.protocol,
-          baseURL: provider.baseURL,
-          modelName: provider.defaultModel || model.modelName,
-        })
+      // Record user's explicit selection so that manually editing baseURL later
+      // won't reset the displayed provider label to "Custom".
+      setSelectedProviderId(provider.id)
+      const updates: Partial<typeof model> = {
+        protocol: provider.protocol,
       }
+      if (!model.baseURL) {
+        updates.baseURL = provider.baseURL
+      }
+      if (!model.modelName) {
+        updates.modelName = provider.defaultModel || ''
+      }
+      setModel(updates)
       setShowProviderDropdown(false)
     },
-    [setModel, model],
+    [setModel, model.baseURL, model.modelName],
   )
 
   const loadPreset = useCallback(
@@ -268,6 +254,8 @@ export function SettingsView() {
         baseURL: preset.baseURL,
       })
       setLoadedPresetId(preset.id)
+      // Restore provider selection from preset
+      setSelectedProviderId(preset.provider || null)
     },
     [setModel],
   )
@@ -311,6 +299,75 @@ export function SettingsView() {
     },
     [presets, loadedPresetId, setModel],
   )
+
+  // ─── Import / Export model config as JSON ───────────────────────
+  const exportModelConfig = useCallback(() => {
+    const config = {
+      protocol: model.protocol,
+      modelName: model.modelName,
+      apiKey: model.apiKey,
+      baseURL: model.baseURL,
+      temperature: model.temperature,
+      maxTokens: model.maxTokens,
+      reasoningEffort: model.reasoningEffort,
+    }
+    const json = JSON.stringify(config, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `model-config-${model.modelName || 'default'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [model])
+
+  const exportPreset = useCallback((preset: ModelPreset) => {
+    const config = {
+      name: preset.name,
+      protocol: preset.protocol,
+      modelName: preset.modelName,
+      apiKey: preset.apiKey,
+      baseURL: preset.baseURL,
+    }
+    const json = JSON.stringify(config, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `preset-${preset.name || 'config'}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const importModelConfig = useCallback(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const config = JSON.parse(text)
+        const updates: Partial<typeof model> = {}
+        if (config.protocol && (config.protocol === 'openai' || config.protocol === 'anthropic')) {
+          updates.protocol = config.protocol
+        }
+        if (typeof config.modelName === 'string') updates.modelName = config.modelName
+        if (typeof config.apiKey === 'string') updates.apiKey = config.apiKey
+        if (typeof config.baseURL === 'string') updates.baseURL = config.baseURL
+        if (typeof config.temperature === 'number') updates.temperature = config.temperature
+        if (typeof config.maxTokens === 'number') updates.maxTokens = config.maxTokens
+        if (config.reasoningEffort && ['low', 'medium', 'high'].includes(config.reasoningEffort)) {
+          updates.reasoningEffort = config.reasoningEffort
+        }
+        setModel(updates)
+      } catch (err) {
+        console.error('[Settings] Failed to import model config:', err)
+      }
+    }
+    input.click()
+  }, [setModel])
 
   // Scroll to section
   const scrollToSection = useCallback((sectionId: string) => {
@@ -574,6 +631,17 @@ export function SettingsView() {
                               <span className="text-[10px] font-medium truncate max-w-[80px] leading-none">
                                 {p.name}
                               </span>
+                              {/* Export on hover */}
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={(e) => { e.stopPropagation(); exportPreset(p) }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); exportPreset(p) } }}
+                                className="hidden group-hover:flex absolute -top-1.5 -left-1.5 items-center justify-center w-4 h-4 rounded-full bg-bg-tertiary border border-border text-text-muted hover:text-accent-primary hover:border-accent-primary/50"
+                                title={t.settings.exportConfig}
+                              >
+                                <Download className="w-2.5 h-2.5" />
+                              </span>
                               {/* Delete on hover */}
                               <span
                                 role="button"
@@ -593,7 +661,7 @@ export function SettingsView() {
 
                   {/* ── Provider selector ── */}
                   <div className="py-3 px-1 border-b border-border">
-                    <label className="text-xs font-medium text-text-muted mb-1.5 block">Provider</label>
+                    <label className="text-xs font-medium text-text-muted mb-1.5 block">{t.settings.provider}</label>
                     <div ref={providerDropdownRef} className="relative">
                       <button
                         onClick={() => setShowProviderDropdown(!showProviderDropdown)}
@@ -601,7 +669,7 @@ export function SettingsView() {
                       >
                         <div className="flex items-center gap-2">
                           {(() => {
-                            const match = PROVIDERS.find(p => p.baseURL && model.baseURL && p.baseURL === model.baseURL)
+                            const match = PROVIDERS.find(p => p.id === selectedProviderId) || PROVIDERS.find(p => p.baseURL && model.baseURL && p.baseURL === model.baseURL)
                             if (match && iconMap[match.id]) {
                               return (
                                 <div
@@ -614,8 +682,8 @@ export function SettingsView() {
                           })()}
                           <span>
                             {(() => {
-                              const match = PROVIDERS.find(p => p.baseURL && model.baseURL && p.baseURL === model.baseURL)
-                              return match ? match.label : (model.baseURL ? 'Custom' : 'Select provider...')
+                              const match = PROVIDERS.find(p => p.id === selectedProviderId) || PROVIDERS.find(p => p.baseURL && model.baseURL && p.baseURL === model.baseURL)
+                              return match ? match.label : (model.baseURL ? t.settings.custom : t.settings.selectProvider)
                             })()}
                           </span>
                         </div>
@@ -627,14 +695,14 @@ export function SettingsView() {
                           <div className="grid grid-cols-4 gap-1">
                             {PROVIDERS.map((provider) => {
                               const icon = iconMap[provider.id]
-                              const isCurrentBaseURL = model.baseURL === provider.baseURL
+                              const isActive = provider.id === selectedProviderId || (!selectedProviderId && model.baseURL === provider.baseURL)
                               return (
                                 <button
                                   key={provider.id}
                                   onClick={() => handleProviderSelect(provider)}
                                   className={`
                                     flex flex-col items-center gap-1.5 p-2 rounded-md text-center transition-colors
-                                    ${isCurrentBaseURL
+                                    ${isActive
                                       ? 'bg-accent-primary/15 text-accent-primary'
                                       : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
                                     }
@@ -666,8 +734,8 @@ export function SettingsView() {
                   {/* Protocol Type */}
                   <SettingItem
                     id="model-protocol"
-                    label="Protocol"
-                    description="Select the API protocol. OpenAI-compatible endpoints use /chat/completions. Anthropic-compatible endpoints use /v1/messages."
+                    label={t.settings.protocol}
+                    description={t.settings.protocolDesc}
                   >
                     <SettingSelect
                       id="model-protocol"
@@ -675,13 +743,8 @@ export function SettingsView() {
                       onChange={(v) => {
                         const newProtocol = v as ProtocolType
                         if (newProtocol === model.protocol) return
-                        saveToCache()
-                        // Try to restore a previous config with same baseURL but new protocol
-                        const cacheKey = `${newProtocol}::${model.baseURL || ''}`
-                        if (!restoreFromCache(cacheKey)) {
-                          // Only change protocol — leave baseURL, modelName, apiKey intact
-                          setModel({ protocol: newProtocol })
-                        }
+                        // Only change protocol — leave all other fields intact
+                        setModel({ protocol: newProtocol })
                       }}
                       options={PROTOCOL_OPTIONS.map((p) => ({
                         value: p.value,
@@ -694,8 +757,8 @@ export function SettingsView() {
                   {/* API Key */}
                   <SettingItem
                     id="model-apikey"
-                    label="API Key"
-                    description="Enter your API key. Keys are stored locally and never sent to third parties."
+                    label={t.settings.apiKey}
+                    description={t.settings.apiKeyDesc}
                   >
                     <SettingInput
                       id="model-apikey"
@@ -709,8 +772,8 @@ export function SettingsView() {
                   {/* Base URL */}
                   <SettingItem
                     id="model-baseurl"
-                    label="Base URL"
-                    description="Custom API endpoint URL (optional). Leave empty to use the default endpoint for the protocol."
+                    label={t.settings.baseURL}
+                    description={t.settings.baseURLDesc}
                   >
                     <SettingInput
                       id="model-baseurl"
@@ -725,8 +788,8 @@ export function SettingsView() {
                   {/* Model Name */}
                   <SettingItem
                     id="model-name"
-                    label="Model Name"
-                    description="Enter the model name/ID as expected by your API endpoint."
+                    label={t.settings.modelName}
+                    description={t.settings.modelNameDesc}
                   >
                     <SettingInput
                       id="model-name"
@@ -739,8 +802,8 @@ export function SettingsView() {
                   {/* Test Connection */}
                   <SettingItem
                     id="model-test"
-                    label="Connection Test"
-                    description="Verify that the API key and endpoint are configured correctly."
+                    label={t.settings.testConnection}
+                    description={t.settings.testConnectionDesc}
                   >
                     <button
                       onClick={handleTestConnection}
@@ -772,7 +835,7 @@ export function SettingsView() {
                         className="h-8 px-3.5 text-xs font-medium rounded-md bg-accent-primary text-white hover:bg-accent-primary/90 transition-colors flex items-center gap-1.5"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        Save
+                        {t.settings.updatePreset}
                       </button>
                     )}
                     {showSaveAsNew ? (
@@ -782,7 +845,7 @@ export function SettingsView() {
                           value={newPresetName}
                           onChange={(e) => setNewPresetName(e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter') createNewPreset(); if (e.key === 'Escape') { setShowSaveAsNew(false); setNewPresetName('') } }}
-                          placeholder="Preset name"
+                          placeholder={t.settings.presetName}
                           className="h-8 px-2.5 text-xs rounded-md border border-border bg-bg-tertiary text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent-primary w-36"
                         />
                         <button
@@ -804,9 +867,28 @@ export function SettingsView() {
                         className="h-8 px-3.5 text-xs font-medium rounded-md border border-border text-text-secondary hover:text-text-primary hover:border-accent-primary/50 hover:bg-accent-primary/5 transition-colors flex items-center gap-1.5"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        Save as new
+                        {t.settings.saveAsNew}
                       </button>
                     )}
+                    {/* Import / Export */}
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <button
+                        onClick={importModelConfig}
+                        className="h-8 px-3 text-xs font-medium rounded-md border border-border text-text-secondary hover:text-text-primary hover:border-accent-primary/50 hover:bg-accent-primary/5 transition-colors flex items-center gap-1.5"
+                        title={t.settings.importConfig}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        {t.settings.importConfig}
+                      </button>
+                      <button
+                        onClick={exportModelConfig}
+                        className="h-8 px-3 text-xs font-medium rounded-md border border-border text-text-secondary hover:text-text-primary hover:border-accent-primary/50 hover:bg-accent-primary/5 transition-colors flex items-center gap-1.5"
+                        title={t.settings.exportConfig}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {t.settings.exportConfig}
+                      </button>
+                    </div>
                   </div>
                 </SettingSection>
 
@@ -814,8 +896,8 @@ export function SettingsView() {
                   {/* Temperature */}
                   <SettingItem
                     id="model-temperature"
-                    label="Temperature"
-                    description="Controls randomness. Lower values make responses more deterministic, higher values more creative. (0 = deterministic, 1 = creative)"
+                    label={t.settings.temperature}
+                    description={t.settings.temperatureDesc}
                   >
                     <SettingSlider
                       id="model-temperature"
@@ -830,8 +912,8 @@ export function SettingsView() {
                   {/* Max Tokens */}
                   <SettingItem
                     id="model-maxtokens"
-                    label="Max Tokens"
-                    description="Maximum number of tokens in the model's response."
+                    label={t.settings.maxTokens}
+                    description={t.settings.maxTokensDesc}
                   >
                     <SettingNumber
                       id="model-maxtokens"
@@ -846,17 +928,17 @@ export function SettingsView() {
                   {/* Reasoning Effort */}
                   <SettingItem
                     id="model-reasoning"
-                    label="Reasoning Effort"
-                    description="Controls how much reasoning the model performs before responding. Only applies to models that support extended thinking."
+                    label={t.settings.reasoningEffort}
+                    description={t.settings.reasoningEffortDesc}
                   >
                     <SettingSelect
                       id="model-reasoning"
                       value={model.reasoningEffort}
                       onChange={(v) => setModel({ reasoningEffort: v as 'low' | 'medium' | 'high' })}
                       options={[
-                        { value: 'low', label: 'Low' },
-                        { value: 'medium', label: 'Medium' },
-                        { value: 'high', label: 'High' },
+                        { value: 'low', label: t.settings.reasoningLow },
+                        { value: 'medium', label: t.settings.reasoningMedium },
+                        { value: 'high', label: t.settings.reasoningHigh },
                       ]}
                     />
                   </SettingItem>
@@ -874,8 +956,8 @@ export function SettingsView() {
                   {/* Max Iterations */}
                   <SettingItem
                     id="agent-maxiter"
-                    label="Max Iterations"
-                    description="Maximum number of ReAct loop iterations the agent can perform per task."
+                    label={t.settings.maxIterations}
+                    description={t.settings.maxIterationsDesc}
                   >
                     <SettingSlider
                       id="agent-maxiter"
@@ -890,8 +972,8 @@ export function SettingsView() {
                   {/* Max Consecutive Mistakes */}
                   <SettingItem
                     id="agent-maxmistakes"
-                    label="Max Consecutive Mistakes"
-                    description="Number of consecutive tool call failures before the agent stops and asks for help."
+                    label={t.settings.maxConsecutiveMistakes}
+                    description={t.settings.maxConsecutiveMistakesDesc}
                   >
                     <SettingSlider
                       id="agent-maxmistakes"
@@ -906,8 +988,8 @@ export function SettingsView() {
                   {/* Code Execution Timeout */}
                   <SettingItem
                     id="agent-timeout"
-                    label="Code Execution Timeout"
-                    description="Maximum time (in seconds) for a single code execution before it is terminated."
+                    label={t.settings.timeout}
+                    description={t.settings.timeoutDesc}
                   >
                     <SettingNumber
                       id="agent-timeout"
@@ -922,8 +1004,8 @@ export function SettingsView() {
                   {/* Require Confirmation */}
                   <SettingItem
                     id="agent-confirm"
-                    label="Require Confirmation"
-                    description="Ask for user confirmation before executing potentially destructive operations (file writes, code execution)."
+                    label={t.settings.requireConfirmation}
+                    description={t.settings.requireConfirmationDesc}
                   >
                     <SettingCheckbox
                       id="agent-confirm"
@@ -935,8 +1017,8 @@ export function SettingsView() {
                   {/* Auto Render Results */}
                   <SettingItem
                     id="agent-autorender"
-                    label="Auto Render Results"
-                    description="Automatically render analysis results to the map and chart modules when available."
+                    label={t.settings.autoRenderResults}
+                    description={t.settings.autoRenderResultsDesc}
                   >
                     <SettingCheckbox
                       id="agent-autorender"
@@ -948,8 +1030,8 @@ export function SettingsView() {
                   {/* Auto Condense */}
                   <SettingItem
                     id="agent-condense"
-                    label="Auto Condense Context"
-                    description="Automatically compress conversation history when approaching the context window limit."
+                    label={t.settings.autoCondenseContext}
+                    description={t.settings.autoCondenseContextDesc}
                   >
                     <SettingCheckbox
                       id="agent-condense"
@@ -963,8 +1045,8 @@ export function SettingsView() {
                   {/* Custom Instructions */}
                   <SettingItem
                     id="agent-instructions"
-                    label="Custom Instructions"
-                    description="Global personalization prompt injected into every conversation. Agent can also auto-learn your preferences and append [agent] entries."
+                    label={t.settings.customInstructions}
+                    description={t.settings.customInstructionsDesc}
                   >
                     <SettingTextArea
                       id="agent-instructions"
@@ -1007,9 +1089,9 @@ export function SettingsView() {
                       value={appearance.theme}
                       onChange={(v) => setAppearance({ theme: v as 'dark' | 'light' | 'system' })}
                       options={[
-                        { value: 'dark', label: 'Dark' },
-                        { value: 'light', label: 'Light' },
-                        { value: 'system', label: 'System' },
+                        { value: 'dark', label: t.settings.themeDark },
+                        { value: 'light', label: t.settings.themeLight },
+                        { value: 'system', label: t.settings.themeSystem },
                       ]}
                     />
                   </SettingItem>
@@ -1076,8 +1158,8 @@ export function SettingsView() {
                   {/* Map Labels */}
                   <SettingItem
                     id="appearance-map-labels"
-                    label="Map Labels"
-                    description="Show or hide text labels on the basemap. For raster basemaps, toggling labels will switch to a vector basemap variant."
+                    label={t.settings.showMapLabels}
+                    description={t.settings.showMapLabelsDesc}
                   >
                     <SettingCheckbox
                       id="appearance-map-labels"
@@ -1126,15 +1208,15 @@ export function SettingsView() {
                           }
                         }
                       }}
-                      label="Show map labels"
+                      label={t.settings.showMapLabels}
                     />
                   </SettingItem>
 
                   {/* Custom Tile URL */}
                   <SettingItem
                     id="appearance-custom-tile"
-                    label="Custom Tile URL"
-                    description="Enter a custom XYZ tile URL template (e.g. https://tile.example.com/{z}/{x}/{y}.png). Leave empty to use the selected basemap above."
+                    label={t.settings.customTileUrl}
+                    description={t.settings.customTileUrlDesc}
                   >
                     <SettingInput
                       id="appearance-custom-tile"
@@ -1167,33 +1249,33 @@ export function SettingsView() {
                   {/* Backend Status */}
                   <SettingItem
                     id="python-backend-status"
-                    label="Backend Status"
-                    description="Current status of the Python backend service."
+                    label={t.settings.pythonStatus}
+                    description={t.settings.pythonStatusDesc}
                   >
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-1.5">
                         {pythonBackendStatus === 'ready' && (
                           <>
                             <CheckCircle2 className="w-3.5 h-3.5 text-accent-success" />
-                            <span className="text-sm text-accent-success">Running</span>
+                            <span className="text-sm text-accent-success">{t.settings.statusReady}</span>
                           </>
                         )}
                         {pythonBackendStatus === 'starting' && (
                           <>
                             <Loader2 className="w-3.5 h-3.5 text-accent-warning animate-spin" />
-                            <span className="text-sm text-accent-warning">Starting...</span>
+                            <span className="text-sm text-accent-warning">{t.settings.statusStarting}</span>
                           </>
                         )}
                         {pythonBackendStatus === 'stopped' && (
                           <>
                             <div className="w-2 h-2 rounded-full bg-text-muted" />
-                            <span className="text-sm text-text-muted">Stopped</span>
+                            <span className="text-sm text-text-muted">{t.settings.statusStopped}</span>
                           </>
                         )}
                         {pythonBackendStatus === 'error' && (
                           <>
                             <AlertCircle className="w-3.5 h-3.5 text-accent-danger" />
-                            <span className="text-sm text-accent-danger">Error</span>
+                            <span className="text-sm text-accent-danger">{t.settings.statusError}</span>
                           </>
                         )}
                       </div>
@@ -1214,7 +1296,7 @@ export function SettingsView() {
                         ) : (
                           <RotateCcw className="w-3.5 h-3.5" />
                         )}
-                        {pythonRestarting ? 'Restarting...' : 'Restart'}
+                        {pythonRestarting ? t.settings.restarting : t.settings.restart}
                       </button>
                     </div>
                   </SettingItem>

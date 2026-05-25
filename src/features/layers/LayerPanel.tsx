@@ -31,6 +31,7 @@ import { useT } from '@/i18n'
 import { useMapStore } from '@/stores/mapStore'
 import { loadGeoFiles } from '@/services/geo'
 import { mapEngine } from '@/features/map/engine/MapEngine'
+import { getCategorizedCache } from '@/features/map/renderers/categorizedRenderer'
 import type { MapLayerDefinition, LayerStyle } from '@/services/geo'
 import { LayerIcon } from './LayerIcon'
 import { GraduatedStylePanel } from './GraduatedStylePanel'
@@ -558,9 +559,13 @@ function ClassifiedStyleSummary({
       const hi = i < breaks.length ? (breaks[i]?.toFixed(2) ?? '?') : '+∞'
       legendItems.push({ color, label: `${lo} – ${hi}` })
     }
-  } else if (style.categorized?.colors) {
-    for (const [val, color] of Object.entries(style.categorized.colors)) {
-      legendItems.push({ color, label: val })
+  } else if (style.renderType === 'categorized') {
+    // 优先读 store 里的 colors，若 Python RPC 未传 colors 则从 renderer cache 获取
+    const colors = style.categorized?.colors ?? getCategorizedCache(layer.id)
+    if (colors) {
+      for (const [val, color] of Object.entries(colors)) {
+        legendItems.push({ color, label: val })
+      }
     }
   }
 

@@ -106,7 +106,7 @@ export function ChatView() {
 
 
   // --- Auto-resize textarea ---
-  const adjustTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const adjustTimerRef = useRef<number | null>(null)
   const adjustTextareaHeight = useCallback(() => {
     // 使用 requestAnimationFrame 批处理，避免多次 keystroke 导致多次 reflow
     if (adjustTimerRef.current) cancelAnimationFrame(adjustTimerRef.current)

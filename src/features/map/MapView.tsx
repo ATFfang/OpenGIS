@@ -353,7 +353,7 @@ export function MapView({
             layer.style.renderType,
             '— rebuild',
           )
-          mapEngine.removeMapLayer(layer.id)
+          mapEngine.removeRenderLayersOnly(layer.id)
           mapEngine.syncLayer(layer)
           mapEngine.setLayerVisibility(layer.id, layer.visible)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)

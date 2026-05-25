@@ -143,15 +143,22 @@ export function AssetExplorer() {
 
   // ─── Open folder ──────────────────────────────────────────────
 
+  const [openingFolder, setOpeningFolder] = useState(false)
+
   const handleOpenFolder = useCallback(async () => {
     if (!window.electronAPI?.openFolderDialog) {
       console.warn('openFolderDialog not available — running outside Electron?')
       return
     }
 
-    const folderPath = await window.electronAPI.openFolderDialog()
-    if (folderPath) {
-      setWorkspacePath(folderPath)
+    setOpeningFolder(true)
+    try {
+      const folderPath = await window.electronAPI.openFolderDialog()
+      if (folderPath) {
+        setWorkspacePath(folderPath)
+      }
+    } finally {
+      setOpeningFolder(false)
     }
   }, [setWorkspacePath])
 
@@ -314,7 +321,9 @@ export function AssetExplorer() {
 
       {/* File tree */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {!workspacePath ? (
+        {openingFolder ? (
+          <LoadingState />
+        ) : !workspacePath ? (
           <EmptyState onOpenFolder={handleOpenFolder} />
         ) : isLoading && rootNodes.length === 0 ? (
           <LoadingState />

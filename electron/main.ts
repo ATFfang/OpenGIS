@@ -3,7 +3,7 @@ import { join } from 'path'
 import { readFileSync, existsSync } from 'fs'
 import { PythonManager } from './ipc/pythonManager'
 import { registerFileHandlers } from './ipc/fileHandlers'
-import { registerSettingsHandlers } from './ipc/settingsHandlers'
+import { registerSettingsHandlers, loadProjects } from './ipc/settingsHandlers'
 import { createMenu } from './menu'
 import { initLogger, getLogDir } from './logger'
 
@@ -50,14 +50,14 @@ function createLoadingWindow(): Promise<void> {
   const isDarkLoading = startupTheme === 'dark'
 
   loadingWindow = new BrowserWindow({
-    width: 480,
-    height: 580,
+    width: 580,
+    height: 680,
     resizable: false,
     frame: false,
     backgroundColor: isDarkLoading ? '#0a0c10' : '#ffffff',
     show: true,
     center: true,
-    alwaysOnTop: true,
+    alwaysOnTop: false,
     icon: appIcon,
     webPreferences: {
       nodeIntegration: true,
@@ -245,14 +245,102 @@ app.whenReady().then(async () => {
   ipcMain.on('renderer:ready', () => {
     console.log('[loading] renderer:ready received')
     ;(global as any).__rendererIsReady = true
+    // Re-send cached project selection in case it arrived before the listener was registered
+    if ((global as any).__projectSelected && (global as any).__selectedProject) {
+      mainWindow?.webContents.send('project:selected', (global as any).__selectedProject)
+    }
+    // Don't close loading yet — wait for project selection
+    if ((global as any).__projectSelected) {
+      if (loadingWindow && !loadingWindow.isDestroyed()) {
+        loadingWindow.close()
+      }
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        mainWindow.show()
+      }
+    }
+  })
+
+  // ── Close loading window on request ───────────────────
+  ipcMain.on('loading:close-window', () => {
     if (loadingWindow && !loadingWindow.isDestroyed()) {
-      console.log('[loading] Closing loading window')
       loadingWindow.close()
     }
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      console.log('[loading] Showing main window')
-      mainWindow.show()
+  })
+
+  // ── Project selection from loading window ───────────────────
+  ipcMain.on('loading:project-selected', (_event, project: any) => {
+    // Ignore duplicate selections (user may click multiple times during loading)
+    if ((global as any).__projectSelected) return
+    console.log('[loading] Project selected:', project.name, project.path)
+    ;(global as any).__projectSelected = true
+    ;(global as any).__selectedProject = project
+    // Send workspace path to the main window renderer
+    mainWindow?.webContents.send('project:selected', project)
+    // If renderer already ready, close loading and show main
+    if ((global as any).__rendererIsReady) {
+      if (loadingWindow && !loadingWindow.isDestroyed()) {
+        loadingWindow.close()
+      }
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        mainWindow.show()
+      }
     }
+  })
+
+  // ── Switch project (return to project selector from main UI) ──
+  ipcMain.handle('app:switch-project', async () => {
+    // Hide main window
+    mainWindow?.hide()
+    // Reset project selection state
+    ;(global as any).__projectSelected = false
+    ;(global as any).__selectedProject = null
+
+    // Re-create loading window in project-selector mode (skip loading steps)
+    const appIcon = getAppIcon()
+    const startupTheme = getStartupTheme()
+    const isDarkLoading = startupTheme === 'dark'
+
+    loadingWindow = new BrowserWindow({
+      width: 580,
+      height: 680,
+      resizable: false,
+      frame: false,
+      backgroundColor: isDarkLoading ? '#0a0c10' : '#ffffff',
+      show: true,
+      center: true,
+      alwaysOnTop: false,
+      icon: appIcon,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
+    })
+
+    const isDev = !!process.env.ELECTRON_RENDERER_URL
+    const loadingPath = isDev
+      ? join(__dirname, '../../loading.html')
+      : join(__dirname, '../renderer/loading.html')
+
+    loadingWindow.on('closed', () => {
+      loadingWindow = null
+      // If user closed the selector without picking a project, re-show main
+      if (!(global as any).__projectSelected) {
+        mainWindow?.show()
+      }
+    })
+
+    await new Promise<void>((resolve) => {
+      loadingWindow!.webContents.once('did-finish-load', () => {
+        loadingWindow?.webContents.send('loading:theme', startupTheme)
+        resolve()
+      })
+      loadingWindow!.loadFile(loadingPath)
+    })
+
+    // Immediately show project selector (skip loading steps)
+    const projectsData = await loadProjects()
+    loadingWindow?.webContents.send('loading:show-projects', projectsData)
+    return { success: true }
   })
 
   ipcMain.handle('system:get-log-dir', () => getLogDir())
@@ -281,13 +369,15 @@ app.whenReady().then(async () => {
   // ── Step 4: done ────────────────────────────────────────
   updateLoadingProgress(3, 'Ready!')
 
-  // All backend steps done. Now wait for renderer to be ready.
-  console.log('[loading] Step 4: backend ready, waiting for renderer...')
-  updateLoadingProgress(3, 'Loading UI…')
+  // All backend steps done. Send project list to loading window
+  // so user can select a project before entering main UI.
+  console.log('[loading] Step 4: backend ready, sending project list...')
+  const projectsData = await loadProjects()
+  loadingWindow?.webContents.send('loading:show-projects', projectsData)
 
-  // The renderer will send 'renderer:ready' when React has painted.
-  // See: src/main.tsx (or App.tsx) useEffect.
-  if ((global as any).__rendererIsReady && loadingWindow && !loadingWindow.isDestroyed()) {
+  // The loading window will send 'loading:project-selected' when user picks a project.
+  // Then renderer:ready + project-selected together trigger the transition.
+  if ((global as any).__projectSelected && (global as any).__rendererIsReady && loadingWindow && !loadingWindow.isDestroyed()) {
     loadingWindow.close()
     mainWindow?.show()
   }

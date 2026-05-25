@@ -95,7 +95,6 @@ async function configureBackendAgent(): Promise<void> {
 }
 
 // ─── 订阅后端 Agent 通知（一次性，首次访问 store 时） ──────────────────────
-let _bridgeInstalled = false
 let _unsubscribeBridge: (() => void) | null = null
 
 function installNotificationBridge(
@@ -107,7 +106,6 @@ function installNotificationBridge(
     _unsubscribeBridge()
     _unsubscribeBridge = null
   }
-  _bridgeInstalled = true
 
   _unsubscribeBridge = pythonClient.onNotification((method, params) => {
     const state = get()
@@ -163,12 +161,13 @@ function installNotificationBridge(
         // 行的展开状态保持稳定）。否则添加新消息。
         const convCb = state.activeConversation()
         const stepNum = params?.step as number | undefined
-        let mergedIntoPartial = false
+        let mergedIntoExisting = false
 
         if (convCb && stepNum != null) {
           for (let i = convCb.messages.length - 1; i >= 0; i--) {
             const m = convCb.messages[i]
-            if (m.say === 'code' && m.stepNumber === stepNum && m.partial) {
+            if (m.say === 'code' && m.stepNumber === stepNum) {
+              // Merge into existing message (whether partial or already finished)
               state._updateMessage(m.ts, {
                 text: params?.code as string,
                 scriptPath: params?.script_path as string | undefined,
@@ -176,14 +175,23 @@ function installNotificationBridge(
                 runId: params?.run_id as string | undefined,
                 partial: false,
               })
-              mergedIntoPartial = true
+              mergedIntoExisting = true
               break
             }
             // 停止扫描，一旦遇到比此步骤更旧的内容
             if (m.say === 'code' && (m.stepNumber ?? 0) < stepNum) break
           }
         }
-        if (mergedIntoPartial) break
+        if (mergedIntoExisting) {
+          // Still need to remove any lingering progress / thinking message
+          if (convCb) {
+            const lastCb = convCb.messages[convCb.messages.length - 1]
+            if (lastCb && (lastCb.say === 'progress' || lastCb.say === 'thinking')) {
+              state._updateMessage(lastCb.ts, { partial: false })
+            }
+          }
+          break
+        }
 
         // Remove any lingering progress / thinking message
         if (convCb) {

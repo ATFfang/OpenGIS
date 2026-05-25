@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { MainLayout } from './layouts/MainLayout'
 import { DialogHost } from '@/components/Dialog'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useAssetStore } from '@/stores/assetStore'
 import { pythonClient } from '@/services/pythonClient'
 import {
   globalDispatcher,
@@ -13,28 +14,28 @@ import { installExtensions } from '@/features/map/extensions'
 function App() {
   const loadFromElectron = useSettingsStore((s) => s.loadFromElectron)
   const theme = useSettingsStore((s) => s.appearance.theme)
+  const setWorkspacePath = useAssetStore((s) => s.setWorkspacePath)
 
   // Wire up the v3.0 JSON-RPC 2.0 three-channel bridge once, at app start.
-  //
-  // Python sidecar sends inbound requests/notifications under the
-  // `rpc.* / chat.* / event.*` canonical method names; pythonClient
-  // dispatches them through globalDispatcher into the handlers
-  // registered on globalRegistry. This is the single wire since
-  // Stage 3.6 (the legacy CommandBus was removed along with the
-  // `map.*` dual-notification path on the Python side).
   useEffect(() => {
-    // `override: true` so hot-reload during dev does not hit
-    // "method already registered" on re-mount.
     registerAllHandlers(globalRegistry, { override: true })
     pythonClient.setDispatcher(globalDispatcher)
     installExtensions()
 
+    // Listen for project selection from loading window via main process
+    // Must register BEFORE signalRendererReady to avoid missing messages
+    const unsub = window.electronAPI?.onProjectSelected?.((project: any) => {
+      if (project?.path) {
+        setWorkspacePath(project.path)
+      }
+    })
+
     // Signal the main process that React has painted.
-    // The main process waits for this before closing the loading window.
     try { window.electronAPI?.signalRendererReady?.() } catch {}
 
     return () => {
       pythonClient.setDispatcher(null)
+      if (unsub) unsub()
     }
   }, [])
 

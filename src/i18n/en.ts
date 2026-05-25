@@ -50,6 +50,7 @@ export const en = {
     runs: 'Runs',
     skills: 'Skills',
     settings: 'Settings',
+    switchProject: 'Switch Project',
     hideChat: 'Hide AI Chat',
     showChat: 'Show AI Chat',
   },
@@ -283,7 +284,7 @@ export const en = {
     pythonStatusDesc: 'Current status of the Python backend process.',
     restart: 'Restart',
     restarting: 'Restarting...',
-    statusReady: 'Ready',
+    statusReady: 'Running',
     statusStopped: 'Stopped',
     statusStarting: 'Starting...',
     statusError: 'Error',
@@ -304,6 +305,10 @@ export const en = {
     themeSystem: 'System',
     langEnglish: 'English',
     langChinese: '中文',
+    importConfig: 'Import',
+    exportConfig: 'Export',
+    importConfigDesc: 'Import model configuration from a JSON file.',
+    exportConfigDesc: 'Export current model configuration as a JSON file for sharing.',
   },
 
   // ─── File Browser ──────────────────────────────────────────────

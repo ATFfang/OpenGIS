@@ -36,7 +36,7 @@ const MarkdownBlock = memo(({ markdown, showCursor }: MarkdownBlockProps) => {
               // react-markdown wraps fenced code blocks in <pre><code>, so we check
               // the parent element to distinguish block vs inline.
               const isBlockCode = node?.position?.start.line !== node?.position?.end.line ||
-                (node?.parent as any)?.tagName === 'pre' ||
+                (node as any)?.parent?.tagName === 'pre' ||
                 codeString.includes('\n')
 
               // Block code (with or without language)

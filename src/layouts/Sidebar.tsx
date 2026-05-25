@@ -6,6 +6,7 @@ import {
   FolderOpen,
   GitBranch,
   ListRestart,
+  FolderSync,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 
@@ -68,7 +69,14 @@ export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: Side
         })}
       </div>
 
-      {/* Bottom: Chat shortcut */}
+      {/* Bottom: Switch Project + Chat shortcut */}
+      <button
+        onClick={() => window.electronAPI?.switchProject?.()}
+        className="w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150 mb-1 text-text-muted hover:text-accent-primary hover:bg-accent-primary/10"
+        title={t.sidebar.switchProject}
+      >
+        <FolderSync className="w-[18px] h-[18px]" strokeWidth={1.8} />
+      </button>
       <button
         onClick={onToggleChat}
         className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150 mb-2 ${

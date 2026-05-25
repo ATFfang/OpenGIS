@@ -50,6 +50,7 @@ export const zh = {
     runs: '运行记录',
     skills: '技能',
     settings: '设置',
+    switchProject: '切换工程',
     hideChat: '隐藏 AI 对话',
     showChat: '显示 AI 对话',
   },
@@ -282,7 +283,7 @@ export const zh = {
     pythonStatusDesc: 'Python 后端进程的当前状态。',
     restart: '重启',
     restarting: '重启中...',
-    statusReady: '就绪',
+    statusReady: '运行中',
     statusStopped: '已停止',
     statusStarting: '启动中...',
     statusError: '错误',
@@ -303,6 +304,10 @@ export const zh = {
     themeSystem: '跟随系统',
     langEnglish: 'English',
     langChinese: '中文',
+    importConfig: '导入',
+    exportConfig: '导出',
+    importConfigDesc: '从 JSON 文件导入模型配置。',
+    exportConfigDesc: '将当前模型配置导出为 JSON 文件以便分享。',
   },
 
   // ─── File Browser ──────────────────────────────────────────────
