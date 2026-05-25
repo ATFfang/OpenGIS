@@ -1,0 +1,312 @@
+[
+  {
+    "name": "中国国土json（全国）",
+    "description": "中国全境行政区划数据（含省级边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json"
+  },
+  {
+    "name": "中国国土json（国界轮廓）",
+    "description": "中国国界轮廓线，不含省级划分",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/100000.json"
+  },
+  {
+    "name": "北京市",
+    "description": "北京市行政区划数据（含区县边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/110000_full.json"
+  },
+  {
+    "name": "天津市",
+    "description": "天津市行政区划数据（含区县边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/120000_full.json"
+  },
+  {
+    "name": "河北省",
+    "description": "河北省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/130000_full.json"
+  },
+  {
+    "name": "山西省",
+    "description": "山西省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/140000_full.json"
+  },
+  {
+    "name": "内蒙古自治区",
+    "description": "内蒙古自治区行政区划数据（含盟市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/150000_full.json"
+  },
+  {
+    "name": "辽宁省",
+    "description": "辽宁省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/210000_full.json"
+  },
+  {
+    "name": "吉林省",
+    "description": "吉林省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/220000_full.json"
+  },
+  {
+    "name": "黑龙江省",
+    "description": "黑龙江省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/230000_full.json"
+  },
+  {
+    "name": "上海市",
+    "description": "上海市行政区划数据（含区县边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/310000_full.json"
+  },
+  {
+    "name": "江苏省",
+    "description": "江苏省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/320000_full.json"
+  },
+  {
+    "name": "浙江省",
+    "description": "浙江省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/330000_full.json"
+  },
+  {
+    "name": "安徽省",
+    "description": "安徽省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/340000_full.json"
+  },
+  {
+    "name": "福建省",
+    "description": "福建省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/350000_full.json"
+  },
+  {
+    "name": "江西省",
+    "description": "江西省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/360000_full.json"
+  },
+  {
+    "name": "山东省",
+    "description": "山东省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/370000_full.json"
+  },
+  {
+    "name": "河南省",
+    "description": "河南省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json"
+  },
+  {
+    "name": "湖北省",
+    "description": "湖北省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/420000_full.json"
+  },
+  {
+    "name": "湖南省",
+    "description": "湖南省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/430000_full.json"
+  },
+  {
+    "name": "广东省",
+    "description": "广东省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/440000_full.json"
+  },
+  {
+    "name": "广西壮族自治区",
+    "description": "广西壮族自治区行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/450000_full.json"
+  },
+  {
+    "name": "海南省",
+    "description": "海南省行政区划数据（含市县边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/460000_full.json"
+  },
+  {
+    "name": "重庆市",
+    "description": "重庆市行政区划数据（含区县边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/500000_full.json"
+  },
+  {
+    "name": "四川省",
+    "description": "四川省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/510000_full.json"
+  },
+  {
+    "name": "贵州省",
+    "description": "贵州省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/520000_full.json"
+  },
+  {
+    "name": "云南省",
+    "description": "云南省行政区划数据（含州市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/530000_full.json"
+  },
+  {
+    "name": "西藏自治区",
+    "description": "西藏自治区行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/540000_full.json"
+  },
+  {
+    "name": "陕西省",
+    "description": "陕西省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/610000_full.json"
+  },
+  {
+    "name": "甘肃省",
+    "description": "甘肃省行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/620000_full.json"
+  },
+  {
+    "name": "青海省",
+    "description": "青海省行政区划数据（含州市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/630000_full.json"
+  },
+  {
+    "name": "宁夏回族自治区",
+    "description": "宁夏回族自治区行政区划数据（含地市边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/640000_full.json"
+  },
+  {
+    "name": "新疆维吾尔自治区",
+    "description": "新疆维吾尔自治区行政区划数据（含地州边界）",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/650000_full.json"
+  },
+  {
+    "name": "台湾省",
+    "description": "台湾省行政区划数据",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/710000_full.json"
+  },
+  {
+    "name": "香港特别行政区",
+    "description": "香港特别行政区行政区划数据",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/810000_full.json"
+  },
+  {
+    "name": "澳门特别行政区",
+    "description": "澳门特别行政区行政区划数据",
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/820000_full.json"
+  },
+
+  {
+    "name": "全球国家边界（50m精度）",
+    "description": "Natural Earth 全球国家行政边界，50m比例尺，含国名、ISO代码等属性",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson"
+  },
+  {
+    "name": "全球国家边界（110m精度）",
+    "description": "Natural Earth 全球国家行政边界，110m比例尺，轻量适合概览",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+  },
+  {
+    "name": "全球省/州边界（50m）",
+    "description": "Natural Earth 全球一级行政区（省/州）边界，50m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson"
+  },
+  {
+    "name": "全球省/州边界（110m）",
+    "description": "Natural Earth 全球一级行政区（省/州）边界，110m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson"
+  },
+  {
+    "name": "全球海岸线（50m）",
+    "description": "Natural Earth 全球海岸线矢量数据，50m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_coastline.geojson"
+  },
+  {
+    "name": "全球海岸线（110m）",
+    "description": "Natural Earth 全球海岸线矢量数据，110m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_coastline.geojson"
+  },
+  {
+    "name": "全球湖泊（50m）",
+    "description": "Natural Earth 全球主要湖泊面状数据，50m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_lakes.geojson"
+  },
+  {
+    "name": "全球湖泊（110m）",
+    "description": "Natural Earth 全球主要湖泊面状数据，110m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_lakes.geojson"
+  },
+  {
+    "name": "全球河流（50m）",
+    "description": "Natural Earth 全球主要河流中心线，50m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_rivers_lake_centerlines.geojson"
+  },
+  {
+    "name": "全球河流（110m）",
+    "description": "Natural Earth 全球主要河流中心线，110m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_rivers_lake_centerlines.geojson"
+  },
+  {
+    "name": "全球主要城市（简化）",
+    "description": "Natural Earth 全球主要城市/首都点数据，含人口、国家等属性",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_populated_places_simple.geojson"
+  },
+  {
+    "name": "全球机场（10m）",
+    "description": "Natural Earth 全球主要机场点数据，含名称、IATA代码",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_airports.geojson"
+  },
+  {
+    "name": "全球陆地面（50m）",
+    "description": "Natural Earth 全球陆地多边形，50m比例尺，适合底图mask",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_land.geojson"
+  },
+  {
+    "name": "全球陆地面（110m）",
+    "description": "Natural Earth 全球陆地多边形，110m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
+  },
+  {
+    "name": "全球地理线（赤道/回归线等）",
+    "description": "Natural Earth 全球地理参考线（赤道、南北回归线、极圈等）",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_geographic_lines.geojson"
+  },
+  {
+    "name": "全球经纬网（30°间隔）",
+    "description": "Natural Earth 30°间隔经纬网格线",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_graticules_30.geojson"
+  },
+  {
+    "name": "全球时区",
+    "description": "Natural Earth 全球时区多边形，10m比例尺",
+    "url": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_time_zones.geojson"
+  },
+
+  {
+    "name": "全球国家边界（datasets/geo-countries）",
+    "description": "Open Knowledge Foundation 维护的全球国家多边形，含ISO代码，公共领域许可",
+    "url": "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson"
+  },
+
+  {
+    "name": "美国各州边界",
+    "description": "美国50州+DC行政边界多边形，含州名、人口密度等属性",
+    "url": "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
+  },
+
+  {
+    "name": "全球地震数据（USGS 过去7天 M2.5+）",
+    "description": "USGS实时地震数据，过去7天所有2.5级以上地震，GeoJSON格式，每5分钟更新",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson"
+  },
+  {
+    "name": "全球地震数据（USGS 过去30天 M4.5+）",
+    "description": "USGS实时地震数据，过去30天所有4.5级以上地震",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson"
+  },
+  {
+    "name": "全球地震数据（USGS 过去24小时所有）",
+    "description": "USGS实时地震数据，过去24小时所有震级地震",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
+  },
+
+  {
+    "name": "Open-Meteo 天气预报（带参数）",
+    "description": "参数: latitude/longitude=坐标, current_weather=true(当前天气), hourly=temperature_2m,precipitation,windspeed_10m(逐小时), daily=temperature_2m_max,temperature_2m_min,precipitation_sum(逐日), timezone=auto。返回JSON需代码转GeoJSON点。更多参数见 https://open-meteo.com/en/docs",
+    "url": "https://api.open-meteo.com/v1/forecast?latitude=39.9&longitude=116.4&current_weather=true"
+  },
+  {
+    "name": "Open-Meteo 历史天气（带参数）",
+    "description": "获取历史天气数据。参数: latitude/longitude, start_date/end_date=YYYY-MM-DD, hourly或daily同上。示例获取北京2024年1月数据",
+    "url": "https://archive-api.open-meteo.com/v1/archive?latitude=39.9&longitude=116.4&start_date=2024-01-01&end_date=2024-01-31&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
+  },
+  {
+    "name": "Open-Meteo 空气质量（带参数）",
+    "description": "全球空气质量数据。参数: latitude/longitude, hourly=pm2_5,pm10,nitrogen_dioxide,ozone,carbon_monoxide,sulphur_dioxide,us_aqi,european_aqi。返回逐小时AQI和浓度值",
+    "url": "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=39.9&longitude=116.4&hourly=pm2_5,pm10,us_aqi"
+  }
+]

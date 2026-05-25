@@ -113,6 +113,7 @@ export const zh = {
     attachWorkflowHint: '附加工作流以引导智能体按步骤执行。',
     qgisMcpCommands: 'QGIS MCP 命令',
     osmDataDownload: 'OpenStreetMap 数据下载',
+    datasourceCatalog: '预设 GeoJSON 数据源',
   },
 
   // ─── Workflow Editor ───────────────────────────────────────────
