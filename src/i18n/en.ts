@@ -113,6 +113,7 @@ export const en = {
     attachWorkflowHint: 'Attach a workflow to guide the agent through a sequence of steps.',
     qgisMcpCommands: 'QGIS MCP commands',
     osmDataDownload: 'OpenStreetMap data download',
+    datasourceCatalog: 'Curated GeoJSON data sources',
   },
 
   // ─── Workflow Editor ───────────────────────────────────────────

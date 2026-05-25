@@ -19,6 +19,7 @@ import {
   FolderOpen,
   Pencil,
   Wrench,
+  Database,
 } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
 import { useAssetStore } from '@/stores/assetStore'
@@ -1176,6 +1177,28 @@ function AttachPanel({
             <p className="text-[12px] font-medium leading-tight">OSM</p>
             <p className="text-[10px] text-text-muted mt-0.5">
               {attachedSkills.includes('OSM') ? t.chat.attachedClickDetach : t.chat.osmDataDownload}
+            </p>
+          </div>
+        </button>
+        <button
+          onClick={() => onAttachSkill('数据源', ['datasource'])}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
+            attachedSkills.includes('数据源')
+              ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
+              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+          }`}
+        >
+          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
+            attachedSkills.includes('数据源')
+              ? 'bg-cyan-500/20 ring-cyan-500/30'
+              : 'bg-cyan-500/10 ring-cyan-500/20'
+          }`}>
+            <Database className="w-3 h-3 text-cyan-400" />
+          </div>
+          <div className="text-left flex-1 min-w-0">
+            <p className="text-[12px] font-medium leading-tight">数据源</p>
+            <p className="text-[10px] text-text-muted mt-0.5">
+              {attachedSkills.includes('数据源') ? t.chat.attachedClickDetach : t.chat.datasourceCatalog}
             </p>
           </div>
         </button>

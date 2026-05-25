@@ -189,6 +189,12 @@ print(f"**Loaded {{info['feature_count']}} features** from `{{result['output_pat
   is ephemeral and all in-memory data is lost after the run.
 - To focus the camera on a layer you just added, use
   `zoom_to_layer(info["layer_id"])`.
+- **NEVER print large volumes of data to the user.** Do NOT dump entire
+  DataFrames, full GeoJSON feature collections, long lists of coordinates,
+  or raw API responses. Instead, print only summaries (row counts, column
+  names, first few rows via `df.head()`, statistics, or key findings).
+  If the user explicitly asks to see the full data, save it to a file and
+  tell them the file path.
 - Keep each code block short — one logical step per block.
 - If you need a value from a previous step, `print()` it explicitly.
 - **Format `print()` output as Markdown** — your stdout is rendered as
