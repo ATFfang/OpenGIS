@@ -49,6 +49,15 @@ interface Window {
     // Settings
     getSettings: () => Promise<any>
     setSetting: (key: string, value: any) => Promise<void>
+    // Projects
+    getProjects: () => Promise<{ projects: any[]; lastProjectId?: string }>
+    createProject: (name: string, path: string) => Promise<any>
+    openProject: (id: string) => Promise<any>
+    renameProject: (id: string, newName: string) => Promise<any>
+    deleteProject: (id: string) => Promise<{ success: boolean }>
+    browseProjectFolder: () => Promise<{ canceled?: boolean; path?: string }>
+    switchProject: () => Promise<{ success: boolean }>
+    onProjectSelected: (callback: (project: any) => void) => () => void
     // App info
     getAppVersion: () => Promise<string>
     getPlatform: () => string

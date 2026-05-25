@@ -9,7 +9,13 @@ import { en } from './en'
 import { zh } from './zh'
 
 export type Locale = 'en' | 'zh'
-export type TranslationKeys = typeof en
+
+/** Deep-convert all leaf values from literal strings to `string` */
+type DeepStringify<T> = {
+  [K in keyof T]: T[K] extends string ? string : DeepStringify<T[K]>
+}
+
+export type TranslationKeys = DeepStringify<typeof en>
 
 const translations: Record<Locale, TranslationKeys> = { en, zh }
 

@@ -95,7 +95,6 @@ async function configureBackendAgent(): Promise<void> {
 }
 
 // ─── 订阅后端 Agent 通知（一次性，首次访问 store 时） ──────────────────────
-let _bridgeInstalled = false
 let _unsubscribeBridge: (() => void) | null = null
 
 function installNotificationBridge(
@@ -107,7 +106,6 @@ function installNotificationBridge(
     _unsubscribeBridge()
     _unsubscribeBridge = null
   }
-  _bridgeInstalled = true
 
   _unsubscribeBridge = pythonClient.onNotification((method, params) => {
     const state = get()
@@ -163,12 +161,13 @@ function installNotificationBridge(
         // 行的展开状态保持稳定）。否则添加新消息。
         const convCb = state.activeConversation()
         const stepNum = params?.step as number | undefined
-        let mergedIntoPartial = false
+        let mergedIntoExisting = false
 
         if (convCb && stepNum != null) {
           for (let i = convCb.messages.length - 1; i >= 0; i--) {
             const m = convCb.messages[i]
-            if (m.say === 'code' && m.stepNumber === stepNum && m.partial) {
+            if (m.say === 'code' && m.stepNumber === stepNum) {
+              // Merge into existing message (whether partial or already finished)
               state._updateMessage(m.ts, {
                 text: params?.code as string,
                 scriptPath: params?.script_path as string | undefined,
@@ -176,14 +175,23 @@ function installNotificationBridge(
                 runId: params?.run_id as string | undefined,
                 partial: false,
               })
-              mergedIntoPartial = true
+              mergedIntoExisting = true
               break
             }
             // 停止扫描，一旦遇到比此步骤更旧的内容
             if (m.say === 'code' && (m.stepNumber ?? 0) < stepNum) break
           }
         }
-        if (mergedIntoPartial) break
+        if (mergedIntoExisting) {
+          // Still need to remove any lingering progress / thinking message
+          if (convCb) {
+            const lastCb = convCb.messages[convCb.messages.length - 1]
+            if (lastCb && (lastCb.say === 'progress' || lastCb.say === 'thinking')) {
+              state._updateMessage(lastCb.ts, { partial: false })
+            }
+          }
+          break
+        }
 
         // Remove any lingering progress / thinking message
         if (convCb) {
@@ -416,6 +424,7 @@ function installNotificationBridge(
         const conv = state.activeConversation()
         const last = conv?.messages[conv.messages.length - 1]
         const stage = (params?.stage as string) || 'processing'
+        const progressDetail = (params?.message as string) || ''
         if (last && last.say === 'thinking' && last.partial) {
           // 用进度替换 thinking
           state._updateMessage(last.ts, { partial: false })
@@ -424,13 +433,14 @@ function installNotificationBridge(
         const lastAfter = convAfter?.messages[convAfter.messages.length - 1]
         if (lastAfter && lastAfter.say === 'progress') {
           // 更新现有进度消息
-          state._updateMessage(lastAfter.ts, { progressStage: stage, partial: true })
+          state._updateMessage(lastAfter.ts, { progressStage: stage, progressDetail, partial: true })
         } else {
           state._addMessage({
             ts: Date.now(),
             type: 'say',
             say: 'progress',
             progressStage: stage,
+            progressDetail,
             partial: true,
           })
         }
@@ -663,8 +673,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     abortTask: async () => {
+      const t0 = performance.now()
+      console.log(`[ABORT-DEBUG][${new Date().toISOString()}] abortTask called, isStreaming=${get().isStreaming}`)
       // 立即设置 streaming 为 false 以提高 UI 响应速度
       set({ isStreaming: false })
+      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms set isStreaming=false`)
       // 添加用户可见的取消消息
       get()._addMessage({
         ts: Date.now(),
@@ -672,15 +685,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
         say: 'text',
         text: '⏹️ Task cancelled by user.',
       })
+      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms sending rpc.agent.interrupt...`)
       // 告诉后端终止进程并释放锁
       // 我们等待此操作，以便后端有时间清理，
       // 然后再让用户发送下一条消息
       try {
         const result = await pythonClient.send('rpc.agent.interrupt', {})
-        console.log('[chatStore] agent 中断结果:', result)
+        console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt returned:`, result)
       } catch (e) {
-        console.warn('[chatStore] agent 中断失败:', e)
+        console.warn(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt FAILED:`, e)
       }
+      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms abortTask finished`)
     },
 
     _addMessage: (message) => {

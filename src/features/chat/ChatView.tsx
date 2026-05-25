@@ -30,6 +30,7 @@ import logoImg from '@/assets/logo.png'
 import thinkingGif from '@/assets/thinking.gif'
 import machineAvatar from '@/assets/machine.png'
 import ChatRow from './components/ChatRow'
+import OrbLogo from './components/OrbLogo'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
 import type { UIMessage } from '@/types/chat'
 import { groupMessages, type MessageRole } from './groupMessages'
@@ -105,7 +106,7 @@ export function ChatView() {
 
 
   // --- Auto-resize textarea ---
-  const adjustTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const adjustTimerRef = useRef<number | null>(null)
   const adjustTextareaHeight = useCallback(() => {
     // 使用 requestAnimationFrame 批处理，避免多次 keystroke 导致多次 reflow
     if (adjustTimerRef.current) cancelAnimationFrame(adjustTimerRef.current)
@@ -450,7 +451,7 @@ export function ChatView() {
                       setIsEditingTitle(true)
                     }
                   }}
-                  title="Double-click to rename"
+                  title={t.chat.doubleClickRename}
                 >
                   {hasTask ? (conversation?.title || t.chat.newConversation) : 'OpenGIS Agent'}
                 </span>
@@ -459,7 +460,7 @@ export function ChatView() {
                 {isStreaming ? (
                   <span className="text-accent-primary font-medium">{t.chat.progress.generating}</span>
                 ) : (
-                  'Powered by LLM'
+                  t.chat.poweredByLLM
                 )}
               </span>
             </div>
@@ -477,7 +478,7 @@ export function ChatView() {
                 <button
                   onClick={() => setShowConversationList(!showConversationList)}
                   className="p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-all duration-150"
-                  title="Conversation history"
+                  title={t.chat.conversationHistory}
                 >
                   <History className="w-4 h-4" />
                 </button>
@@ -663,7 +664,7 @@ export function ChatView() {
                 <button
                   onClick={handleStop}
                   className="p-2 bg-accent-danger/10 text-accent-danger hover:bg-accent-danger/20 rounded-lg transition-all duration-150 ring-1 ring-accent-danger/20"
-                  title="Stop generation"
+                  title={t.chat.stopGeneration}
                 >
                   <Square className="w-3.5 h-3.5" />
                 </button>
@@ -783,18 +784,16 @@ function MessageGroup({
  * backend.
  */
 function RevertRunButton({ runId }: { runId: string }) {
+  const t = useT()
   const { confirm, alert } = useDialog()
   const [busy, setBusy] = useState(false)
 
   const handleClick = useCallback(async () => {
     if (busy) return
     const ok = await confirm({
-      title: 'Revert this run?',
-      message:
-        'Reset the workspace to the git commit recorded before this ' +
-        "agent run. Any file changes made during or after the run will " +
-        'be lost.',
-      okLabel: 'Revert',
+      title: t.chat.revertRun,
+      message: t.chat.revertMessage,
+      okLabel: t.chat.revertButton,
       danger: true,
     })
     if (!ok) return
@@ -804,7 +803,7 @@ function RevertRunButton({ runId }: { runId: string }) {
       await useRunsStore.getState().revertRun(runId)
     } catch (err: any) {
       await alert({
-        title: 'Revert failed',
+        title: t.chat.revertFailed,
         message: err?.message || String(err),
       })
     } finally {
@@ -817,7 +816,7 @@ function RevertRunButton({ runId }: { runId: string }) {
       onClick={handleClick}
       disabled={busy}
       className="mt-1 w-5 h-5 rounded flex items-center justify-center text-text-muted/60 hover:text-accent-danger hover:bg-accent-danger/10 transition-colors disabled:opacity-40"
-      title={`Revert workspace to the state before this run (${runId.slice(0, 8)})`}
+      title={t.chat.revertTooltip}
     >
       {busy ? (
         <RefreshCw className="w-3 h-3 animate-spin" />
@@ -847,11 +846,9 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
-      {/* Logo */}
+      {/* Animated orb logo */}
       <div className="relative mb-8 animate-fade-in">
-        <div className="w-20 h-20 rounded-2xl overflow-hidden flex items-center justify-center">
-          <img src={logoImg} alt="OpenGIS" className="w-20 h-20 object-contain" />
-        </div>
+        <OrbLogo size={80} />
       </div>
 
       <h2 className="text-xl font-bold text-text-primary mb-2 animate-fade-in">
@@ -1021,7 +1018,7 @@ function ConversationListDropdown({
                   setEditingId(conv.id)
                 }}
                 className="opacity-0 group-hover:opacity-100 p-1 text-text-muted hover:text-accent-primary rounded transition-all"
-                title="Rename conversation"
+                title={t.chat.renameConversation}
               >
                 <Pencil className="w-3 h-3" />
               </button>
@@ -1031,7 +1028,7 @@ function ConversationListDropdown({
                   onDelete(conv.id)
                 }}
                 className="opacity-0 group-hover:opacity-100 p-1 text-text-muted hover:text-accent-danger rounded transition-all"
-                title="Delete conversation"
+                title={t.chat.deleteConversation}
               >
                 <Trash2 className="w-3 h-3" />
               </button>
@@ -1156,7 +1153,7 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">QGIS4+</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('QGIS4+') ? 'Attached — click to detach' : 'QGIS MCP commands'}
+              {attachedSkills.includes('QGIS4+') ? t.chat.attachedClickDetach : t.chat.qgisMcpCommands}
             </p>
           </div>
         </button>
@@ -1178,7 +1175,7 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">OSM</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('OSM') ? 'Attached — click to detach' : 'OpenStreetMap data download'}
+              {attachedSkills.includes('OSM') ? t.chat.attachedClickDetach : t.chat.osmDataDownload}
             </p>
           </div>
         </button>

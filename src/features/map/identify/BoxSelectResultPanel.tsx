@@ -19,6 +19,7 @@ import {
   Check,
   Crosshair,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { mapEngine } from '../engine/MapEngine'
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -112,6 +113,7 @@ export function BoxSelectResultPanel({
   visible,
   onClose,
 }: BoxSelectResultPanelProps) {
+  const t = useT()
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
@@ -247,12 +249,12 @@ export function BoxSelectResultPanel({
 
           <div className="flex-1 min-w-0">
             <h3 className="text-xs font-semibold text-text-primary">
-              Box Select Results
+              {t.map.boxSelectResults}
             </h3>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-[10px] text-text-muted">
-                {features.length} feature{features.length !== 1 ? 's' : ''} in{' '}
-                {groupedFeatures.size} layer{groupedFeatures.size !== 1 ? 's' : ''}
+                {features.length} {features.length !== 1 ? t.map.featuresIn : t.map.featureIn}{' '}
+                {groupedFeatures.size} {groupedFeatures.size !== 1 ? t.map.layersPlural : t.map.layer}
               </span>
             </div>
           </div>
@@ -260,7 +262,7 @@ export function BoxSelectResultPanel({
           <button
             onClick={handleClose}
             className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
-            title="Close"
+            title={t.map.close}
           >
             <X className="w-3.5 h-3.5" />
           </button>

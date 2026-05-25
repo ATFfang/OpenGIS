@@ -541,6 +541,11 @@ def set_graduated_style(
     classes: int = 5,
     palette: str = "viridis",
 ) -> bool:
+    # Normalise method: Python callers often use underscores (e.g.
+    # "equal_interval") but the frontend Zod schema expects hyphens
+    # ("equal-interval").
+    method = method.replace("_", "-")
+
     run_async_from_sync(ctx.notify(
         "rpc.ui.map.set_layer_renderer",
         {

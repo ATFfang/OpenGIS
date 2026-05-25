@@ -1,5 +1,6 @@
 """FastAPI server with WebSocket hub for JSON-RPC 2.0 communication."""
 
+import asyncio
 import logging
 import os
 import secrets
@@ -141,10 +142,22 @@ async def websocket_endpoint(
     logger.info("WebSocket client connected (authenticated)")
     handler = RpcHandler(websocket, skill_registry)
 
+    # Track background tasks so we can clean up on disconnect.
+    background_tasks: set[asyncio.Task] = set()
+
+    def _task_done(task: asyncio.Task) -> None:
+        background_tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            logger.error("Unhandled error in WS message task: %s", task.exception())
+
     try:
         while True:
             data = await websocket.receive_text()
-            await handler.handle_message(data)
+            # Dispatch each message concurrently so that interrupt
+            # requests are not blocked by a running agent task.
+            task = asyncio.create_task(handler.handle_message(data))
+            background_tasks.add(task)
+            task.add_done_callback(_task_done)
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception as e:
@@ -153,3 +166,9 @@ async def websocket_endpoint(
             await websocket.close()
         except Exception:
             pass
+    finally:
+        # Cancel any lingering background tasks on disconnect.
+        for t in background_tasks:
+            t.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)

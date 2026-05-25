@@ -37,6 +37,7 @@ import {
   AlertCircle,
   Clock,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { useAssetStore } from '@/stores/assetStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useViewStore, type ViewTab } from '@/stores/viewStore'
@@ -81,6 +82,7 @@ export interface ScriptRunnerViewProps {
 }
 
 export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
+  const t = useT()
   const workspacePath = useAssetStore((s) => s.workspacePath)
   const theme = useSettingsStore((s) => s.appearance.theme)
   const updateTabContent = useViewStore((s) => s.updateTabContent)
@@ -212,7 +214,7 @@ export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
 
         <ToolbarButton
           icon={<Play className="w-3.5 h-3.5" />}
-          label="Run"
+          label={t.scriptRunner.run}
           accent
           disabled={status === 'running'}
           onClick={handleRun}
@@ -220,7 +222,7 @@ export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
         />
         <ToolbarButton
           icon={<Square className="w-3.5 h-3.5" />}
-          label="Stop"
+          label={t.scriptRunner.stop}
           disabled={status !== 'running'}
           onClick={() => void stop()}
         />
@@ -229,13 +231,13 @@ export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
 
         <ToolbarButton
           icon={<Save className="w-3.5 h-3.5" />}
-          label="Save"
+          label={t.scriptRunner.save}
           onClick={() => void handleSave()}
           shortcut="Ctrl+S"
         />
         <ToolbarButton
           icon={<FolderOpen className="w-3.5 h-3.5" />}
-          label="Open"
+          label={t.scriptRunner.open}
           onClick={() => void handleOpen()}
         />
 
@@ -245,7 +247,7 @@ export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
         {status === 'running' && (
           <div className="flex items-center gap-1 text-xs text-accent-warning pr-1">
             <Clock className="w-3 h-3 animate-spin" />
-            <span>Running…</span>
+            <span>{t.scriptRunner.running}</span>
           </div>
         )}
         {status === 'finished' && result && (
@@ -263,7 +265,7 @@ export function ScriptRunnerView({ tab }: ScriptRunnerViewProps = {}) {
 
         <ToolbarButton
           icon={<Trash2 className="w-3.5 h-3.5" />}
-          label="Clear"
+          label={t.scriptRunner.clear}
           onClick={clearOutput}
           disabled={chunks.length === 0}
         />
@@ -346,6 +348,7 @@ function ToolbarButton({
 
 // ─── Output panel ──────────────────────────────────────────────────
 function OutputPanel({ chunks }: { chunks: OutputChunk[] }) {
+  const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom on new chunks — unless the user has scrolled up.
@@ -368,7 +371,7 @@ function OutputPanel({ chunks }: { chunks: OutputChunk[] }) {
   return (
     <div className="h-full flex flex-col bg-bg-tertiary border-t border-border">
       <div className="h-7 border-b border-border flex items-center px-3 shrink-0 text-2xs text-text-muted uppercase tracking-wide font-semibold">
-        Output
+        {t.scriptRunner.output}
       </div>
       <div
         ref={scrollRef}
@@ -376,7 +379,7 @@ function OutputPanel({ chunks }: { chunks: OutputChunk[] }) {
         className="flex-1 overflow-auto p-3 font-mono text-xs leading-relaxed"
       >
         {chunks.length === 0 ? (
-          <span className="text-text-muted italic">(no output yet — press Run to execute)</span>
+          <span className="text-text-muted italic">{t.scriptRunner.noOutputYet}</span>
         ) : (
           chunks.map((c) => (
             <span

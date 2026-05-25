@@ -27,14 +27,17 @@ import {
   BarChart3,
   ArrowLeftRight,
 } from 'lucide-react'
+import { useT } from '@/i18n'
 import { useMapStore } from '@/stores/mapStore'
 import { loadGeoFiles } from '@/services/geo'
 import { mapEngine } from '@/features/map/engine/MapEngine'
+import { getCategorizedCache } from '@/features/map/renderers/categorizedRenderer'
 import type { MapLayerDefinition, LayerStyle } from '@/services/geo'
 import { LayerIcon } from './LayerIcon'
 import { GraduatedStylePanel } from './GraduatedStylePanel'
 
 export function LayerPanel() {
+  const t = useT()
   const layers = useMapStore((s) => s.layers)
   const activeLayerId = useMapStore((s) => s.activeLayerId)
   const addLayers = useMapStore((s) => s.addLayers)
@@ -143,13 +146,13 @@ export function LayerPanel() {
     >
       {/* Header */}
       <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-2">
-        <span className="text-xs font-semibold text-text-secondary flex-1">Layers</span>
+        <span className="text-xs font-semibold text-text-secondary flex-1">{t.layers.title}</span>
 
         {/* Add data button */}
         <button
           onClick={() => fileInputRef.current?.click()}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title="Add data"
+          title={t.layers.addData}
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -159,7 +162,7 @@ export function LayerPanel() {
           <button
             onClick={clearLayers}
             className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 transition-colors"
-            title="Remove all layers"
+            title={t.layers.removeAll}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -221,7 +224,7 @@ export function LayerPanel() {
         <div className="absolute inset-0 bg-bg-primary/60 backdrop-blur-sm flex items-center justify-center z-30">
           <div className="flex flex-col items-center gap-2">
             <Loader2 className="w-6 h-6 text-accent-primary animate-spin" />
-            <p className="text-xs text-text-secondary">Loading layers…</p>
+            <p className="text-xs text-text-secondary">{t.layers.loadingLayers}</p>
           </div>
         </div>
       )}
@@ -231,7 +234,7 @@ export function LayerPanel() {
         <div className="absolute inset-0 bg-accent-primary/10 border-2 border-dashed border-accent-primary rounded-lg flex items-center justify-center z-20 pointer-events-none">
           <div className="text-center">
             <FileUp className="w-8 h-8 text-accent-primary mx-auto mb-2" />
-            <p className="text-sm font-medium text-accent-primary">Drop files to add layers</p>
+            <p className="text-sm font-medium text-accent-primary">{t.layers.dropFiles}</p>
           </div>
         </div>
       )}
@@ -270,6 +273,7 @@ function LayerItem({
   onDragEnterLayer,
   onDropLayer,
 }: LayerItemProps) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [showClassification, setShowClassification] = useState(false)
   const setLayerOpacity = useMapStore((s) => s.setLayerOpacity)
@@ -348,7 +352,7 @@ function LayerItem({
           draggable
           onDragStart={handleRowDragStart}
           className="w-3 h-4 flex items-center justify-center text-text-muted/40 hover:text-text-secondary cursor-grab active:cursor-grabbing shrink-0"
-          title="Drag to reorder"
+          title={t.layers.dragToReorder}
         >
           <GripVertical className="w-3 h-3" />
         </div>
@@ -377,7 +381,7 @@ function LayerItem({
           className={`w-4 h-4 flex items-center justify-center shrink-0 transition-colors ${
             layer.visible ? 'text-text-secondary' : 'text-text-muted/40'
           }`}
-          title={layer.visible ? 'Hide layer' : 'Show layer'}
+          title={layer.visible ? t.layers.hideLayer : t.layers.showLayer}
         >
           {layer.visible ? (
             <Eye className="w-3.5 h-3.5" />
@@ -411,7 +415,7 @@ function LayerItem({
               onZoomTo()
             }}
             className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-            title="Zoom to layer"
+            title={t.layers.zoomToLayer}
           >
             <Maximize2 className="w-3 h-3" />
           </button>
@@ -421,7 +425,7 @@ function LayerItem({
               onRemove()
             }}
             className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 transition-colors"
-            title="Remove layer"
+            title={t.layers.removeLayer}
           >
             <Trash2 className="w-3 h-3" />
           </button>
@@ -442,7 +446,7 @@ function LayerItem({
           <div className="flex items-center gap-3 text-2xs text-text-muted mb-2">
             <span>{geometryType}</span>
             <span>·</span>
-            <span>{featureCount.toLocaleString()} features</span>
+            <span>{featureCount.toLocaleString()} {t.layers.features}</span>
             <span>·</span>
             <span>{layer.data.crs}</span>
           </div>
@@ -488,7 +492,7 @@ function LayerItem({
                   className="mt-2 w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-2xs font-medium text-accent-primary bg-accent-primary/10 hover:bg-accent-primary/20 rounded-lg transition-colors"
                 >
                   <BarChart3 className="w-3 h-3" />
-                  Classification Renderer
+                  {t.layers.classificationRenderer}
                 </button>
               )}
             </>
@@ -540,6 +544,7 @@ function ClassifiedStyleSummary({
   onEditClassification,
   onResetToSingle,
 }: ClassifiedStyleSummaryProps) {
+  const t = useT()
   const { style } = layer
   const isGraduated = style.renderType === 'graduated'
   const fillOpacity = style.fillOpacity ?? style.opacity
@@ -554,9 +559,13 @@ function ClassifiedStyleSummary({
       const hi = i < breaks.length ? (breaks[i]?.toFixed(2) ?? '?') : '+∞'
       legendItems.push({ color, label: `${lo} – ${hi}` })
     }
-  } else if (style.categorized?.colors) {
-    for (const [val, color] of Object.entries(style.categorized.colors)) {
-      legendItems.push({ color, label: val })
+  } else if (style.renderType === 'categorized') {
+    // 优先读 store 里的 colors，若 Python RPC 未传 colors 则从 renderer cache 获取
+    const colors = style.categorized?.colors ?? getCategorizedCache(layer.id)
+    if (colors) {
+      for (const [val, color] of Object.entries(colors)) {
+        legendItems.push({ color, label: val })
+      }
     }
   }
 
@@ -565,7 +574,7 @@ function ClassifiedStyleSummary({
       {/* Header with mode badge */}
       <div className="flex items-center gap-1.5 text-2xs text-text-muted mt-0.5 mb-1">
         <BarChart3 className="w-3 h-3" />
-        <span>{isGraduated ? 'Graduated' : 'Categorized'}</span>
+        <span>{isGraduated ? t.layers.graduated : t.layers.categorized}</span>
         <span className="text-text-muted/40">·</span>
         <span className="truncate">
           {isGraduated ? style.graduated?.field : style.categorized?.field}
@@ -588,7 +597,7 @@ function ClassifiedStyleSummary({
           ))}
           {legendItems.length > 6 && (
             <div className="text-2xs text-text-muted italic">
-              …{legendItems.length - 6} more
+              …{legendItems.length - 6} {t.layers.more}
             </div>
           )}
         </div>
@@ -597,7 +606,7 @@ function ClassifiedStyleSummary({
       {/* Common paint controls — always available regardless of classification */}
       {/* Stroke color — fills + points */}
       {(isFillGeom || isPointGeom) && (
-        <StyleRow label="Stroke">
+        <StyleRow label={t.layers.stroke}>
           <ColorSwatch
             color={style.strokeColor}
             onChange={(strokeColor) => onStyleChange({ strokeColor })}
@@ -610,7 +619,7 @@ function ClassifiedStyleSummary({
       )}
 
       {/* Stroke width */}
-      <StyleRow label="Width">
+      <StyleRow label={t.layers.width}>
         <input
           type="range"
           min={0}
@@ -629,7 +638,7 @@ function ClassifiedStyleSummary({
 
       {/* Point radius — point geometry only */}
       {isPointGeom && (
-        <StyleRow label="Radius">
+        <StyleRow label={t.layers.radius}>
           <input
             type="range"
             min={1}
@@ -647,7 +656,7 @@ function ClassifiedStyleSummary({
 
       {/* Fill-opacity — polygon geometry only */}
       {isFillGeom && (
-        <StyleRow label="Fill α">
+        <StyleRow label={t.layers.fillAlpha}>
           <input
             type="range"
             min={0}
@@ -666,7 +675,7 @@ function ClassifiedStyleSummary({
       )}
 
       {/* Global opacity */}
-      <StyleRow label="Opacity">
+      <StyleRow label={t.layers.opacity}>
         <input
           type="range"
           min={0}
@@ -688,15 +697,15 @@ function ClassifiedStyleSummary({
           className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-2xs font-medium text-accent-primary bg-accent-primary/10 hover:bg-accent-primary/20 rounded-lg transition-colors"
         >
           <BarChart3 className="w-3 h-3" />
-          Edit Classification
+          {t.layers.editClassification}
         </button>
         <button
           onClick={onResetToSingle}
           className="flex items-center justify-center gap-1 px-2 py-1.5 text-2xs text-text-muted hover:text-text-secondary bg-bg-secondary hover:bg-bg-hover rounded-lg transition-colors"
-          title="Switch to single-color rendering"
+          title={t.layers.switchToSingle}
         >
           <ArrowLeftRight className="w-3 h-3" />
-          Single
+          {t.layers.single}
         </button>
       </div>
     </div>
@@ -733,6 +742,7 @@ function StylePanel({
   onStyleChange,
   onOpacityChange,
 }: StylePanelProps) {
+  const t = useT()
   const { style } = layer
   const isRaster = style.renderType === 'raster'
 
@@ -747,12 +757,12 @@ function StylePanel({
       {/* Header */}
       <div className="flex items-center gap-1.5 text-2xs text-text-muted mt-0.5 mb-1">
         <Palette className="w-3 h-3" />
-        <span>Style</span>
+        <span>{t.layers.style}</span>
       </div>
 
       {/* Main color (fill for polygons/points, line for polylines) */}
       {!isRaster && (
-        <StyleRow label={isFillLayer || isPointLayer ? 'Fill' : 'Color'}>
+        <StyleRow label={isFillLayer || isPointLayer ? t.layers.fill : t.layers.color}>
           <ColorSwatch
             color={style.color}
             onChange={(color) => onStyleChange({ color })}
@@ -766,7 +776,7 @@ function StylePanel({
 
       {/* Stroke color — fills + circles */}
       {(isFillLayer || isPointLayer) && (
-        <StyleRow label="Stroke">
+        <StyleRow label={t.layers.stroke}>
           <ColorSwatch
             color={style.strokeColor}
             onChange={(strokeColor) => onStyleChange({ strokeColor })}
@@ -780,7 +790,7 @@ function StylePanel({
 
       {/* Stroke width (always unless raster) */}
       {!isRaster && (
-        <StyleRow label="Width">
+        <StyleRow label={t.layers.width}>
           <input
             type="range"
             min={0}
@@ -800,7 +810,7 @@ function StylePanel({
 
       {/* Point radius — circle only */}
       {isPointLayer && (
-        <StyleRow label="Radius">
+        <StyleRow label={t.layers.radius}>
           <input
             type="range"
             min={1}
@@ -818,7 +828,7 @@ function StylePanel({
 
       {/* Fill-opacity — fills only (separate from layer opacity) */}
       {isFillLayer && (
-        <StyleRow label="Fill α">
+        <StyleRow label={t.layers.fillAlpha}>
           <input
             type="range"
             min={0}
@@ -837,7 +847,7 @@ function StylePanel({
       )}
 
       {/* Global opacity (applies to everything) */}
-      <StyleRow label="Opacity">
+      <StyleRow label={t.layers.opacity}>
         <input
           type="range"
           min={0}
@@ -971,18 +981,19 @@ function normaliseHex(color: string): string {
 // ─── Empty State ────────────────────────────────────────────────
 
 function LayerEmptyState({ isDragOver }: { isDragOver: boolean }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-geo/10 flex items-center justify-center mx-auto mb-3">
           <MapPin className="w-5 h-5 text-accent-geo/50" />
         </div>
-        <p className="text-xs text-text-muted mb-1">No layers</p>
+        <p className="text-xs text-text-muted mb-1">{t.layers.noLayers}</p>
         <p className="text-2xs text-text-muted/70">
-          Click <Plus className="w-3 h-3 inline" /> or drop files here
+          {t.layers.noLayersHint}
         </p>
         {isDragOver && (
-          <p className="text-2xs text-accent-primary mt-2">Drop to add as layer</p>
+          <p className="text-2xs text-accent-primary mt-2">{t.layers.dropToAdd}</p>
         )}
       </div>
     </div>

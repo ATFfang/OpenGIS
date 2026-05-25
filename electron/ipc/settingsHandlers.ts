@@ -1,10 +1,28 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain, app, dialog } from 'electron'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
 const SETTINGS_FILE = 'settings.json'
+const PROJECTS_FILE = 'projects.json'
 
+// ─── Project types ─────────────────────────────────────────────
+export interface ProjectEntry {
+  id: string
+  name: string
+  path: string
+  createdAt: number
+  lastOpenedAt: number
+}
+
+interface ProjectsData {
+  projects: ProjectEntry[]
+  lastProjectId?: string
+}
+
+const DEFAULT_PROJECTS: ProjectsData = { projects: [] }
+
+// ─── Settings types ────────────────────────────────────────────
 interface AppSettings {
   model: {
     provider: string
@@ -60,6 +78,10 @@ function getSettingsPath(): string {
   return join(app.getPath('userData'), SETTINGS_FILE)
 }
 
+function getProjectsPath(): string {
+  return join(app.getPath('userData'), PROJECTS_FILE)
+}
+
 async function loadSettings(): Promise<AppSettings> {
   const settingsPath = getSettingsPath()
 
@@ -70,7 +92,6 @@ async function loadSettings(): Promise<AppSettings> {
   try {
     const content = await readFile(settingsPath, 'utf-8')
     const saved = JSON.parse(content)
-    // Deep merge with defaults to handle new settings fields
     return deepMerge(DEFAULT_SETTINGS, saved)
   } catch {
     return { ...DEFAULT_SETTINGS }
@@ -86,6 +107,25 @@ async function saveSettings(settings: AppSettings): Promise<void> {
   }
 
   await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+}
+
+// ─── Projects persistence ──────────────────────────────────────
+export async function loadProjects(): Promise<ProjectsData> {
+  const projectsPath = getProjectsPath()
+  if (!existsSync(projectsPath)) {
+    return { ...DEFAULT_PROJECTS }
+  }
+  try {
+    const content = await readFile(projectsPath, 'utf-8')
+    return JSON.parse(content) as ProjectsData
+  } catch {
+    return { ...DEFAULT_PROJECTS }
+  }
+}
+
+export async function saveProjects(data: ProjectsData): Promise<void> {
+  const projectsPath = getProjectsPath()
+  await writeFile(projectsPath, JSON.stringify(data, null, 2), 'utf-8')
 }
 
 function deepMerge(target: any, source: any): any {
@@ -134,5 +174,70 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle('app:version', () => {
     return app.getVersion()
+  })
+
+  // ─── Project management ────────────────────────────────────────
+  ipcMain.handle('projects:list', async () => {
+    return await loadProjects()
+  })
+
+  ipcMain.handle('projects:create', async (_event, name: string, path: string) => {
+    const data = await loadProjects()
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    const entry: ProjectEntry = {
+      id,
+      name,
+      path,
+      createdAt: Date.now(),
+      lastOpenedAt: Date.now(),
+    }
+    data.projects.unshift(entry)
+    data.lastProjectId = id
+    await saveProjects(data)
+    return entry
+  })
+
+  ipcMain.handle('projects:open', async (_event, id: string) => {
+    const data = await loadProjects()
+    const project = data.projects.find(p => p.id === id)
+    if (!project) return { error: 'Project not found' }
+    project.lastOpenedAt = Date.now()
+    data.lastProjectId = id
+    await saveProjects(data)
+    return project
+  })
+
+  ipcMain.handle('projects:rename', async (_event, id: string, newName: string) => {
+    const data = await loadProjects()
+    const project = data.projects.find(p => p.id === id)
+    if (!project) return { error: 'Project not found' }
+    project.name = newName
+    await saveProjects(data)
+    return project
+  })
+
+  ipcMain.handle('projects:delete', async (_event, id: string) => {
+    const data = await loadProjects()
+    data.projects = data.projects.filter(p => p.id !== id)
+    if (data.lastProjectId === id) data.lastProjectId = undefined
+    await saveProjects(data)
+    return { success: true }
+  })
+
+  ipcMain.handle('projects:browse-folder', async (event) => {
+    // Find the BrowserWindow that sent this request and use it as parent
+    // so the dialog appears on top of the always-on-top loading window.
+    const { BrowserWindow: BW } = require('electron')
+    const sender = event.sender
+    const parentWin = BW.getAllWindows().find((w: any) => w.webContents === sender)
+    const dialogOpts: Electron.OpenDialogOptions = {
+      properties: ['openDirectory', 'createDirectory'],
+      title: '选择项目文件夹',
+    }
+    const result = parentWin
+      ? await dialog.showOpenDialog(parentWin, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts)
+    if (result.canceled || !result.filePaths.length) return { canceled: true }
+    return { path: result.filePaths[0] }
   })
 }

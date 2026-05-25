@@ -69,8 +69,8 @@ standard scientific libraries (numpy, pandas, geopandas, shapely, rasterio, matp
 
 To draw something on the user's map, call display skills (`add_layer`,
 `fly_to`, `zoom_to_layer`, `set_basemap`, `update_layer_style`,
-`remove_layer`). These push commands to the frontend instantly — the
-user *sees* the map update.
+`remove_layer`, `set_graduated_style`, `set_categorized_style`). These
+push commands to the frontend instantly — the user *sees* the map update.
 
 `add_layer(...)` returns a **dict** with these keys:
     {{
@@ -81,8 +81,19 @@ user *sees* the map update.
         "name": str,
     }}
 
-To focus the camera after add_layer, prefer `zoom_to_layer(layer_id)`.
+**After EVERY `add_layer()` call, you MUST call `zoom_to_layer(info["layer_id"])`**
+to fit the camera to the data extent so the user can see the data immediately.
 Only fall back to `fly_to` when you need an arbitrary camera target.
+
+### Thematic / choropleth styling (分层设色 / 分类渲染)
+
+When the user asks for choropleth, graduated coloring, thematic map, 分层设色,
+or similar, you MUST use `set_graduated_style(layer_id, field, ...)` after
+`add_layer`. This skill supports classification methods (quantile, equal-interval,
+jenks) and color ramps (viridis, reds, blues, ylgnbu, rdylgn, spectral, etc.).
+
+When the user asks for categorized/classified rendering (分类渲染), use
+`set_categorized_style(layer_id, field)` instead.
 
 `add_layer` accepts EITHER `geojson_path=<absolute file path>` OR
 `geojson=<inline GeoJSON dict>`. Use inline GeoJSON when constructing
@@ -146,7 +157,7 @@ fc = {{
 }}
 info = add_layer(geojson=fc, name="Beijing Landmarks", color="#ff3366")
 zoom_to_layer(info["layer_id"])
-print("Added", info["feature_count"], "landmarks, bbox =", info["bbox"])
+print(f"**Added {{info['feature_count']}} landmarks** to the map\\n- Bounding box: `{{info['bbox']}}`")
 ```
 
 ## Example 3 — skill that returns a file path
@@ -157,7 +168,7 @@ I'll convert the CSV to GeoJSON and display it.
 result = csv_to_geojson(input_path="data/cities.csv")
 info = add_layer(geojson_path=result["output_path"], name="Cities", color="#ff6600")
 zoom_to_layer(info["layer_id"])
-print("Loaded", info["feature_count"], "features from", result["output_path"])
+print(f"**Loaded {{info['feature_count']}} features** from `{{result['output_path']}}`")
 ```
 
 ## Rules
@@ -180,11 +191,50 @@ print("Loaded", info["feature_count"], "features from", result["output_path"])
   `zoom_to_layer(info["layer_id"])`.
 - Keep each code block short — one logical step per block.
 - If you need a value from a previous step, `print()` it explicitly.
+- **Format `print()` output as Markdown** — your stdout is rendered as
+  Markdown in the chat UI, so take advantage of it:
+  - Use Markdown **tables** for tabular data (e.g. `| Column | Value |`).
+  - Use **bold**, *italic*, `code`, bullet lists, numbered lists, and
+    headings (`##`, `###`) for clarity.
+  - For dict/JSON results, wrap them in ` ```json ` fenced code blocks.
+  - For pandas DataFrames, convert to a Markdown table with
+    `df.to_markdown(index=False)` (pandas has built-in support) or
+    format manually.
+  - Avoid dumping raw Python repr of dicts/lists — format them nicely.
+  - Example of good output:
+    ```python
+    print(f"## Results\\n")
+    print(f"- **Total features**: {{count}}")
+    print(f"- **Bounding box**: `{{bbox}}`")
+    print(f"\\n### Road Type Distribution\\n")
+    print(df[["type","count"]].to_markdown(index=False))
+    ```
 - File paths returned by skills are absolute; use them as-is.
 - Write only ONE ```python block per reply. Never write two code blocks
   in the same message.
 - For simple questions (greetings, explanations), reply with plain text
   — do NOT write unnecessary code.
+
+## Package Installation Rules
+
+When you need a third-party package that might not be pre-installed:
+
+1. **Try-import pattern** — wrap the import in a try/except and install
+   only if needed. This avoids wasting time re-installing packages:
+   ```python
+   try:
+       import networkx as nx
+   except ImportError:
+       import subprocess, sys
+       subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "networkx"])
+       import networkx as nx
+   ```
+2. **Use `-q` (quiet) flag** — reduces noisy pip output cluttering the
+   logs. For multiple packages: `pip install -q pkg1 pkg2 pkg3`.
+3. **Batch installs** — if you know you'll need several packages,
+   install them all in ONE command, not one-by-one.
+4. **Never** install packages without importing them afterward — the
+   install is only useful if you use the package in the same step.
 
 ## Error Recovery Rules
 
@@ -219,15 +269,16 @@ conversation and reuse what you already know**:
 ## CRITICAL: Task Completion Rules
 
 - **For multi-step tasks**: ALWAYS keep writing ```python code blocks
-  until every part of the task is done. Do NOT stop mid-task with a
-  text-only reply — a text reply **immediately terminates** the loop.
+  until every part of the task is done.
 - **When finished**: Call `final_answer("brief summary")` in your last
-  code block. This is the cleanest way to signal completion.
+  code block. This is the **preferred and most reliable** way to signal
+  completion for any task that involved code execution.
 - **Only reply with plain text** (no code) when:
   1. The task is a simple question/greeting that needs no computation.
-  2. ALL computation is done and you want to give a final explanation.
+  2. You are certain the task is 100% complete and want to add a brief
+     closing remark (but `final_answer()` is still preferred).
 - **Never** reply with text like "Next, I will..." or "Let me now..."
-  without including a code block — this will end the loop prematurely.
+  without including a code block — always pair planning text with code.
 
 Now solve the user's request.
 """

@@ -18,6 +18,7 @@
  */
 import { useMemo, useState } from 'react'
 import { FileText, Search, X } from 'lucide-react'
+import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
 
 interface CsvTableViewProps {
@@ -25,6 +26,7 @@ interface CsvTableViewProps {
 }
 
 export function CsvTableView({ tab }: CsvTableViewProps) {
+  const t = useT()
   const content = tab.content ?? ''
   const [query, setQuery] = useState('')
 
@@ -37,11 +39,11 @@ export function CsvTableView({ tab }: CsvTableViewProps) {
   }, [rows, query])
 
   if (!content.trim()) {
-    return <EmptyState message="File is empty" path={tab.filePath} />
+    return <EmptyState message={t.csvTable.fileEmpty} path={tab.filePath} />
   }
 
   if (headers.length === 0) {
-    return <EmptyState message="Could not detect any columns" path={tab.filePath} />
+    return <EmptyState message={t.csvTable.noColumns} path={tab.filePath} />
   }
 
   return (
@@ -53,19 +55,19 @@ export function CsvTableView({ tab }: CsvTableViewProps) {
           {tab.title}
         </span>
         <span>
-          {rows.length.toLocaleString()} row{rows.length === 1 ? '' : 's'}
+          {rows.length.toLocaleString()} {rows.length === 1 ? t.csvTable.row : t.csvTable.rows}
           {filteredRows.length !== rows.length && (
             <span className="text-accent-primary">
               {' '}
-              ({filteredRows.length.toLocaleString()} shown)
+              ({t.csvTable.shown.replace('{count}', filteredRows.length.toLocaleString())})
             </span>
           )}
         </span>
         <span>·</span>
-        <span>{headers.length} col{headers.length === 1 ? '' : 's'}</span>
+        <span>{headers.length} {headers.length === 1 ? t.csvTable.col : t.csvTable.cols}</span>
         <span>·</span>
         <span className="font-mono">
-          delim: {delimiter === '\t' ? 'TAB' : JSON.stringify(delimiter)}
+          {t.csvTable.delim} {delimiter === '\t' ? 'TAB' : JSON.stringify(delimiter)}
         </span>
       </div>
 
@@ -77,7 +79,7 @@ export function CsvTableView({ tab }: CsvTableViewProps) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter rows..."
+            placeholder={t.csvTable.filterPlaceholder}
             className="flex-1 bg-transparent text-xs text-text-primary placeholder:text-text-muted/50 outline-none min-w-0"
           />
           {query && (
@@ -121,7 +123,7 @@ export function CsvTableView({ tab }: CsvTableViewProps) {
             {filteredRows.length === 0 && (
               <tr>
                 <td colSpan={headers.length + 1} className="text-center py-8 text-text-muted italic">
-                  No rows match "{query}"
+                  {t.csvTable.noRowsMatch.replace('{query}', query)}
                 </td>
               </tr>
             )}

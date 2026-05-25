@@ -40,10 +40,18 @@ export type SayType =
   | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
   | 'error'
   | 'followup'
+  | 'completion_result'
+  | 'mistake_limit_reached'
+  | 'max_steps_reached'
+  | 'api_req_started'
+  | 'mcp_server_response'
+
+export type AskType =
+  | 'followup'
   | 'tool'
   | 'command'
   | 'completion_result'
-  | 'mistake_limit_reached'
+  | 'resume_task'
 
 export interface UIMessage {
   ts: number
@@ -86,6 +94,7 @@ export interface UIMessage {
 
   // Progress indicator — filled for say='progress'.
   progressStage?: string
+  progressDetail?: string
 
   // Model attribution
   modelInfo?: {

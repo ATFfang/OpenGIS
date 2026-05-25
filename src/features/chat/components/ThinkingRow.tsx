@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-import thinkingGif from '@/assets/thinking.gif'
+import { ChevronDown, ChevronRight, Globe } from 'lucide-react'
 
 interface ThinkingRowProps {
   showTitle?: boolean
@@ -59,7 +58,7 @@ export const ThinkingRow = memo(({
             onToggle ? 'cursor-pointer hover:text-text-secondary' : 'cursor-default'
           } transition-colors duration-150`}
         >
-          <img src={thinkingGif} alt="Thinking" className={`w-4 h-4 ${isStreaming ? '' : 'opacity-60 grayscale'}`} />
+          <Globe className={`w-4 h-4 ${isStreaming ? 'text-accent-primary' : 'text-text-muted opacity-60'}`} />
           <span
             className={`leading-[1.2] font-medium ${
               isStreaming

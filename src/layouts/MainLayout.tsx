@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { Map, Code2, SplitSquareHorizontal, SplitSquareVertical, X } from 'lucide-react'
+import { useT } from '@/i18n'
 import { Sidebar } from './Sidebar'
 import { MapView } from '@/features/map/MapView'
 import { ChatView } from '@/features/chat/ChatView'
@@ -34,6 +35,8 @@ export function MainLayout() {
   const [showBottomPanel, setShowBottomPanel] = useState(false)
   const [showChat, setShowChat] = useState(true)
   const [mapFullscreen, setMapFullscreen] = useState(false)
+
+  const isWindows = (window as any).electronAPI?.getPlatform?.() === 'win32'
 
   const isSettingsView = activeSidebarTab === 'settings'
 
@@ -70,6 +73,8 @@ export function MainLayout() {
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Windows frameless title bar drag region */}
+        {isWindows && <div className="h-8 shrink-0" style={{ WebkitAppRegion: 'drag' }} />}
         {isSettingsView ? (
           /* Settings takes full width when active */
           <div className="flex-1 overflow-hidden">
@@ -148,6 +153,7 @@ function StatusBar({
   showBottomPanel: boolean
   onToggleBottomPanel: () => void
 }) {
+  const t = useT()
   const layers = useMapStore((s) => s.layers)
   const activeLayerId = useMapStore((s) => s.activeLayerId)
   const activeLayer = layers.find((l) => l.id === activeLayerId)
@@ -161,18 +167,18 @@ function StatusBar({
         onClick={onToggleBottomPanel}
         className="hover:text-text-primary transition-colors mr-4"
       >
-        {showBottomPanel ? '▼ Hide Table' : '▲ Show Table'}
+        {showBottomPanel ? `▼ ${t.layout.hideTable}` : `▲ ${t.layout.showTable}`}
       </button>
       <span className="mr-4">{crs}</span>
       {activeLayer && (
         <>
-          <span className="mr-4">{featureCount.toLocaleString()} features</span>
+          <span className="mr-4">{featureCount.toLocaleString()} {t.layout.features}</span>
           <span className="mr-4 text-text-muted/60">|</span>
           <span className="truncate max-w-[200px]">{activeLayer.name}</span>
         </>
       )}
       <div className="flex-1" />
-      <span className="mr-3">{layers.length} layer{layers.length !== 1 ? 's' : ''}</span>
+      <span className="mr-3">{layers.length} {t.layout.layers}</span>
       <PythonStatusIndicator />
     </div>
   )
@@ -207,6 +213,7 @@ function PythonStatusIndicator() {
  * (map + code side by side or top/bottom).
  */
 function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }) {
+  const t = useT()
   const tabs = useViewStore((s) => s.tabs)
   const activeTabId = useViewStore((s) => s.activeTabId)
   const setActiveTab = useViewStore((s) => s.setActiveTab)
@@ -263,7 +270,7 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
           `}
         >
           <Map className="w-3.5 h-3.5" />
-          <span className="text-xs">Map</span>
+          <span className="text-xs">{t.layout.map}</span>
         </button>
 
         {/* Code tabs */}
@@ -289,7 +296,7 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
                   ? 'text-accent-primary bg-accent-primary/10'
                   : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
               }`}
-              title="Split left/right"
+              title={t.layout.splitLeftRight}
             >
               <SplitSquareHorizontal className="w-3.5 h-3.5" />
             </button>
@@ -303,7 +310,7 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
                   ? 'text-accent-primary bg-accent-primary/10'
                   : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
               }`}
-              title="Split top/bottom"
+              title={t.layout.splitTopBottom}
             >
               <SplitSquareVertical className="w-3.5 h-3.5" />
             </button>

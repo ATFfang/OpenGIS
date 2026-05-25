@@ -3,6 +3,7 @@ import { Map as MapIcon, EyeOff, Hand, MousePointer, BoxSelect, Maximize2, Minim
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapStore } from '@/stores/mapStore'
 import { useSettingsStore } from '@/stores/settingsStore'  // 新增：导入settingsStore
+import { useT } from '@/i18n'
 import { BUILTIN_BASEMAPS } from '@/services/geo'  // 新增：导入底图列表
 import { mapEngine } from './engine/MapEngine'
 import { loadGeoFiles } from '@/services/geo'
@@ -26,6 +27,7 @@ export function MapView({
   onToggleFullscreen?: () => void
   isFullscreen?: boolean
 } = {}) {
+  const t = useT()
   const mapContainer = useRef<HTMLDivElement>(null)
   const isInitialized = useRef(false)
   /**
@@ -351,7 +353,7 @@ export function MapView({
             layer.style.renderType,
             '— rebuild',
           )
-          mapEngine.removeMapLayer(layer.id)
+          mapEngine.removeRenderLayersOnly(layer.id)
           mapEngine.syncLayer(layer)
           mapEngine.setLayerVisibility(layer.id, layer.visible)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
@@ -460,7 +462,7 @@ export function MapView({
               ? 'text-text-secondary hover:text-accent-primary'
               : 'text-text-muted/40 hover:text-text-secondary'
           }`}
-          title={basemapVisible ? 'Hide basemap' : 'Show basemap'}
+          title={basemapVisible ? t.map.hideBasemap : t.map.showBasemap}
         >
           {basemapVisible ? <MapIcon className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
         </button>
@@ -473,7 +475,7 @@ export function MapView({
               ? 'text-accent-primary bg-accent-primary/15 ring-1 ring-accent-primary/40'
               : 'text-text-secondary hover:text-accent-primary'
           }`}
-          title={identifyActive ? 'Switch to pan mode' : 'Switch to identify mode'}
+          title={identifyActive ? t.map.switchToPan : t.map.switchToIdentify}
         >
           {identifyActive ? <MousePointer className="w-3.5 h-3.5" /> : <Hand className="w-3.5 h-3.5" />}
         </button>
@@ -486,7 +488,7 @@ export function MapView({
               ? 'text-accent-primary bg-accent-primary/15 ring-1 ring-accent-primary/40'
               : 'text-text-secondary hover:text-accent-primary'
           }`}
-          title={boxSelectActive ? 'Switch to pan mode' : 'Switch to box select mode'}
+          title={boxSelectActive ? t.map.switchToPan : t.map.switchToBoxSelect}
         >
           <BoxSelect className="w-3.5 h-3.5" />
         </button>
@@ -499,7 +501,7 @@ export function MapView({
           <button
             onClick={onToggleFullscreen}
             className="glass rounded-lg w-8 h-8 flex items-center justify-center text-text-secondary hover:text-accent-primary transition-colors"
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            title={isFullscreen ? t.map.exitFullscreen : t.map.fullscreen}
           >
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>

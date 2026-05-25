@@ -252,6 +252,7 @@ const PROGRESS_LABELS: Record<string, string> = {
 function ProgressRow({ message }: { message: UIMessage }) {
   const stage = message.progressStage || 'processing'
   const label = PROGRESS_LABELS[stage] || PROGRESS_LABELS.processing
+  const detail = message.progressDetail
 
   return (
     <div className="flex items-center gap-2.5 py-1.5 animate-fade-in">
@@ -259,7 +260,9 @@ function ProgressRow({ message }: { message: UIMessage }) {
         <div className="absolute inset-0 rounded-full border-2 border-accent-primary/20" />
         <div className="absolute inset-0 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
       </div>
-      <span className="text-[12px] text-text-muted font-medium">{label}</span>
+      <span className="text-[12px] text-text-muted font-medium">
+        {detail || label}
+      </span>
     </div>
   )
 }

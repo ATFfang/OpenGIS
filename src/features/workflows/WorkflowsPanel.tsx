@@ -28,10 +28,12 @@ import {
 } from '@/stores/workflowStore'
 import { useViewStore } from '@/stores/viewStore'
 import { useDialog } from '@/components/Dialog'
+import { useT } from '@/i18n'
 
 // ─── Main panel ───────────────────────────────────────────────────
 
 export function WorkflowsPanel() {
+  const t = useT()
   const workspacePath = useAssetStore((s) => s.workspacePath)
   const entries = useWorkflowStore((s) => s.entries)
   const isLoading = useWorkflowStore((s) => s.isLoading)
@@ -56,11 +58,11 @@ export function WorkflowsPanel() {
     // supported in Electron renderers, so we route through the
     // DialogHost singleton mounted at App root.
     const raw = await prompt({
-      title: 'New workflow',
-      message: 'Give the workflow a short, file-safe name.',
-      defaultValue: 'New Workflow',
-      placeholder: 'e.g. clip-buffer-export',
-      okLabel: 'Create',
+      title: t.workflow.panel.newWorkflow,
+      message: t.workflow.panel.newWorkflowPrompt,
+      defaultValue: t.workflow.panel.newWorkflowDefault,
+      placeholder: t.workflow.panel.newWorkflowPlaceholder,
+      okLabel: t.common.create,
     })
     if (raw == null) return
     const path = await createWorkflow(raw)
@@ -75,14 +77,14 @@ export function WorkflowsPanel() {
       {/* Header */}
       <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-1">
         <span className="text-xs font-semibold text-text-secondary flex-1 truncate">
-          Workflows
+          {t.workflow.title}
         </span>
 
         <button
           onClick={() => workspacePath && refresh()}
           disabled={!workspacePath}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-muted"
-          title="Refresh workflow list"
+          title={t.workflow.panel.refreshList}
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
@@ -91,7 +93,7 @@ export function WorkflowsPanel() {
           onClick={handleCreate}
           disabled={!workspacePath}
           className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-text-muted"
-          title="New workflow"
+          title={t.workflow.panel.newWorkflow}
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -129,6 +131,7 @@ interface WorkflowRowProps {
 }
 
 function WorkflowRow({ entry, isDirty }: WorkflowRowProps) {
+  const t = useT()
   const activeTabId = useViewStore((s) => s.activeTabId)
   const tabs = useViewStore((s) => s.tabs)
   const renameWorkflow = useWorkflowStore((s) => s.renameWorkflow)
@@ -153,9 +156,9 @@ function WorkflowRow({ entry, isDirty }: WorkflowRowProps) {
   const handleRename = useCallback(async () => {
     setContextMenu(null)
     const raw = await prompt({
-      title: 'Rename workflow',
+      title: t.workflow.panel.renameWorkflow,
       defaultValue: entry.name,
-      okLabel: 'Rename',
+      okLabel: t.common.rename,
     })
     if (raw == null || raw === entry.name) return
     const newPath = await renameWorkflow(entry.path, raw)
@@ -175,9 +178,9 @@ function WorkflowRow({ entry, isDirty }: WorkflowRowProps) {
   const handleDelete = useCallback(async () => {
     setContextMenu(null)
     const ok = await confirm({
-      title: 'Delete workflow',
-      message: `Delete "${entry.name}"? This cannot be undone.`,
-      okLabel: 'Delete',
+      title: t.workflow.panel.deleteWorkflow,
+      message: t.workflow.panel.deleteConfirm.replace('{name}', entry.name),
+      okLabel: t.common.delete,
       danger: true,
     })
     if (!ok) return
@@ -208,7 +211,7 @@ function WorkflowRow({ entry, isDirty }: WorkflowRowProps) {
         {isDirty && (
           <span
             className="w-1.5 h-1.5 rounded-full bg-accent-warning shrink-0"
-            title="Unsaved changes"
+            title={t.workflow.panel.unsavedChanges}
           />
         )}
       </div>
@@ -314,15 +317,16 @@ function MenuItem({
 // ─── Empty / loading / error states ──────────────────────────────
 
 function NoWorkspaceState() {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-primary/10 flex items-center justify-center mx-auto mb-3">
           <FolderPlus className="w-5 h-5 text-accent-primary/50" />
         </div>
-        <p className="text-xs text-text-muted mb-1">No workspace folder</p>
+        <p className="text-xs text-text-muted mb-1">{t.workflow.panel.noWorkspace}</p>
         <p className="text-2xs text-text-muted/60 max-w-[180px]">
-          Open a folder in the Files panel to start building workflows.
+          {t.workflow.panel.noWorkspaceHint}
         </p>
       </div>
     </div>
@@ -330,22 +334,23 @@ function NoWorkspaceState() {
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <div className="w-10 h-10 rounded-xl bg-accent-geo/10 flex items-center justify-center mx-auto mb-3">
           <GitBranch className="w-5 h-5 text-accent-geo/60" />
         </div>
-        <p className="text-xs text-text-muted mb-1">No workflows yet</p>
+        <p className="text-xs text-text-muted mb-1">{t.workflow.panel.noWorkflows}</p>
         <p className="text-2xs text-text-muted/60 mb-3 max-w-[180px]">
-          Compose Python GIS scripts into repeatable pipelines.
+          {t.workflow.panel.noWorkflowsHint}
         </p>
         <button
           onClick={onCreate}
           className="text-2xs text-accent-primary hover:text-accent-primary/80 transition-colors flex items-center gap-1 mx-auto"
         >
           <Plus className="w-3 h-3" />
-          New workflow
+          {t.workflow.panel.newWorkflow}
         </button>
       </div>
     </div>
@@ -353,11 +358,12 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 }
 
 function LoadingState() {
+  const t = useT()
   return (
     <div className="flex-1 flex items-center justify-center p-4 h-full">
       <div className="text-center">
         <RefreshCw className="w-5 h-5 text-text-muted animate-spin mx-auto mb-2" />
-        <p className="text-xs text-text-muted">Loading workflows...</p>
+        <p className="text-xs text-text-muted">{t.workflow.panel.loadingWorkflows}</p>
       </div>
     </div>
   )

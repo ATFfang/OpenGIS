@@ -77,6 +77,34 @@ const electronAPI = {
   setSetting: (key: string, value: any) =>
     ipcRenderer.invoke('settings:set', key, value),
 
+  // ---- Projects ----
+  getProjects: () =>
+    ipcRenderer.invoke('projects:list'),
+
+  createProject: (name: string, path: string) =>
+    ipcRenderer.invoke('projects:create', name, path),
+
+  openProject: (id: string) =>
+    ipcRenderer.invoke('projects:open', id),
+
+  renameProject: (id: string, newName: string) =>
+    ipcRenderer.invoke('projects:rename', id, newName),
+
+  deleteProject: (id: string) =>
+    ipcRenderer.invoke('projects:delete', id),
+
+  browseProjectFolder: () =>
+    ipcRenderer.invoke('projects:browse-folder'),
+
+  switchProject: () =>
+    ipcRenderer.invoke('app:switch-project'),
+
+  onProjectSelected: (callback: (project: any) => void) => {
+    const handler = (_event: any, project: any) => callback(project)
+    ipcRenderer.on('project:selected', handler)
+    return () => ipcRenderer.removeListener('project:selected', handler)
+  },
+
   // ---- System ----
   getLogDir: () =>
     ipcRenderer.invoke('system:get-log-dir') as Promise<string | null>,
@@ -92,6 +120,9 @@ const electronAPI = {
 
   // ---- Lifecycle ----
   signalRendererReady: () => ipcRenderer.send('renderer:ready'),
+
+  // ---- Window ----
+  setTitleBarTheme: (isDark: boolean) => ipcRenderer.send('window:set-titlebar-theme', isDark),
 }
 
 // Expose to renderer
