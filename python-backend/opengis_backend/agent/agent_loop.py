@@ -45,19 +45,42 @@ logger = logging.getLogger(__name__)
 
 LLM_MAX_RETRIES = 3
 LLM_BASE_DELAY = 1.0  # seconds
-LLM_RETRYABLE_EXCEPTIONS = (
+LLM_RETRYABLE_EXCEPTIONS: tuple = (
     ConnectionError,
     TimeoutError,
     OSError,  # covers network-level issues like ConnectionResetError
 )
 
-# Try to include httpx/openai exceptions if available
+# Include litellm exceptions (primary LLM library used in this project)
+try:
+    from litellm.exceptions import (
+        APIConnectionError as LiteLLMConnectionError,
+        InternalServerError as LiteLLMInternalError,
+        RateLimitError as LiteLLMRateLimitError,
+        ServiceUnavailableError as LiteLLMServiceUnavailable,
+        BadGatewayError as LiteLLMBadGateway,
+        APIError as LiteLLMAPIError,
+    )
+    LLM_RETRYABLE_EXCEPTIONS = (
+        *LLM_RETRYABLE_EXCEPTIONS,
+        LiteLLMConnectionError,
+        LiteLLMInternalError,
+        LiteLLMRateLimitError,
+        LiteLLMServiceUnavailable,
+        LiteLLMBadGateway,
+        LiteLLMAPIError,
+    )
+except ImportError:
+    pass
+
+# Try to include httpx exceptions if available
 try:
     import httpx
     LLM_RETRYABLE_EXCEPTIONS = (*LLM_RETRYABLE_EXCEPTIONS, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError)
 except ImportError:
     pass
 
+# Try to include openai SDK exceptions if available
 try:
     from openai import APIConnectionError, APITimeoutError, RateLimitError
     LLM_RETRYABLE_EXCEPTIONS = (*LLM_RETRYABLE_EXCEPTIONS, APIConnectionError, APITimeoutError, RateLimitError)
