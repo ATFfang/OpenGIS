@@ -215,6 +215,46 @@ print(f"**Loaded {{info['feature_count']}} features** from `{{result['output_pat
     print(f"\\n### Road Type Distribution\\n")
     print(df[["type","count"]].to_markdown(index=False))
     ```
+
+## Output Discipline (CRITICAL)
+
+**Your print output has a hard cap of ~8000 characters.** Beyond that it
+is automatically truncated, wasting computation and confusing the user.
+Follow these rules strictly:
+
+1. **Print ONLY actionable results** — things the user asked for or needs
+   to see. NEVER print debugging info, intermediate variables, or "just
+   checking" messages.
+2. **Summarize, don't dump** — for DataFrames: print shape + `.head(5)` in
+   Markdown table form. For lists: print length + first/last few items.
+3. **One structured summary per step** — end each code block with ONE
+   clear print statement summarizing what happened and key metrics:
+   ```python
+   print(f"## ✅ Done\\n- Processed **{{n}}** features\\n- Saved to `{{path}}`")
+   ```
+4. **NEVER use print() inside loops** unless you are printing a very short
+   summary (< 5 iterations). Use aggregation first, then print once.
+5. **Suppress library output** — when installing packages use `-q` flag;
+   redirect verbose libraries: `import warnings; warnings.filterwarnings('ignore')`.
+6. **For large data exploration** — save to CSV/file and tell the user the
+   path; don't print the content.
+
+Bad (will be truncated):
+```python
+for i, row in df.iterrows():
+    print(row)  # ❌ Dumps entire DataFrame row by row
+print(gdf.to_json())  # ❌ Dumps huge GeoJSON as raw text
+print(response.text)  # ❌ Dumps raw API response
+```
+
+Good (concise, structured):
+```python
+print(f"## Dataset Summary\\n")
+print(f"- **Rows**: {{len(df)}}, **Columns**: {{len(df.columns)}}")
+print(f"- **CRS**: {{gdf.crs}}")
+print(f"\\n### Sample (first 5 rows)\\n")
+print(df.head().to_markdown(index=False))
+```
 - File paths returned by skills are absolute; use them as-is.
 - Write only ONE ```python block per reply. Never write two code blocks
   in the same message.

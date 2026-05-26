@@ -60,15 +60,21 @@ def _estimate_messages_tokens(messages: list[dict]) -> int:
     return total
 
 
-def _truncate_output(text: str, max_chars: int = 3000) -> str:
-    """Truncate long code output, keeping head and tail."""
+def _truncate_output(text: str, max_chars: int = 4000) -> str:
+    """Truncate long code output, keeping head and tail.
+
+    Head gets 70% of the budget (usually contains the useful result),
+    tail gets 30% (often has the final summary/status line).
+    """
     if len(text) <= max_chars:
         return text
-    half = max_chars // 2
+    head_size = int(max_chars * 0.7)
+    tail_size = max_chars - head_size
+    truncated_count = len(text) - max_chars
     return (
-        text[:half]
-        + f"\n\n... [truncated {len(text) - max_chars} chars] ...\n\n"
-        + text[-half:]
+        text[:head_size]
+        + f"\n\n... [⚠️ output truncated: {truncated_count} chars omitted] ...\n\n"
+        + text[-tail_size:]
     )
 
 

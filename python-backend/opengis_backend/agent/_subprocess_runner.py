@@ -323,10 +323,18 @@ class _TeeStdout(io.TextIOBase):
 
     We keep a rolling buffer so that ``CodeOutput.logs`` matches what
     the agent loop expects (the concatenated prints from this exec call).
+
+    Output is capped at MAX_OUTPUT_CHARS to prevent large data dumps from
+    flooding the UI and context window.
     """
+
+    MAX_OUTPUT_CHARS = 8000  # Hard cap on total captured output per exec call
+    TAIL_RESERVE = 1500     # Chars reserved for tail when truncating
 
     def __init__(self) -> None:
         self._buf: list[str] = []
+        self._total_chars: int = 0
+        self._truncated: bool = False
 
     def writable(self) -> bool:  # noqa: D401
         return True
@@ -334,6 +342,22 @@ class _TeeStdout(io.TextIOBase):
     def write(self, s: str) -> int:
         if not s:
             return 0
+        # If already over the cap, silently drop further output
+        if self._truncated:
+            # Still buffer tail content (overwrite) for final summary
+            self._tail_buf = s
+            return len(s)
+        self._total_chars += len(s)
+        if self._total_chars > self.MAX_OUTPUT_CHARS:
+            # Mark as truncated; emit a warning to parent
+            self._truncated = True
+            self._buf.append(
+                f"\n\n⚠️ Output truncated ({self._total_chars} chars exceeded "
+                f"{self.MAX_OUTPUT_CHARS} limit). Only head is preserved.\n"
+            )
+            _emit({"kind": "stdout", "text": self._buf[-1]})
+            self._tail_buf = ""
+            return len(s)
         self._buf.append(s)
         _emit({"kind": "stdout", "text": s})
         return len(s)
@@ -342,7 +366,10 @@ class _TeeStdout(io.TextIOBase):
         pass
 
     def getvalue(self) -> str:
-        return "".join(self._buf)
+        result = "".join(self._buf)
+        if self._truncated and hasattr(self, '_tail_buf') and self._tail_buf:
+            result += f"\n... (last output line): {self._tail_buf.rstrip()}\n"
+        return result
 
 
 # ─────────────────────────────────────────────────────────────────────
