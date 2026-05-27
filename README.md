@@ -45,6 +45,16 @@ OpenGIS 是一个基于 Agent 的开源 GIS 桌面应用，他可以帮助用户
 
 <br>
 <p align="center">
+  <img src="resources/assets/用例1.png" alt="用例1" width="100%" />
+</p>
+
+<br>
+<p align="center">
+  <img src="resources/assets/用例2.png" alt="用例2" width="100%" />
+</p>
+
+<br>
+<p align="center">
   <img src="resources/assets/1.png" alt="Agent 对话：流式 thought + 代码块 + 执行结果" width="100%" />
 </p>
 <p align="center"><sub>用户要求：根据已有数据对未知数据插值并探索性分析</sub></p>

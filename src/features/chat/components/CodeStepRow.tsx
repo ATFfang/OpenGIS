@@ -210,8 +210,10 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   const hasOutput = !!output.trim()
   const hasError = !!error
 
-  // Error rows default to collapsed; success output defaults to expanded.
-  const [collapsed, setCollapsed] = useState(hasError)
+  // Long outputs (>800 chars) or error rows default to collapsed.
+  const OUTPUT_COLLAPSE_THRESHOLD = 800
+  const isLongOutput = output.length > OUTPUT_COLLAPSE_THRESHOLD
+  const [collapsed, setCollapsed] = useState(hasError || isLongOutput)
 
   // Nothing to show — skip the row entirely.
   if (!hasOutput && !hasError) return null
@@ -219,10 +221,48 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   // ── Success path: render output as Markdown for rich formatting
   //    (tables, lists, bold, code blocks, etc.). ──
   if (!hasError) {
+    // Short output — render inline without collapse
+    if (!isLongOutput) {
+      return (
+        <div className="ml-[30px] -mt-1">
+          <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
+            <MarkdownBlock markdown={output} />
+          </div>
+        </div>
+      )
+    }
+
+    // Long output — render with collapsible wrapper
+    const lineCount = output.split('\n').length
     return (
       <div className="ml-[30px] -mt-1">
-        <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
-          <MarkdownBlock markdown={output} />
+        <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/60">
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            className="w-full flex items-center gap-2 py-1.5 px-3 text-[11px] hover:bg-bg-hover/50 transition-colors"
+          >
+            <Code2 className="w-3 h-3 text-accent-primary/70 shrink-0" />
+            <span className="uppercase tracking-wider font-semibold text-text-secondary/80">
+              Output
+              <span className="text-text-muted/50 normal-case tracking-normal ml-2">
+                ({lineCount} {lineCount === 1 ? 'line' : 'lines'}, {output.length.toLocaleString()} chars)
+              </span>
+            </span>
+            <span className="flex-1" />
+            {collapsed ? (
+              <ChevronRight className="w-3 h-3 text-text-muted" />
+            ) : (
+              <ChevronDown className="w-3 h-3 text-text-muted" />
+            )}
+          </button>
+
+          {!collapsed && (
+            <div className="border-t border-border/40 p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
+              <div className="text-[13px] leading-[1.7] text-text-primary/85">
+                <MarkdownBlock markdown={output} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )

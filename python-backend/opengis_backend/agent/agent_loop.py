@@ -25,6 +25,7 @@ References:
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -37,6 +38,54 @@ from opengis_backend.constants import (  # noqa: E402 module-level import
 )
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────
+# Retry configuration for transient LLM call failures
+# ─────────────────────────────────────────────────────────────────────
+
+LLM_MAX_RETRIES = 3
+LLM_BASE_DELAY = 1.0  # seconds
+LLM_RETRYABLE_EXCEPTIONS: tuple = (
+    ConnectionError,
+    TimeoutError,
+    OSError,  # covers network-level issues like ConnectionResetError
+)
+
+# Include litellm exceptions (primary LLM library used in this project)
+try:
+    from litellm.exceptions import (
+        APIConnectionError as LiteLLMConnectionError,
+        InternalServerError as LiteLLMInternalError,
+        RateLimitError as LiteLLMRateLimitError,
+        ServiceUnavailableError as LiteLLMServiceUnavailable,
+        BadGatewayError as LiteLLMBadGateway,
+        APIError as LiteLLMAPIError,
+    )
+    LLM_RETRYABLE_EXCEPTIONS = (
+        *LLM_RETRYABLE_EXCEPTIONS,
+        LiteLLMConnectionError,
+        LiteLLMInternalError,
+        LiteLLMRateLimitError,
+        LiteLLMServiceUnavailable,
+        LiteLLMBadGateway,
+        LiteLLMAPIError,
+    )
+except ImportError:
+    pass
+
+# Try to include httpx exceptions if available
+try:
+    import httpx
+    LLM_RETRYABLE_EXCEPTIONS = (*LLM_RETRYABLE_EXCEPTIONS, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError)
+except ImportError:
+    pass
+
+# Try to include openai SDK exceptions if available
+try:
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
+    LLM_RETRYABLE_EXCEPTIONS = (*LLM_RETRYABLE_EXCEPTIONS, APIConnectionError, APITimeoutError, RateLimitError)
+except ImportError:
+    pass
 
 # ─────────────────────────────────────────────────────────────────────
 # Code block extraction
@@ -580,21 +629,52 @@ class AgentLoop:
                 parser.feed(piece)
 
             logger.info("[LOOP-DEBUG] LLM call START, _interrupted=%s", self._interrupted)
-            try:
-                response = self.llm_call(messages, on_delta=_on_llm_delta)
-                parser.finish()
-            except TypeError:
-                # llm_call doesn't accept on_delta (older shim) — fall
-                # back to non-streaming and emit a single thought delta.
-                response = self.llm_call(messages)
-                if response and self.on_thought_delta:
-                    try:
-                        self.on_thought_delta(response)
-                    except Exception as e:
-                        logger.warning("on_thought_delta failed: %s", e)
-            except Exception as e:
-                logger.error("[LOOP-DEBUG] LLM call EXCEPTION: %s(%s), _interrupted=%s", type(e).__name__, e, self._interrupted)
-                raise
+            response = None
+            for _retry_attempt in range(LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.llm_call(messages, on_delta=_on_llm_delta)
+                    parser.finish()
+                    break
+                except TypeError:
+                    # llm_call doesn't accept on_delta (older shim) — fall
+                    # back to non-streaming and emit a single thought delta.
+                    response = self.llm_call(messages)
+                    if response and self.on_thought_delta:
+                        try:
+                            self.on_thought_delta(response)
+                        except Exception as e:
+                            logger.warning("on_thought_delta failed: %s", e)
+                    break
+                except LLM_RETRYABLE_EXCEPTIONS as e:
+                    if self._interrupted:
+                        logger.info("[LOOP-DEBUG] Interrupted during retry, not retrying.")
+                        raise
+                    if _retry_attempt >= LLM_MAX_RETRIES:
+                        logger.error("[LOOP-DEBUG] LLM call failed after %d retries: %s(%s)",
+                                     LLM_MAX_RETRIES, type(e).__name__, e)
+                        raise
+                    delay = LLM_BASE_DELAY * (2 ** _retry_attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "[LOOP-RETRY] LLM call attempt %d/%d failed (%s: %s), retrying in %.1fs...",
+                        _retry_attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, delay,
+                    )
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback("retrying", f"Connection error, retrying ({_retry_attempt + 1}/{LLM_MAX_RETRIES})...")
+                        except Exception:
+                            pass
+                    time.sleep(delay)
+                    # Reset the streaming parser for the retry attempt
+                    parser = StreamingParser(
+                        on_thought_delta=_on_chunk_thought,
+                        on_code_start=_on_chunk_code_start,
+                        on_code_delta=_on_chunk_code_delta,
+                        on_code_end=_on_chunk_code_end,
+                    )
+                except Exception as e:
+                    logger.error("[LOOP-DEBUG] LLM call EXCEPTION (non-retryable): %s(%s), _interrupted=%s",
+                                 type(e).__name__, e, self._interrupted)
+                    raise
 
             duration_ms = (time.monotonic() - t0) * 1000
             logger.info("[LOOP-DEBUG] LLM call END, duration=%.0fms, _interrupted=%s, response_len=%d",
