@@ -55,6 +55,10 @@ def build_workflow_loop(
     step_callback: Optional[Callable[[AgentStep], None]] = None,
     progress_callback: Optional[Callable[[str, str], None]] = None,
     risky_op_listener: Optional[Callable[[dict], None]] = None,
+    on_thought_delta: Optional[Callable[[str], None]] = None,
+    on_code_start: Optional[Callable[[int], None]] = None,
+    on_code_delta: Optional[Callable[[int, str], None]] = None,
+    on_code_end: Optional[Callable[[int], None]] = None,
 ) -> tuple["WorkflowLoop", Any]:
     """Build a fresh WorkflowLoop + subprocess executor.
 
@@ -140,6 +144,10 @@ def build_workflow_loop(
         max_retries_per_node=max_retries_per_node,
         step_callback=step_callback,
         progress_callback=progress_callback,
+        on_thought_delta=on_thought_delta,
+        on_code_start=on_code_start,
+        on_code_delta=on_code_delta,
+        on_code_end=on_code_end,
         context=ContextManager(),
     )
 

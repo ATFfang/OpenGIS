@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult, extract_code_block, extract_thought
+from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult, StreamingParser, extract_code_block, extract_thought
 from opengis_backend.agent.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
@@ -239,13 +239,19 @@ class WorkflowLoop:
         Optional pre-existing ContextManager.
     """
 
-    llm_call: Callable[[list[dict]], str]
+    llm_call: Callable[..., str]
     executor_call: Callable[[str], CodeExecResult]
     system_prompt: str
     workflow: WorkflowDocument
     max_retries_per_node: int = 3
     step_callback: Optional[Callable[[AgentStep], None]] = None
     progress_callback: Optional[Callable[[str, str], None]] = None
+    # Streaming hooks — same as AgentLoop. When provided, the LLM call
+    # uses stream=True and tokens are forwarded in real-time.
+    on_thought_delta: Optional[Callable[[str], None]] = None
+    on_code_start: Optional[Callable[[int], None]] = None
+    on_code_delta: Optional[Callable[[int, str], None]] = None
+    on_code_end: Optional[Callable[[int], None]] = None
     context: ContextManager = field(default_factory=ContextManager)
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point.
@@ -389,8 +395,63 @@ class WorkflowLoop:
                     pass
 
             t0 = time.monotonic()
+
+            # Build a streaming parser for this LLM call when streaming
+            # callbacks are provided. Tokens are forwarded to the UI in
+            # real-time, just like in the free-form AgentLoop.
+            code_started = {"v": False}
+
+            def _wf_on_thought(text: str) -> None:
+                if self.on_thought_delta:
+                    try:
+                        self.on_thought_delta(text)
+                    except Exception:
+                        logger.exception("on_thought_delta failed")
+
+            def _wf_on_code_start() -> None:
+                code_started["v"] = True
+                if self.on_code_start:
+                    try:
+                        self.on_code_start(step_index)
+                    except Exception:
+                        logger.exception("on_code_start failed")
+
+            def _wf_on_code_delta(text: str) -> None:
+                if self.on_code_delta:
+                    try:
+                        self.on_code_delta(step_index, text)
+                    except Exception:
+                        logger.exception("on_code_delta failed")
+
+            def _wf_on_code_end() -> None:
+                if self.on_code_end:
+                    try:
+                        self.on_code_end(step_index)
+                    except Exception:
+                        logger.exception("on_code_end failed")
+
+            parser = StreamingParser(
+                on_thought_delta=_wf_on_thought,
+                on_code_start=_wf_on_code_start,
+                on_code_delta=_wf_on_code_delta,
+                on_code_end=_wf_on_code_end,
+            )
+
+            def _on_llm_delta(piece: str) -> None:
+                parser.feed(piece)
+
+            response = None
             try:
+                response = self.llm_call(messages, on_delta=_on_llm_delta)
+                parser.finish()
+            except TypeError:
+                # llm_call doesn't accept on_delta — fall back to non-streaming.
                 response = self.llm_call(messages)
+                if response and self.on_thought_delta:
+                    try:
+                        self.on_thought_delta(response)
+                    except Exception:
+                        logger.exception("on_thought_delta failed on fallback")
             except Exception as e:
                 logger.error("LLM call failed at node %s: %s", node.id, e)
                 raise

@@ -139,3 +139,6 @@ python-backend/pytest_out.txt
 
 # ===== Workflow files =====
 *.flow.json
+
+# Local experiments / external repos
+local/

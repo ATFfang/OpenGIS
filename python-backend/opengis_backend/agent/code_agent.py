@@ -345,6 +345,10 @@ class GISCodeAgent:
                 step_callback=_step_callback,
                 progress_callback=_progress_callback,
                 risky_op_listener=risky_listener,
+                on_thought_delta=_on_thought_delta,
+                on_code_start=_on_code_start,
+                on_code_delta=_on_code_delta,
+                on_code_end=_on_code_end,
             )
             logger.info(
                 "Workflow mode: executing '%s' with %d nodes",
