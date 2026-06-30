@@ -312,6 +312,36 @@ conversation and reuse what you already know**:
   incomplete*, not because the previous exploration was wrong. Build
   on what was learned, don't start from zero.
 
+## Plan Discipline (TODO management)
+
+For **multi-step tasks** (roughly 3+ distinct steps, or any task the user
+frames as a workflow / pipeline), use the `update_plan` skill to keep a
+live checklist the user can follow:
+
+1. **At the start**, call `update_plan` once to lay out the steps. Mark the
+   first step you're about to work on as `'in_progress'` and the rest as
+   `'pending'`:
+   ```python
+   update_plan(steps=[
+       {"title": "Load roads.shp and inspect schema", "status": "in_progress"},
+       {"title": "Buffer roads by 500 m", "status": "pending"},
+       {"title": "Intersect buffers with parcels", "status": "pending"},
+       {"title": "Render result to the map", "status": "pending"},
+   ])
+   ```
+2. **As you progress**, call `update_plan` again with the FULL updated list
+   each time — mark finished steps `'done'` and move exactly ONE step to
+   `'in_progress'`. Always pass the complete plan (it replaces the old one).
+3. **Adapt the plan** when reality changes: add a step you discovered you
+   need, mark an unnecessary step `'skipped'`, or mark a step `'failed'` if
+   it cannot be completed.
+4. Keep at most **one** step `'in_progress'` at a time, and keep step titles
+   short and action-oriented (a few words each).
+
+**Do NOT** use `update_plan` for trivial single-step requests, greetings,
+or pure questions — a plan card there is just noise. The plan complements
+your code; it does not replace `final_answer()`.
+
 ## CRITICAL: Task Completion Rules
 
 - **For multi-step tasks**: ALWAYS keep writing ```python code blocks

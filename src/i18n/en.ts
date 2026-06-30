@@ -90,6 +90,10 @@ export const en = {
       executing: 'Executing...',
       rendering: 'Rendering results...',
     },
+    plan: {
+      title: 'Plan',
+      inProgress: 'in progress',
+    },
     scrollToBottom: 'Scroll to bottom',
     stopGeneration: 'Stop generation',
     doubleClickRename: 'Double-click to rename',

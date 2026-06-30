@@ -36,6 +36,7 @@ export type SayType =
   | 'code_result'      // Stdout/stderr from executing a code block
   | 'image'            // Inline image (e.g. matplotlib plot saved by save_plot)
   | 'command'          // A frontend command (map.addLayer etc.)
+  | 'plan'             // A TODO / plan checklist emitted by update_plan
   | 'progress'         // Execution progress indicator
   | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
   | 'error'
@@ -52,6 +53,31 @@ export type AskType =
   | 'command'
   | 'completion_result'
   | 'resume_task'
+
+// ── Plan / TODO checklist (emitted by the backend `update_plan` skill) ──
+export type PlanStepStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'done'
+  | 'skipped'
+  | 'failed'
+
+export interface PlanStep {
+  id: string
+  title: string
+  status: PlanStepStatus
+  note?: string
+}
+
+export interface PlanData {
+  /** Stable id; repeated updates with the same id replace the same card. */
+  planId: string
+  title?: string
+  steps: PlanStep[]
+  runId?: string
+  /** Wall-clock of the latest update, for subtle "updated" affordances. */
+  updatedAt?: number
+}
 
 export interface UIMessage {
   ts: number
@@ -95,6 +121,10 @@ export interface UIMessage {
   // Progress indicator — filled for say='progress'.
   progressStage?: string
   progressDetail?: string
+
+  // Plan / TODO checklist — filled for say='plan'. Upserted by planId so
+  // repeated update_plan() calls within a run update the same card.
+  planData?: PlanData
 
   // Model attribution
   modelInfo?: {

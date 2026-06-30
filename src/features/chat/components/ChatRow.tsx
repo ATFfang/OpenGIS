@@ -6,6 +6,7 @@ import { ThinkingRow } from './ThinkingRow'
 import { ToolCallRow } from './ToolCallRow'
 import { CodeStepRow, CodeResultRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
+import PlanRow from './PlanRow'
 import { useChatStore } from '@/stores/chatStore'
 
 interface ChatRowProps {
@@ -102,6 +103,11 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
   // Inline image (matplotlib plot etc.) emitted via rpc.ui.chat.show_image.
   if (type === 'image') {
     return <ImageRow message={message} />
+  }
+
+  // Plan / TODO checklist emitted via rpc.ui.chat.plan_update.
+  if (type === 'plan') {
+    return <PlanRow planData={message.planData} />
   }
 
   // Soft stop: agent hit its step budget. Shows summary (already streamed

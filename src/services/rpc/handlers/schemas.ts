@@ -230,6 +230,35 @@ export const ShowTableSchema = z.object({
   max_rows: z.number().int().positive().optional(),
 });
 
+/**
+ * 计划 / TODO 清单更新。后端 `update_plan` skill 调用本 method，每次携带
+ * 完整的步骤列表（声明式全量替换）。前端按 `plan_id` upsert 同一张卡片。
+ */
+export const PlanStepStatusSchema = z.enum([
+  'pending',
+  'in_progress',
+  'done',
+  'skipped',
+  'failed',
+]);
+
+export const PlanUpdateSchema = z.object({
+  plan_id: z.string().min(1),
+  title: z.string().optional(),
+  steps: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        status: PlanStepStatusSchema,
+        note: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+  run_id: z.string().optional(),
+});
+
 // ─────────────────────────────────────────────────────────────────────
 // §1.3 rpc.ui.ask.*
 // ─────────────────────────────────────────────────────────────────────

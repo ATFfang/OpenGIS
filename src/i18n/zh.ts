@@ -90,6 +90,10 @@ export const zh = {
       executing: '执行中...',
       rendering: '渲染结果中...',
     },
+    plan: {
+      title: '任务计划',
+      inProgress: '进行中',
+    },
     scrollToBottom: '滚动到底部',
     stopGeneration: '停止生成',
     doubleClickRename: '双击重命名',
