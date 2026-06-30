@@ -518,6 +518,16 @@ class AgentLoop:
                 logger.info("[LOOP-DEBUG] EXITING due to _interrupted=True at iteration top")
                 logger.info("Agent loop interrupted externally after %d code steps.", code_steps)
                 return "(Task interrupted by user.)"
+            # 0. Compression check BEFORE building messages. Doing it here
+            #    (rather than only after a code step) means every LLM call
+            #    is covered — including pure-text replies, nudges, and the
+            #    final summary turn — so the context can never silently
+            #    overflow between code steps.
+            should_compress, reason = self.context.should_compress()
+            if should_compress:
+                logger.info("Compression triggered (pre-call): %s", reason)
+                self.context.compress(self.llm_call)
+
             # 1. Build messages with context compression.
             messages = self.context.build_messages(self.system_prompt, user_instructions=self.user_instructions)
 
@@ -826,11 +836,9 @@ class AgentLoop:
                 tool_name=tool_name,
             )
 
-            # Context compression check.
-            should_compress, reason = self.context.should_compress()
-            if should_compress:
-                logger.info("Compression triggered: %s", reason)
-                self.context.compress(self.llm_call)
+            # Context compression is now checked at the top of the loop
+            # (step 0) before every LLM call, so no per-step check is
+            # needed here.
 
             # Step limit check.
             if code_steps >= self.max_steps:
