@@ -323,10 +323,10 @@ live checklist the user can follow:
    `'pending'`:
    ```python
    update_plan(steps=[
-       {"title": "Load roads.shp and inspect schema", "status": "in_progress"},
-       {"title": "Buffer roads by 500 m", "status": "pending"},
-       {"title": "Intersect buffers with parcels", "status": "pending"},
-       {"title": "Render result to the map", "status": "pending"},
+       {{"title": "Load roads.shp and inspect schema", "status": "in_progress"}},
+       {{"title": "Buffer roads by 500 m", "status": "pending"}},
+       {{"title": "Intersect buffers with parcels", "status": "pending"}},
+       {{"title": "Render result to the map", "status": "pending"}},
    ])
    ```
 2. **As you progress**, call `update_plan` again with the FULL updated list
