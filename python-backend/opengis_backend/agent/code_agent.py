@@ -155,6 +155,20 @@ class GISCodeAgent:
         ctx.meta.setdefault("run_id", archive.run_id)
         ctx.meta.setdefault("script_dir", str(archive.script_dir))
 
+        # Wire orchestration deps so the Agent-as-Tool sub-agent skills
+        # (run_subagent / run_subagents) can spin up isolated child loops.
+        # They read these back from ctx.meta and reuse build_agent_loop().
+        ctx.meta.setdefault("_skill_registry", self.skills)
+        ctx.meta.setdefault(
+            "_llm_config",
+            LLMConfig(
+                protocol=self.protocol,
+                model=self.model,
+                api_key=self.api_key,
+                base_url=self.base_url,
+            ),
+        )
+
         # Open the run archive.
         run_archive = RunArchive.open(
             run_id=archive.run_id,

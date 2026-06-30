@@ -38,6 +38,7 @@ export type SayType =
   | 'command'          // A frontend command (map.addLayer etc.)
   | 'plan'             // A TODO / plan checklist emitted by update_plan
   | 'progress'         // Execution progress indicator
+  | 'subagent'         // Isolated sub-agent delegation card (run_subagent / run_subagents)
   | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
   | 'error'
   | 'followup'
@@ -76,6 +77,32 @@ export interface PlanData {
   steps: PlanStep[]
   runId?: string
   /** Wall-clock of the latest update, for subtle "updated" affordances. */
+  updatedAt?: number
+}
+
+// ── Sub-agent delegation card (emitted by run_subagent / run_subagents) ──
+// We deliberately surface ONLY a content-free status (task title + state),
+// never the child agent's internal steps — the whole point of a sub-agent
+// is to keep that mess out of the main context.
+export type SubagentTaskStatus = 'running' | 'done' | 'failed'
+
+export interface SubagentTask {
+  title: string
+  status: SubagentTaskStatus
+}
+
+export interface SubagentData {
+  /** Stable id; repeated updates with the same id replace the same card. */
+  subagentId: string
+  status: 'running' | 'done'
+  /** True when this is a parallel fan-out (run_subagents with >1 task). */
+  parallel: boolean
+  tasks: SubagentTask[]
+  okCount?: number
+  total?: number
+  runId?: string
+  /** Wall-clock of first/last update — drives the elapsed-time chip. */
+  startedAt?: number
   updatedAt?: number
 }
 
@@ -125,6 +152,10 @@ export interface UIMessage {
   // Plan / TODO checklist — filled for say='plan'. Upserted by planId so
   // repeated update_plan() calls within a run update the same card.
   planData?: PlanData
+
+  // Sub-agent delegation card — filled for say='subagent'. Upserted by
+  // subagentId so the running → done transition animates in place.
+  subagentData?: SubagentData
 
   // Model attribution
   modelInfo?: {

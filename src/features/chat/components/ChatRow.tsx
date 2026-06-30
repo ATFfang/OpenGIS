@@ -7,6 +7,7 @@ import { ToolCallRow } from './ToolCallRow'
 import { CodeStepRow, CodeResultRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
 import PlanRow from './PlanRow'
+import { SubagentRow } from './SubagentRow'
 import { useChatStore } from '@/stores/chatStore'
 
 interface ChatRowProps {
@@ -108,6 +109,11 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
   // Plan / TODO checklist emitted via rpc.ui.chat.plan_update.
   if (type === 'plan') {
     return <PlanRow planData={message.planData} />
+  }
+
+  // Sub-agent running indicator emitted via rpc.ui.chat.subagent_update.
+  if (type === 'subagent') {
+    return <SubagentRow data={message.subagentData} />
   }
 
   // Soft stop: agent hit its step budget. Shows summary (already streamed

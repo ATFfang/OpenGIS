@@ -72,6 +72,8 @@ import {
   ZoomToLayerSchema,
 } from './schemas';
 import { pathToImageUrl } from './_image_url';
+import { newLayerId } from '../idGen';
+import { v4 as uuidv4 } from 'uuid';
 
 // ─────────────────────────────────────────────────────────────────────
 // Basemap 别名表
@@ -151,7 +153,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       );
     }
 
-    const layerId = `layer_${Math.abs(hashString(displayName + filePath)) % 10 ** 8}`;
+    const layerId = newLayerId();
     const meta: DataSourceMeta = {
       fileName: filePath.split(/[\\/]/).pop() || displayName,
       extension: ext,
@@ -212,7 +214,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       bandCount: 3,
       crs: 'EPSG:3857',
     };
-    const layerId = `raster_${Math.abs(hashString(parsed.name + parsed.url)) % 10 ** 8}`;
+    const layerId = `raster_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName: parsed.name,
       extension: '.tile',
@@ -300,7 +302,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       );
     }
 
-    const layerId = `raster_${Math.abs(hashString(displayName + parsed.path)) % 10 ** 8}`;
+    const layerId = `raster_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName,
       extension: '.tif',
@@ -406,7 +408,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       imageCoordinates,
     };
 
-    const layerId = `image_${Math.abs(hashString(parsed.path)) % 10 ** 8}`;
+    const layerId = `image_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName,
       extension: getExtensionLower(parsed.path) || '.png',
@@ -714,10 +716,13 @@ export const mapHandlers: Record<string, RpcHandler> = {
     const geometryType = detectGeometryType(fc);
     const bbox = computeBBox(fc);
     const displayName = parsed.name;
+    // id 必须内容无关且唯一：同名图层多轮生成不应互相覆盖，
+    // 并行 subagent 同时造层也不会因 hash 碰撞而丢失。
+    // Python 端会显式带上 layer_id（uuid），这里只是兜底。
     const layerId =
       typeof extras.layer_id === 'string' && extras.layer_id
         ? (extras.layer_id as string)
-        : `layer_${Math.abs(hashString(displayName)) % 10 ** 8}`;
+        : newLayerId();
 
     const data: ParsedVectorData = {
       kind: 'vector',
@@ -827,32 +832,52 @@ export const mapHandlers: Record<string, RpcHandler> = {
   'rpc.ui.map.set_layer_style': (params) => {
     const parsed = parseParams(SetLayerStyleSchema, params, 'rpc.ui.map.set_layer_style');
     const store = useMapStore.getState();
-    if (!store.getLayerById(parsed.layer_id)) {
+    const layer = store.getLayerById(parsed.layer_id);
+    if (!layer) {
       throw RpcError.invalidParams(
         `set_layer_style: layer_id '${parsed.layer_id}' not found`,
         { method: 'rpc.ui.map.set_layer_style' },
       );
     }
 
-    // Python display.py::update_layer_style 发来的 paint 里只有
-    // `fill-color` / `fill-opacity`（或 `circle-color` / `line-color` 等
-    // 同义 key 取决于 type）。我们从 paint 里提 color/opacity 投影到
-    // LayerStore 的 `style.color / style.opacity` 字段，并忠实保留
-    // 原 style 给 MapEngine 将来细粒度消费。
+    // Python display.py::update_layer_style 发来的 paint 里通常只有
+    // `fill-color` / `fill-opacity`，但 MapLibre paint 可能携带 stroke /
+    // radius 等更多字段。这里把所有能映射到 LayerStyle 的字段都透传，
+    // 避免之前只取 color/opacity 造成的样式丢失。
     const paint = (parsed.style.paint ?? {}) as Record<string, unknown>;
-    const color =
-      firstDefinedString(paint, ['fill-color', 'line-color', 'circle-color']) ?? undefined;
-    const opacity =
-      firstDefinedNumber(paint, ['fill-opacity', 'line-opacity', 'circle-opacity']) ?? undefined;
 
-    if (color !== undefined) {
-      store.updateLayerStyle(parsed.layer_id, { color });
+    // graduated / categorized 专题层的颜色由分级/分类配置决定，
+    // 直接改 style.color 是无效语义且会让 style.color 与实际渲染不一致，
+    // 因此对专题层屏蔽基础 color 的写入（opacity/stroke 等仍可改）。
+    const isThematic =
+      layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized';
+
+    const styleUpdates: Partial<LayerStyle> = {};
+
+    if (!isThematic) {
+      const color = firstDefinedString(paint, ['fill-color', 'line-color', 'circle-color']);
+      if (color !== null) styleUpdates.color = color;
     }
-    if (opacity !== undefined) {
-      store.setLayerOpacity(parsed.layer_id, opacity);
+    const opacity = firstDefinedNumber(paint, ['fill-opacity', 'line-opacity', 'circle-opacity']);
+    if (opacity !== null) styleUpdates.opacity = opacity;
+    const fillOpacity = firstDefinedNumber(paint, ['fill-opacity']);
+    if (fillOpacity !== null) styleUpdates.fillOpacity = fillOpacity;
+    const strokeColor = firstDefinedString(paint, ['stroke-color', 'circle-stroke-color']);
+    if (strokeColor !== null) styleUpdates.strokeColor = strokeColor;
+    const strokeWidth = firstDefinedNumber(paint, [
+      'stroke-width',
+      'line-width',
+      'circle-stroke-width',
+    ]);
+    if (strokeWidth !== null) styleUpdates.strokeWidth = strokeWidth;
+    const radius = firstDefinedNumber(paint, ['circle-radius']);
+    if (radius !== null) styleUpdates.radius = radius;
+
+    if (Object.keys(styleUpdates).length > 0) {
+      store.updateLayerStyle(parsed.layer_id, styleUpdates);
     }
 
-    return { layer_id: parsed.layer_id, applied: { color, opacity } };
+    return { layer_id: parsed.layer_id, applied: styleUpdates };
   },
 
   'rpc.ui.map.set_layer_visibility': (params) => {
@@ -897,17 +922,6 @@ function firstDefinedNumber(
     if (typeof v === 'number' && Number.isFinite(v)) return v;
   }
   return null;
-}
-
-/** FNV-1a 简易哈希——只用来给 layer_id 造默认短串，冲突不关键。 */
-function hashString(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  // 映射到 32-bit signed 范围
-  return h | 0;
 }
 
 /** 从路径里拿小写扩展名（含点），没扩展名返回空串。 */

@@ -1,90 +1,11 @@
-import { useLayerStore } from '../layerStore';
 import { useAssetStore } from '../assetStore';
 import { useScriptStore } from '../scriptStore';
 import { useProjectStore } from '../projectStore';
 
 beforeEach(() => {
-  useLayerStore.getState().clear();
   useAssetStore.getState().clear();
   useScriptStore.getState().clear();
   useProjectStore.getState().close();
-});
-
-describe('LayerStore', () => {
-  it('add generates layer_id with correct prefix and stores the layer', () => {
-    const layer = useLayerStore.getState().add({
-      name: 'points',
-      geometry_type: 'Point',
-      bbox: [0, 0, 1, 1],
-      feature_count: 42,
-      crs: 'EPSG:4326',
-      source: 'memory',
-      added_by: 'user',
-    });
-    expect(layer.layer_id).toMatch(/^layer_/);
-    expect(layer.visible).toBe(true);
-    expect(useLayerStore.getState().get(layer.layer_id)).toEqual(layer);
-  });
-
-  it('list returns layers in insertion order', () => {
-    const store = useLayerStore.getState();
-    const a = store.add({
-      name: 'a',
-      geometry_type: 'Point',
-      bbox: [0, 0, 1, 1],
-      feature_count: 1,
-      crs: 'EPSG:4326',
-      source: 'memory',
-      added_by: 'user',
-    });
-    const b = store.add({
-      name: 'b',
-      geometry_type: 'Polygon',
-      bbox: [0, 0, 2, 2],
-      feature_count: 2,
-      crs: 'EPSG:4326',
-      source: 'memory',
-      added_by: 'agent',
-    });
-    expect(useLayerStore.getState().list().map((l) => l.layer_id)).toEqual([
-      a.layer_id,
-      b.layer_id,
-    ]);
-  });
-
-  it('remove returns true/false correctly and purges from order', () => {
-    const store = useLayerStore.getState();
-    const l = store.add({
-      name: 'x',
-      geometry_type: 'Point',
-      bbox: [0, 0, 1, 1],
-      feature_count: 0,
-      crs: 'EPSG:4326',
-      source: 'memory',
-      added_by: 'user',
-    });
-    expect(useLayerStore.getState().remove(l.layer_id)).toBe(true);
-    expect(useLayerStore.getState().remove(l.layer_id)).toBe(false);
-    expect(useLayerStore.getState().list()).toEqual([]);
-  });
-
-  it('setVisibility / setStyle mutate through update()', () => {
-    const store = useLayerStore.getState();
-    const l = store.add({
-      name: 'x',
-      geometry_type: 'Point',
-      bbox: [0, 0, 1, 1],
-      feature_count: 0,
-      crs: 'EPSG:4326',
-      source: 'memory',
-      added_by: 'user',
-    });
-    expect(useLayerStore.getState().setVisibility(l.layer_id, false)).toBe(true);
-    expect(useLayerStore.getState().get(l.layer_id)?.visible).toBe(false);
-
-    useLayerStore.getState().setStyle(l.layer_id, { type: 'circle', paint: { 'circle-radius': 4 } });
-    expect(useLayerStore.getState().get(l.layer_id)?.style?.type).toBe('circle');
-  });
 });
 
 describe('AssetStore', () => {

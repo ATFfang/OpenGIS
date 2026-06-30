@@ -166,24 +166,44 @@ export const CodeStepRow = memo(({ message, isExpanded, onToggleExpand }: CodeSt
 
           {effectiveExpanded && (
             <div className="border-t border-border/60">
-              <SyntaxHighlighter
-                style={codeTheme}
-                language="python"
-                PreTag="div"
-                customStyle={{
-                  margin: 0,
-                  borderRadius: 0,
-                  fontSize: '12px',
-                  lineHeight: '1.6',
-                  padding: '12px 16px',
-                  background: 'var(--bg-tertiary)',
-                  maxHeight: '400px',
-                  overflowY: 'auto',
-                  textShadow: 'none',
-                }}
-              >
-                {code}
-              </SyntaxHighlighter>
+              {isStreaming ? (
+                // While streaming, re-highlighting the whole block on every
+                // code_delta is expensive (Prism re-tokenises the full text
+                // each keystroke). Show plain monospace text live; we swap in
+                // the highlighted view the instant the block finishes.
+                <pre
+                  className="m-0 font-mono overflow-auto whitespace-pre"
+                  style={{
+                    fontSize: '12px',
+                    lineHeight: '1.6',
+                    padding: '12px 16px',
+                    background: 'var(--bg-tertiary)',
+                    maxHeight: '400px',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <code>{code}</code>
+                </pre>
+              ) : (
+                <SyntaxHighlighter
+                  style={codeTheme}
+                  language="python"
+                  PreTag="div"
+                  customStyle={{
+                    margin: 0,
+                    borderRadius: 0,
+                    fontSize: '12px',
+                    lineHeight: '1.6',
+                    padding: '12px 16px',
+                    background: 'var(--bg-tertiary)',
+                    maxHeight: '400px',
+                    overflowY: 'auto',
+                    textShadow: 'none',
+                  }}
+                >
+                  {code}
+                </SyntaxHighlighter>
+              )}
             </div>
           )}
         </div>

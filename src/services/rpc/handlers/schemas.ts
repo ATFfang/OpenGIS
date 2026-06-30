@@ -259,6 +259,30 @@ export const PlanUpdateSchema = z.object({
   run_id: z.string().optional(),
 });
 
+/**
+ * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents skill
+ * 在委派子任务时调用本 method，前端按 `subagent_id` upsert 同一张卡片。
+ * 只携带任务标题与状态，不携带子智能体的内部步骤/输出（上下文隔离的本意）。
+ */
+export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed']);
+
+export const SubagentUpdateSchema = z.object({
+  subagent_id: z.string().min(1),
+  status: z.enum(['running', 'done']),
+  parallel: z.boolean().optional(),
+  tasks: z
+    .array(
+      z.object({
+        title: z.string(),
+        status: SubagentTaskStatusSchema,
+      }),
+    )
+    .max(8),
+  ok_count: z.number().int().nonnegative().optional(),
+  total: z.number().int().nonnegative().optional(),
+  run_id: z.string().optional(),
+});
+
 // ─────────────────────────────────────────────────────────────────────
 // §1.3 rpc.ui.ask.*
 // ─────────────────────────────────────────────────────────────────────

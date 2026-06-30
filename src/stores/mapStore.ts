@@ -120,11 +120,26 @@ export const useMapStore = create<MapStore>((set, get) => ({
       return { layers: [...state.layers, layer], activeLayerId: layer.id }
     }),
 
-  addLayers: (layers) =>
-    set((state) => ({
-      layers: [...state.layers, ...layers],
-      activeLayerId: layers.length > 0 ? layers[layers.length - 1].id : state.activeLayerId,
-    })),
+  addLayers: (incoming) =>
+    set((state) => {
+      // 与 addLayer 保持一致的去重语义：相同 id 替换而非重复追加，
+      // 避免拖拽多文件 / id 碰撞时产生两条同 id 记录，进而让
+      // MapView 的 diff（基于 Set）和 removeLayer 的 filter 行为错乱。
+      const layers = [...state.layers]
+      for (const layer of incoming) {
+        const idx = layers.findIndex((l) => l.id === layer.id)
+        if (idx !== -1) {
+          layers[idx] = layer
+        } else {
+          layers.push(layer)
+        }
+      }
+      return {
+        layers,
+        activeLayerId:
+          incoming.length > 0 ? incoming[incoming.length - 1].id : state.activeLayerId,
+      }
+    }),
 
   removeLayer: (id) =>
     set((state) => ({
@@ -238,3 +253,69 @@ export const useMapStore = create<MapStore>((set, get) => ({
 
   getVisibleLayers: () => get().layers.filter((l) => l.visible),
 }))
+
+// ─── 持久化 & 工作区作用域隔离 ──────────────────────────────────
+//
+// 修复两个问题：
+//   1) 图层零持久化：重启 / 重开工作区后图层全部消失。
+//   2) 跨工作区泄漏：切换工作区时上一工作区的图层残留进新工作区。
+//
+// 图层是工作区作用域：打开工作区时从 `<workspace>/.opengis/map-layers.json`
+// 加载，变更时防抖写盘，切换工作区时先 flush 旧的、清空、再加载新的。
+
+import { useAssetStore } from './assetStore'
+import { loadLayers, persistLayers, flushLayers } from '@/services/layerPersistence'
+
+// 加载完成前不要把"空图层"写回磁盘，否则会用空数据覆盖已有持久化。
+let _layerPersistReady = false
+
+function _applyLoadedLayers(layers: MapLayerDefinition[]) {
+  useMapStore.setState({
+    layers,
+    activeLayerId: layers.length > 0 ? layers[layers.length - 1].id : null,
+  })
+}
+
+async function _loadLayersForWorkspace(workspacePath: string | null) {
+  _layerPersistReady = false
+  if (!workspacePath) {
+    _layerPersistReady = true
+    return
+  }
+  try {
+    const loaded = await loadLayers(workspacePath)
+    _applyLoadedLayers(loaded)
+  } catch (e) {
+    console.error('[mapStore] 加载持久化图层失败:', e)
+  } finally {
+    _layerPersistReady = true
+  }
+}
+
+// 图层变更 → 防抖持久化到当前工作区。
+useMapStore.subscribe((state, prev) => {
+  if (state.layers === prev.layers) return
+  if (!_layerPersistReady) return
+  const wp = useAssetStore.getState().workspacePath
+  persistLayers(wp, state.layers)
+})
+
+// 工作区切换 → flush 旧的 → 清空 → 加载新的。
+useAssetStore.subscribe((state, prev) => {
+  if (state.workspacePath === prev.workspacePath) return
+  const oldWp = prev.workspacePath
+  const currentLayers = useMapStore.getState().layers
+  _layerPersistReady = false
+  const flushOld = oldWp ? flushLayers(oldWp, currentLayers) : Promise.resolve()
+  flushOld.finally(() => {
+    // 清空旧工作区图层，避免泄漏进新工作区
+    useMapStore.getState().clearLayers()
+    void _loadLayersForWorkspace(state.workspacePath)
+  })
+})
+
+// 若模块加载时工作区已设置，触发初始加载。
+setTimeout(() => {
+  const wp = useAssetStore.getState().workspacePath
+  void _loadLayersForWorkspace(wp)
+}, 100)
