@@ -345,7 +345,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.code_result': {
-        // 参数: { step, output, error, run_id }
+        // 参数: { step, output, error, run_id, duration_ms }
         state._addMessage({
           ts: Date.now(),
           type: 'say',
@@ -354,6 +354,7 @@ function installNotificationBridge(
           stepNumber: params?.step as number | undefined,
           codeError: (params?.error as string | null) ?? null,
           runId: params?.run_id as string | undefined,
+          durationMs: params?.duration_ms as number | undefined,
         })
         break
       }
@@ -415,6 +416,45 @@ function installNotificationBridge(
         break
       }
       case 'chat.cancelled': {
+        // Clean up all partial UI state — same as stream_end.
+        // Without this, thinking bubbles, progress bars, and subagent
+        // cards stay stuck in their "running" state after cancel.
+        const cancelConv = state.activeConversation()
+        if (cancelConv) {
+          for (const msg of cancelConv.messages) {
+            // Mark partial thinking / progress as finished
+            if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
+              state._updateMessage(msg.ts, { partial: false })
+            }
+            // Mark running subagent cards as cancelled
+            if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
+              state._updateMessage(msg.ts, {
+                subagentData: {
+                  ...msg.subagentData,
+                  status: 'cancelled',
+                  updatedAt: Date.now(),
+                },
+              })
+            }
+            // Mark in_progress plan steps as cancelled
+            if (msg.say === 'plan' && msg.planData?.steps?.some((s: any) => s.status === 'in_progress')) {
+              state._updateMessage(msg.ts, {
+                planData: {
+                  ...msg.planData,
+                  steps: msg.planData.steps.map((s: any) =>
+                    s.status === 'in_progress' ? { ...s, status: 'failed' } : s
+                  ),
+                  updatedAt: Date.now(),
+                },
+              })
+            }
+          }
+          // Close any partial assistant text
+          const last = cancelConv.messages[cancelConv.messages.length - 1]
+          if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
+            state._updateMessage(last.ts, { partial: false })
+          }
+        }
         get().setStreaming(false)
         break
       }

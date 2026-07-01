@@ -511,6 +511,17 @@ def _run_exec(code: str, namespace: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    # Set a memory limit to prevent OOM from runaway code (e.g. loading
+    # a 10GB file into memory).  4 GB is generous for GIS workloads while
+    # still preventing the sidecar from being killed by the OS.
+    # Only works on Unix (resource module not available on Windows).
+    try:
+        import resource
+        _MEM_LIMIT = 4 * 1024 * 1024 * 1024  # 4 GB
+        resource.setrlimit(resource.RLIMIT_AS, (_MEM_LIMIT, _MEM_LIMIT))
+    except (ImportError, ValueError, OSError):
+        pass  # Windows or already-limited environment
+
     # Force unbuffered stdio. We also reopen stdout in text mode with
     # line buffering just to be safe on Windows where default buffering
     # bites pip progress bars.

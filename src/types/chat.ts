@@ -84,7 +84,7 @@ export interface PlanData {
 // We deliberately surface ONLY a content-free status (task title + state),
 // never the child agent's internal steps — the whole point of a sub-agent
 // is to keep that mess out of the main context.
-export type SubagentTaskStatus = 'running' | 'done' | 'failed'
+export type SubagentTaskStatus = 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface SubagentTask {
   title: string
@@ -94,7 +94,7 @@ export interface SubagentTask {
 export interface SubagentData {
   /** Stable id; repeated updates with the same id replace the same card. */
   subagentId: string
-  status: 'running' | 'done'
+  status: 'running' | 'done' | 'cancelled'
   /** True when this is a parallel fan-out (run_subagents with >1 task). */
   parallel: boolean
   tasks: SubagentTask[]
@@ -134,6 +134,8 @@ export interface UIMessage {
   scriptAbsPath?: string
   runId?: string
   codeError?: string | null
+  /** Execution duration in milliseconds (filled for code_result). */
+  durationMs?: number
 
   // Whether a backend command finished (for command-type messages)
   commandCompleted?: boolean

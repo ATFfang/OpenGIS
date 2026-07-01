@@ -1,21 +1,61 @@
-import { memo } from 'react'
+import { memo, useState, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { Copy, Check } from 'lucide-react'
-import { useState, useCallback } from 'react'
 import { useChatCodeTheme } from './useChatCodeTheme'
 
 interface MarkdownBlockProps {
   markdown?: string
   showCursor?: boolean
+  /** Optional: resolve a relative image path to a usable URL (async). */
+  resolveImageSrc?: (relativePath: string) => Promise<string>
+}
+
+/**
+ * ResolvedImage — async image component for local file paths.
+ * Uses resolveImageSrc to convert a relative path to a Blob URL via
+ * Electron IPC, then renders the image.
+ */
+function ResolvedImage({ src, alt, resolveImageSrc }: {
+  src: string
+  alt?: string
+  resolveImageSrc: (path: string) => Promise<string>
+}) {
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    resolveImageSrc(src).then((url) => {
+      if (!cancelled) setResolvedSrc(url)
+    }).catch(() => {
+      if (!cancelled) setResolvedSrc(src) // Fallback to original src
+    })
+    return () => { cancelled = true }
+  }, [src, resolveImageSrc])
+
+  if (!resolvedSrc) {
+    return <div className="w-full h-20 rounded-lg bg-bg-tertiary/30 animate-pulse my-2" />
+  }
+
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt}
+      className="max-w-full rounded-lg my-2"
+      onError={(e) => {
+        // Fallback: hide the image if it fails to load
+        ;(e.target as HTMLImageElement).style.display = 'none'
+      }}
+    />
+  )
 }
 
 /**
  * MarkdownBlock — Cline-inspired markdown renderer.
  * Renders markdown with syntax highlighting, GFM support, and cursor animation.
  */
-const MarkdownBlock = memo(({ markdown, showCursor }: MarkdownBlockProps) => {
+const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownBlockProps) => {
   if (!markdown) return null
 
   // NOTE: 之前这里用 `<span className="inline">` 包住 ReactMarkdown，但 react-markdown
@@ -28,6 +68,14 @@ const MarkdownBlock = memo(({ markdown, showCursor }: MarkdownBlockProps) => {
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
+            img({ src, alt, ...props }) {
+              // If resolveImageSrc is provided and src is not an absolute URL,
+              // resolve it asynchronously via Electron IPC.
+              if (resolveImageSrc && src && !/^https?:\/\//.test(src)) {
+                return <ResolvedImage src={src} alt={alt} resolveImageSrc={resolveImageSrc} />
+              }
+              return <img src={src} alt={alt} className="max-w-full rounded-lg my-2" {...props} />
+            },
             code({ className, children, node, ...props }) {
               const match = /language-(\w+)/.exec(className || '')
               const codeString = String(children).replace(/\n$/, '')

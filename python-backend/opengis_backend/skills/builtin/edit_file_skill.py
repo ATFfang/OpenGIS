@@ -1,8 +1,8 @@
-"""edit_file skill — edit file with string replacement and fuzzy matching (OpenCode-style).
+"""edit_file skill — precise string replacement (Claude Code / Cursor style).
 
-Replaces oldString with newString in a file.
-Tries multiple fuzzy matchers in order; stops at first unique match.
-Supports replace_all.
+Replaces old_string with new_string in a file.
+Tries exact match first, then line-trimmed match (ignores trailing whitespace).
+Fails clearly if no unique match — the LLM should read_file first and retry.
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ from opengis_backend.skills.registry import skill
 logger = logging.getLogger(__name__)
 
 # Per-file lock to prevent concurrent edits.
-# We use threading.Lock (not asyncio.Semaphore) because edit_file is
-# invoked synchronously from the agent's tool-bridge worker thread.
 _FILE_LOCKS: dict[str, threading.Lock] = {}
 _FILE_LOCKS_GUARD = threading.Lock()
 _MAX_OUTPUT_CHARS = 2000
@@ -38,69 +36,6 @@ def _detect_line_ending(text: str) -> str:
     return "\n"
 
 
-def _leven_ratio(a: str, b: str) -> float:
-    """Return similarity ratio using difflib (0.0 ~ 1.0)."""
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-# ── Matchers (tried in order) ──────────────────────────────────────────
-
-def _match_exact(content: str, old: str) -> list[int]:
-    idx = content.find(old)
-    return [idx] if idx != -1 else []
-
-
-def _match_line_trimmed(content: str, old: str) -> list[int]:
-    lines_c = [ln.rstrip() for ln in content.splitlines(True)]
-    lines_o = [ln.rstrip() for ln in old.splitlines(True)]
-    joined_c = "".join(lines_c)
-    joined_o = "".join(lines_o)
-    idx = joined_c.find(joined_o)
-    return [idx] if idx != -1 else []
-
-
-def _match_block_anchor(content: str, old: str, threshold: float = 0.6) -> list[int]:
-    """Use first/last line as anchors; fuzzy-match middle lines."""
-    c_lines = content.splitlines(True)
-    o_lines = old.splitlines(True)
-    if len(o_lines) < 2:
-        return []
-    first = o_lines[0].strip()
-    last = o_lines[-1].strip()
-    # Find anchor candidates
-    starts = [i for i, ln in enumerate(c_lines) if ln.strip() == first]
-    ends = [i for i, ln in enumerate(c_lines) if ln.strip() == last]
-    candidates = []
-    for s in starts:
-        for e in ends:
-            if e > s:
-                candidates.append((s, e))
-    if not candidates:
-        return []
-    # Score each candidate
-    scored = []
-    o_middle = [ln.strip() for ln in o_lines[1:-1]]
-    for s, e in candidates:
-        c_middle = [ln.strip() for ln in c_lines[s + 1 : e]]
-        if not o_middle:
-            scored.append((1.0, s))
-            continue
-        ratio = _leven_ratio("\n".join(o_middle), "\n".join(c_middle))
-        if ratio >= threshold:
-            scored.append((ratio, s))
-    if not scored:
-        return []
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [scored[0][1]]
-
-
-def _match_whitespace_normalized(content: str, old: str) -> list[int]:
-    a = " ".join(content.split())
-    b = " ".join(old.split())
-    idx = a.find(b)
-    return [idx] if idx != -1 else []
-
-
 def _find_all(content: str, old: str) -> list[int]:
     """Return all start indices of old in content."""
     indices = []
@@ -114,36 +49,28 @@ def _find_all(content: str, old: str) -> list[int]:
     return indices
 
 
-# ── Core edit logic ───────────────────────────────────────────────────
-
 def _apply_edit(content: str, old: str, new: str, replace_all: bool) -> str | None:
-    """
-    Try matchers in order; return new content or None if no unique match.
-    """
-    matchers = [
-        _match_exact,
-        _match_line_trimmed,
-        _match_whitespace_normalized,
-        lambda c, o: _match_block_anchor(c, o, 0.6),
-        lambda c, o: _match_block_anchor(c, o, 0.4),
-    ]
-    for matcher in matchers:
-        indices = matcher(content, old)
-        if not indices:
-            continue
+    """Try exact match, then line-trimmed match. Return new content or None."""
+    # Strategy 1: Exact match
+    indices = _find_all(content, old)
+    if indices:
         if not replace_all and len(indices) > 1:
-            continue  # ambiguous — try next matcher
-        # Apply
+            return None  # ambiguous — caller reports error
         if replace_all:
             for idx in reversed(indices):
-                end = idx + len(old)
-                content = content[:idx] + new + content[end:]
+                content = content[:idx] + new + content[idx + len(old):]
             return content
-        else:
-            idx = indices[0]
-            return content[:idx] + new + content[idx + len(old) :]
+        return content[:indices[0]] + new + content[indices[0] + len(old):]
 
-    # Fallback: try difflib get_close_matches on lines
+    # Strategy 2: Line-trimmed match (ignore trailing whitespace per line)
+    lines_c = [ln.rstrip() for ln in content.splitlines(True)]
+    lines_o = [ln.rstrip() for ln in old.splitlines(True)]
+    joined_c = "".join(lines_c)
+    joined_o = "".join(lines_o)
+    idx = joined_c.find(joined_o)
+    if idx != -1:
+        return content[:idx] + new + content[idx + len(old):]
+
     return None
 
 
@@ -187,12 +114,16 @@ def _edit_sync(
 
     result = _apply_edit(orig_norm, old_norm, new_norm, replace_all)
     if result is None:
+        # Provide a helpful error: tell the LLM what went wrong and
+        # suggest reading the file first.
+        sample = old_string[:120].replace("\n", "\\n")
         return {
             "success": False,
             "error": (
-                "Could not find a unique match for old_string. "
-                "Try making the match text more specific, "
-                "or include the first and last line of the block."
+                f"old_string not found in {file_path}. "
+                f"Make sure you copy the exact text from read_file output. "
+                f"You may need to read_file first to see the current content. "
+                f"(searched for: \"{sample}{'...' if len(old_string) > 120 else ''}\")"
             ),
             "diff": None,
         }
@@ -207,12 +138,10 @@ def _edit_sync(
         return {"success": False, "error": f"Failed to write file: {e}", "diff": None}
 
     # Generate a simple unified diff for the response
-    import difflib as _difflib
-
     old_lines = original.splitlines(True)
     new_lines = result.splitlines(True)
     diff = "\n".join(
-        _difflib.unified_diff(
+        difflib.unified_diff(
             old_lines, new_lines, fromfile=file_path, tofile=file_path, lineterm=""
         )
     )
@@ -231,26 +160,26 @@ def _edit_sync(
     display_name="Edit File",
     description=(
         "Edit a file by replacing old_string with new_string. "
-        "Uses fuzzy matching (exact → line-trimmed → whitespace-normalized "
-        "→ block-anchor with Levenshtein). "
-        "Make sure old_string is a unique, specific match. "
-        "Prefer editing existing files; use write_file for new files."
+        "old_string must be an EXACT match of the file content (copy from "
+        "read_file output). Trailing whitespace differences are tolerated. "
+        "If the match fails, read_file first to see the current content. "
+        "Use write_file for new files; edit_file for modifying existing ones."
     ),
     category="system",
-    needs_context=True,  # For Gap #2: track file edits
+    needs_context=True,
     params=[
         {"name": "file_path", "type": "string",
          "description": "Absolute path to the file to edit."},
         {"name": "old_string", "type": "string",
-         "description": "The exact or fuzzy text to replace."},
+         "description": "The exact text to replace (copy from read_file output)."},
         {"name": "new_string", "type": "string",
          "description": "The text to replace it with."},
         {"name": "replace_all", "type": "boolean",
-         "description": "Replace all occurrences (default False)."},
+         "description": "Replace all occurrences (default false)."},
     ],
     returns="dict with keys: success (bool), error (str|null), diff (str)",
     examples=[
-        "edit_file('/workspace/main.py', 'def foo():', 'def foo():\n    return 42')",
+        "edit_file('/workspace/main.py', 'def foo():', 'def foo():\\n    return 42')",
     ],
 )
 def edit_file(
@@ -259,11 +188,10 @@ def edit_file(
     new_string: str,
     replace_all: bool = False,
 ) -> dict[str, Any]:
-    """Edit file with fuzzy matching.
+    """Edit file with precise matching.
 
     NOTE: Synchronous on purpose — invoked from the agent's tool-bridge
-    worker thread with no event loop. See docs/ARCHITECTURE.md
-    §Skill Invocation for why we must not be ``async def`` here.
+    worker thread with no event loop.
     """
     # Per-file lock to serialize concurrent edits to the same path.
     lock_key = str(Path(file_path).resolve())

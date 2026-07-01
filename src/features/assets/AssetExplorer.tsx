@@ -51,7 +51,7 @@ import { useDialog } from '@/components/Dialog'
 const GIS_VECTOR_EXTS = new Set(['.geojson', '.json', '.shp', '.gpkg', '.kml', '.kmz', '.gml'])
 const GIS_RASTER_EXTS = new Set(['.tif', '.tiff', '.nc', '.hdf5', '.h5'])
 const GIS_TABLE_EXTS = new Set(['.csv', '.tsv', '.xlsx', '.xls', '.dbf'])
-const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.r', '.ipynb'])
+const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.r', '.ipynb', '.md'])
 const TEXT_EXTS = new Set(['.json', '.yaml', '.yml', '.toml', '.xml', '.html', '.css', '.scss', '.sh', '.bash', '.sql', '.md', '.rst', '.txt', '.log', '.ini', '.cfg', '.conf', '.env', '.gitignore', '.editorconfig'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.gif', '.bmp', '.webp'])
 
@@ -841,6 +841,16 @@ function ContextMenu({
         icon={<FileText className="w-3.5 h-3.5" />}
         label={t.assets.copyPath}
         onClick={handleCopyPath}
+      />
+
+      {/* Show in Finder / Explorer */}
+      <ContextMenuItem
+        icon={<FolderOpen className="w-3.5 h-3.5" />}
+        label={t.assets.showInFolder}
+        onClick={() => {
+          onClose()
+          window.electronAPI?.showItemInFolder(node.path)
+        }}
       />
 
       <div className="h-px bg-border mx-2 my-1" />

@@ -134,6 +134,12 @@ export const ExportMapSchema = z.object({
   quality: z.number().min(0).max(1).optional(),
   /** 可选：如果提供且在 Electron 下，会把结果写到该路径，不返回 base64。 */
   save_path: z.string().optional(),
+  /** 可选：导出前切换到指定底图（basemap id），导出后恢复原底图。 */
+  basemap_id: z.string().optional(),
+  /** 可选：导出前只显示指定图层（layer id 列表），导出后恢复。传空数组 = 隐藏所有图层。 */
+  visible_layers: z.array(z.string()).optional(),
+  /** 可选：导出前隐藏底图（纯白/纯黑背景），导出后恢复。 */
+  hide_basemap: z.boolean().optional(),
 });
 
 /**

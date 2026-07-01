@@ -25,7 +25,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult, StreamingParser, extract_code_block, extract_thought
+from opengis_backend.agent.agent_loop import (
+    AgentStep, CodeExecResult, StreamingParser,
+    LLM_MAX_RETRIES, LLM_BASE_DELAY, LLM_RETRYABLE_EXCEPTIONS,
+    extract_code_block, extract_thought,
+)
 from opengis_backend.agent.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,9 @@ class WorkflowNode:
     node_type: str = "process"  # process | input | output | decision
     config: dict = field(default_factory=dict)
     max_retries: int = 3
+    # Validation hooks — parsed but NOT yet evaluated. Stored so they
+    # round-trip through from_json and are available for future use.
+    hooks: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -73,13 +80,18 @@ class WorkflowDocument:
 
         nodes = []
         for n in data.get("nodes", []):
+            hooks_raw = n.get("hooks", [])
+            hooks = hooks_raw if isinstance(hooks_raw, list) else []
+
             nodes.append(WorkflowNode(
                 id=n.get("id", ""),
                 title=n.get("title", n.get("label", "Untitled")),
                 description=n.get("description", ""),
-                node_type=n.get("type", "process"),
-                config=n.get("config", {}),
-                max_retries=n.get("max_retries", 3),
+                # Accept both frontend (camelCase) and backend (snake_case) names.
+                node_type=n.get("nodeType", n.get("type", "process")),
+                config=n.get("params", n.get("config", {})),
+                max_retries=n.get("maxRetries", n.get("max_retries", 3)),
+                hooks=hooks,
             ))
 
         edges = []
@@ -253,6 +265,9 @@ class WorkflowLoop:
     on_code_delta: Optional[Callable[[int, str], None]] = None
     on_code_end: Optional[Callable[[int], None]] = None
     context: ContextManager = field(default_factory=ContextManager)
+    # When True, the workflow stops immediately if any node fails
+    # (instead of continuing with a failure string as predecessor output).
+    halt_on_failure: bool = False
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point.
     _interrupted: bool = field(default=False, init=False, repr=False)
@@ -332,6 +347,24 @@ class WorkflowLoop:
             node_outputs[node.id] = node_result
             completed_nodes.append(node.id)
 
+            # Halt on failure: if the node failed and halt_on_failure is set,
+            # stop the workflow immediately instead of continuing with bad data.
+            if self.halt_on_failure and node_result.startswith("(Step '"):
+                logger.warning(
+                    "Workflow halted: node '%s' failed and halt_on_failure=True",
+                    node.title,
+                )
+                return (
+                    f"Workflow '{self.workflow.name}' halted at step {step_index}/{total_steps} "
+                    f"('{node.title}') due to failure.\n\n"
+                    f"{node_result}\n\n"
+                    "Steps completed before failure:\n"
+                    + "\n".join(
+                        f"  - {nid}: {node_outputs.get(nid, '(no output)')[:200]}"
+                        for nid in completed_nodes[:-1]
+                    )
+                )
+
         # Generate final summary.
         return self._generate_workflow_summary(
             user_message=user_message,
@@ -374,6 +407,8 @@ class WorkflowLoop:
         error_count = 0
         max_errors = node.max_retries or self.max_retries_per_node
         accumulated_output: list[str] = []
+        nudged = False  # Track whether we've nudged the LLM to write code.
+        sub_step = 0    # Incremented per code execution within this node.
 
         for iteration in range(max_iterations):
             # Check for external interruption.
@@ -441,20 +476,46 @@ class WorkflowLoop:
                 parser.feed(piece)
 
             response = None
-            try:
-                response = self.llm_call(messages, on_delta=_on_llm_delta)
-                parser.finish()
-            except TypeError:
-                # llm_call doesn't accept on_delta — fall back to non-streaming.
-                response = self.llm_call(messages)
-                if response and self.on_thought_delta:
-                    try:
-                        self.on_thought_delta(response)
-                    except Exception:
-                        logger.exception("on_thought_delta failed on fallback")
-            except Exception as e:
-                logger.error("LLM call failed at node %s: %s", node.id, e)
-                raise
+            for _retry_attempt in range(LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.llm_call(messages, on_delta=_on_llm_delta)
+                    parser.finish()
+                    break
+                except TypeError as te:
+                    # Only fall back if the TypeError is about on_delta.
+                    if "on_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
+                        raise
+                    response = self.llm_call(messages)
+                    if response and self.on_thought_delta:
+                        try:
+                            self.on_thought_delta(response)
+                        except Exception:
+                            logger.exception("on_thought_delta failed on fallback")
+                    break
+                except LLM_RETRYABLE_EXCEPTIONS as e:
+                    if self._interrupted:
+                        raise
+                    if _retry_attempt >= LLM_MAX_RETRIES:
+                        logger.error("LLM call failed after %d retries at node %s: %s",
+                                     LLM_MAX_RETRIES, node.id, e)
+                        raise
+                    import random
+                    delay = LLM_BASE_DELAY * (2 ** _retry_attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "[WF-RETRY] node %s attempt %d/%d failed (%s: %s), retrying in %.1fs...",
+                        node.id, _retry_attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, delay,
+                    )
+                    time.sleep(delay)
+                    # Reset streaming parser for retry
+                    parser = StreamingParser(
+                        on_thought_delta=_wf_on_thought,
+                        on_code_start=_wf_on_code_start,
+                        on_code_delta=_wf_on_code_delta,
+                        on_code_end=_wf_on_code_end,
+                    )
+                except Exception as e:
+                    logger.error("LLM call failed at node %s: %s", node.id, e)
+                    raise
             duration_ms = (time.monotonic() - t0) * 1000
 
             # Parse response.
@@ -463,6 +524,26 @@ class WorkflowLoop:
 
             # If no code block, the LLM considers this node DONE.
             if code_block is None:
+                # Nudge: if no code has been executed yet for this node,
+                # the LLM might be explaining its plan instead of doing
+                # the work. Give it ONE nudge to write actual code.
+                if not accumulated_output and not nudged:
+                    nudged = True
+                    logger.info(
+                        "Text-only reply at start of node %s (iteration %d) — nudging to write code.",
+                        node.id, iteration,
+                    )
+                    self.context.add_assistant_message(response)
+                    self.context.add_user_message(
+                        "[System] This step requires code execution. "
+                        "Write a ```python code block to accomplish the task. "
+                        "A plain text reply will end this step.\n"
+                        "[系统] 此步骤需要执行代码。请写 ```python 代码块来完成任务。"
+                        "纯文本回复将结束此步骤。"
+                    )
+                    continue
+
+                # Genuine completion: either after code execution or after nudge.
                 self.context.add_assistant_message(response)
                 step = AgentStep(
                     step_num=step_index,
@@ -481,6 +562,7 @@ class WorkflowLoop:
                 return "\n".join(accumulated_output)
 
             # Execute the code block.
+            sub_step += 1
             self.context.add_assistant_message(response)
 
             # Notify the UI that code is about to execute.
@@ -501,10 +583,12 @@ class WorkflowLoop:
                 result = CodeExecResult(error=error_msg)
             exec_duration_ms = (time.monotonic() - t1) * 1000
 
-            # Build step record.
+            # Build step record. Use a unique step number that accounts
+            # for multiple code executions within the same node.
+            unique_step = step_index * 100 + sub_step
             output_str = result.logs or str(result.output or "")
             step = AgentStep(
-                step_num=step_index,
+                step_num=unique_step,
                 thought=thought,
                 code=code_block,
                 output=output_str,
@@ -529,7 +613,7 @@ class WorkflowLoop:
                 # Success — feed the output back to the LLM so it can
                 # continue with the next sub-step of this node.
                 self.context.add_code_output(
-                    step=step_index,
+                    step=unique_step,
                     code=code_block,
                     output=output_str,
                     error=None,
@@ -541,7 +625,7 @@ class WorkflowLoop:
                 # Error — feed back to LLM for retry.
                 error_count += 1
                 self.context.add_code_output(
-                    step=step_index,
+                    step=unique_step,
                     code=code_block,
                     output=result.logs or "",
                     error=result.error,
@@ -613,7 +697,48 @@ class WorkflowLoop:
                 pass
 
         try:
-            response = self.llm_call(messages)
+            response = None
+
+            # Build a streaming parser for the summary call if streaming
+            # callbacks are available — same pattern as _execute_node.
+            summary_parser = StreamingParser(
+                on_thought_delta=lambda t: self.on_thought_delta(t) if self.on_thought_delta else None,
+                on_code_start=None,
+                on_code_delta=None,
+                on_code_end=None,
+            )
+
+            for _retry_attempt in range(LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.llm_call(messages, on_delta=lambda p: summary_parser.feed(p))
+                    summary_parser.finish()
+                    break
+                except TypeError:
+                    # llm_call doesn't accept on_delta — fall back.
+                    response = self.llm_call(messages)
+                    break
+                except LLM_RETRYABLE_EXCEPTIONS as e:
+                    if _retry_attempt >= LLM_MAX_RETRIES:
+                        raise
+                    import random
+                    delay = LLM_BASE_DELAY * (2 ** _retry_attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "[WF-RETRY] summary attempt %d/%d failed (%s), retrying in %.1fs...",
+                        _retry_attempt + 1, LLM_MAX_RETRIES, type(e).__name__, delay,
+                    )
+                    time.sleep(delay)
+                    summary_parser = StreamingParser(
+                        on_thought_delta=lambda t: self.on_thought_delta(t) if self.on_thought_delta else None,
+                        on_code_start=None,
+                        on_code_delta=None,
+                        on_code_end=None,
+                    )
+            if response is None:
+                logger.error("Workflow summary LLM call returned None after all retries")
+                response = (
+                    f"Workflow '{self.workflow.name}' completed all {len(execution_order)} steps. "
+                    "Summary generation returned no response."
+                )
             self.context.add_assistant_message(response)
             # Emit as a text reply step.
             step = AgentStep(

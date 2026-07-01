@@ -455,12 +455,23 @@ def run_subagent(
         "run_id": run_id,
     })
 
-    res = _run_branch(
-        parent_meta=meta,
-        task=clean_task,
-        skill_groups=_resolve_branch_groups(skill_groups),
-        max_steps=_resolve_max_steps(max_steps),
-    )
+    # Expose a mini-tracker so cancel handler can interrupt the single branch.
+    agent_ref = meta.get("_agent_ref")
+    _single_tracker = _BranchTracker()
+    if agent_ref is not None:
+        agent_ref._active_subagent_tracker = _single_tracker
+
+    try:
+        res = _run_branch(
+            parent_meta=meta,
+            task=clean_task,
+            skill_groups=_resolve_branch_groups(skill_groups),
+            max_steps=_resolve_max_steps(max_steps),
+            tracker=_single_tracker,
+        )
+    finally:
+        if agent_ref is not None:
+            agent_ref._active_subagent_tracker = None
 
     ok = bool(res.get("ok"))
     _notify_subagent(ctx, {
@@ -607,27 +618,38 @@ def run_subagents(
     tracker = _BranchTracker()
     results: list[Optional[dict]] = [None] * n
 
+    # Expose tracker on the parent agent so the cancel handler can
+    # interrupt all branches when the user presses Stop.
+    agent_ref = meta.get("_agent_ref")
+    if agent_ref is not None:
+        agent_ref._active_subagent_tracker = tracker
+
     logger.info("run_subagents: %d tasks, %d workers", n, workers)
 
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="subagent") as pool:
-        futures = {
-            pool.submit(_run_branch, meta, task, groups, steps, tracker): idx
-            for idx, task in enumerate(task_list)
-        }
-        try:
-            for fut in as_completed(futures):
-                idx = futures[fut]
-                results[idx] = fut.result()
-                task_statuses[idx] = "done" if (results[idx] or {}).get("ok") else "failed"
-                # Stream incremental progress so the card lights up task-by-task.
-                _emit(task_statuses, "running")
-        except KeyboardInterrupt:
-            # Parent run was cancelled — cooperatively stop every live branch
-            # (loops + subprocesses), let the pool drain, then propagate so the
-            # parent loop/runner also unwinds.
-            logger.info("run_subagents: cancelled — interrupting %d branches", n)
-            tracker.cancel_all()
-            raise
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="subagent") as pool:
+            futures = {
+                pool.submit(_run_branch, meta, task, groups, steps, tracker): idx
+                for idx, task in enumerate(task_list)
+            }
+            try:
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    results[idx] = fut.result()
+                    task_statuses[idx] = "done" if (results[idx] or {}).get("ok") else "failed"
+                    # Stream incremental progress so the card lights up task-by-task.
+                    _emit(task_statuses, "running")
+            except KeyboardInterrupt:
+                # Parent run was cancelled — cooperatively stop every live branch
+                # (loops + subprocesses), let the pool drain, then propagate so the
+                # parent loop/runner also unwinds.
+                logger.info("run_subagents: cancelled — interrupting %d branches", n)
+                tracker.cancel_all()
+                raise
+    finally:
+        # Clear tracker reference so cancel handler doesn't hold stale state.
+        if agent_ref is not None:
+            agent_ref._active_subagent_tracker = None
 
     _emit(task_statuses, "done")
     return _format_results(results)

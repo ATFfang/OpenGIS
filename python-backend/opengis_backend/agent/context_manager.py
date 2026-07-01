@@ -81,7 +81,7 @@ def _estimate_messages_tokens(messages: list[dict]) -> int:
     return total
 
 
-def _truncate_output(text: str, max_chars: int = 4000) -> str:
+def _truncate_output(text: str, max_chars: int = 3000) -> str:
     """Truncate long code output, keeping head and tail.
 
     Head gets 70% of the budget (usually contains the useful result),
@@ -236,6 +236,10 @@ class ContextManager:
     # Whether to enable token-based pruning (default: True)
     use_token_based_pruning: bool = True
 
+    # Cached token count of the system prompt (set by build_messages).
+    # Included in should_compress() so the budget accounts for the prompt.
+    _system_prompt_tokens: int = field(default=0, init=False)
+
     # Hard cap (in estimated tokens) for any SINGLE tool-result message,
     # even when it sits inside the protected ``keep_recent`` window. A
     # single giant output (e.g. an accidental full-DataFrame dump) can
@@ -261,6 +265,36 @@ class ContextManager:
 
     # Maximum file size to re-read (single file)
     max_file_chars_for_reread: int = 5000
+
+    # ── Serialization ─────────────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        """Serialize the context state to a JSON-safe dict.
+
+        Only persists the fields needed to restore the conversation:
+        messages, summary, summary_cutoff, and recently_edited_files.
+        Configuration fields (token_budget, etc.) are NOT persisted —
+        they come from the constructor defaults.
+        """
+        return {
+            "messages": self.messages,
+            "summary": self._summary,
+            "summary_cutoff": self._summary_cutoff,
+            "recently_edited_files": list(self._recently_edited_files),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ContextManager":
+        """Restore a ContextManager from a serialized dict.
+
+        Returns a fresh ContextManager with the persisted state applied.
+        """
+        ctx = cls()
+        ctx.messages = data.get("messages", [])
+        ctx._summary = data.get("summary")
+        ctx._summary_cutoff = data.get("summary_cutoff", 0)
+        ctx._recently_edited_files = data.get("recently_edited_files", [])
+        return ctx
 
     # ── Public API ──────────────────────────────────────────────────────
 
@@ -343,6 +377,8 @@ class ContextManager:
         result: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
         ]
+        # Cache system prompt token count for should_compress().
+        self._system_prompt_tokens = _estimate_tokens(system_prompt)
 
         if user_instructions and user_instructions.strip():
             result.append({
@@ -373,11 +409,11 @@ class ContextManager:
             (should_compress, reason)
         """
         live = self.messages[self._summary_cutoff:]
-        estimated = _estimate_messages_tokens(live)
+        estimated = _estimate_messages_tokens(live) + self._system_prompt_tokens
         threshold = int(self.token_budget * self.compress_threshold)
 
         if estimated > threshold:
-            return True, f"Token count ({estimated}) exceeded threshold ({threshold})"
+            return True, f"Token count ({estimated}, incl. prompt {self._system_prompt_tokens}) exceeded threshold ({threshold})"
 
         # Check tool result ratio
         tool_result_tokens = sum(

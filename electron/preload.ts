@@ -37,6 +37,10 @@ const electronAPI = {
   renameFile: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke('file:rename', oldPath, newPath),
 
+  /** Show a file or folder in the OS file manager (Finder / Explorer). */
+  showItemInFolder: (filePath: string) =>
+    ipcRenderer.invoke('file:show-in-folder', filePath),
+
   /**
    * Ensure a directory exists (creates intermediate parents as needed).
    * Used by features like Workflows that need to lazily create a

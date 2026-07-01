@@ -59,6 +59,7 @@ def build_workflow_loop(
     on_code_start: Optional[Callable[[int], None]] = None,
     on_code_delta: Optional[Callable[[int, str], None]] = None,
     on_code_end: Optional[Callable[[int], None]] = None,
+    context: Optional[ContextManager] = None,
 ) -> tuple["WorkflowLoop", Any]:
     """Build a fresh WorkflowLoop + subprocess executor.
 
@@ -135,7 +136,8 @@ def build_workflow_loop(
     def _executor_call(code: str) -> CodeExecResult:
         return executor(code)
 
-    # Build the workflow loop.
+    # Build the workflow loop. Reuse the shared conversation context if
+    # provided so the workflow can see prior chat history.
     workflow_loop = WorkflowLoop(
         llm_call=llm_call,
         executor_call=_executor_call,
@@ -148,7 +150,7 @@ def build_workflow_loop(
         on_code_start=on_code_start,
         on_code_delta=on_code_delta,
         on_code_end=on_code_end,
-        context=ContextManager(),
+        context=context if context is not None else ContextManager(),
     )
 
     return workflow_loop, executor

@@ -61,20 +61,20 @@ def run_agent_safely(
     tid = threading.get_ident()
     if thread_id_holder is not None:
         thread_id_holder.append(tid)
-    logger.info("[RUNNER-DEBUG] run_agent_safely START, thread=%d", tid)
+    logger.debug("[RUNNER] run_agent_safely START, thread=%d", tid)
     try:
         result = loop.run(user_message)
-        logger.info("[RUNNER-DEBUG] run_agent_safely loop.run() returned normally, thread=%d, result_len=%d",
+        logger.debug("[RUNNER] run_agent_safely loop.run() returned normally, thread=%d, result_len=%d",
                     tid, len(result) if result else 0)
         return result
     except KeyboardInterrupt:
-        logger.info("[RUNNER-DEBUG] run_agent_safely caught KeyboardInterrupt in thread=%d", tid)
+        logger.debug("[RUNNER] run_agent_safely caught KeyboardInterrupt in thread=%d", tid)
         return "(Task interrupted by user.)"
     except Exception as e:
         logger.error("[RUNNER-DEBUG] run_agent_safely caught %s: %s in thread=%d", type(e).__name__, e, tid)
         raise
     finally:
-        logger.info("[RUNNER-DEBUG] run_agent_safely FINALLY, posting sentinel, thread=%d", tid)
+        logger.debug("[RUNNER] run_agent_safely FINALLY, posting sentinel, thread=%d", tid)
         try:
             if not event_loop.is_closed():
                 event_loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -112,21 +112,21 @@ class AgentRunner:
         a stuck LLM HTTP call.  Returns True if the signal was sent.
         """
         tid = self._worker_thread_id
-        logger.info("[RUNNER-DEBUG] interrupt_worker_thread called, tid=%d", tid)
+        logger.debug("[RUNNER] interrupt_worker_thread called, tid=%d", tid)
         if not tid:
-            logger.info("[RUNNER-DEBUG] no worker thread id, returning False")
+            logger.debug("[RUNNER] no worker thread id, returning False")
             return False
         try:
             res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
                 ctypes.c_ulong(tid), ctypes.py_object(KeyboardInterrupt)
             )
             if res == 1:
-                logger.info("[RUNNER-DEBUG] KeyboardInterrupt injected into thread %d SUCCESS", tid)
+                logger.debug("[RUNNER] KeyboardInterrupt injected into thread %d SUCCESS", tid)
                 return True
             elif res > 1:
                 ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), None)
                 logger.warning("[RUNNER-DEBUG] multiple threads matched, reset")
-            logger.info("[RUNNER-DEBUG] injection returned res=%d", res)
+            logger.debug("[RUNNER] injection returned res=%d", res)
             return False
         except Exception as e:
             logger.warning("[RUNNER-DEBUG] failed to inject into thread %d: %s", tid, e)

@@ -124,6 +124,8 @@ export class PythonManager {
       }
       const cliArgs = ['-m', 'opengis_backend', '--port', String(this.port)]
       if (logDir) cliArgs.push('--log-dir', logDir)
+      // Log level is now controlled at runtime via rpc.debug.set_log_level
+      // (Settings > Agent > Debug Mode toggle). Default is INFO.
 
       this.process = spawn(this.pythonPath, cliArgs, {
         cwd: backendPath,

@@ -352,6 +352,16 @@ app.whenReady().then(async () => {
     return { success: true, path: dir }
   })
 
+  // ── Show file/folder in OS file manager ──────────────────────────
+  ipcMain.handle('file:show-in-folder', (_event, filePath: string) => {
+    try {
+      shell.showItemInFolder(filePath)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) }
+    }
+  })
+
   console.log('[loading] Step 2: createWindow');
   // ── Step 2: create main window (hidden) ───────────────────
   updateLoadingProgress(1, 'Preparing workspace…')

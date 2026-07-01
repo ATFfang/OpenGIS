@@ -10,7 +10,7 @@
  * - Execution result display (stdout, stderr, return value)
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
@@ -24,11 +24,15 @@ import {
   Terminal,
   FileCode,
   GitBranch,
+  Eye,
+  FileCode2,
 } from 'lucide-react'
 import { useViewStore, type CodeExecutionResult } from '@/stores/viewStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
+import MarkdownRenderer from '@/features/chat/components/MarkdownBlock'
+import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // ─── Syntax highlighter themes ──────────────────────────────────
 
@@ -78,6 +82,9 @@ export function CodeViewer({ tab }: CodeViewerProps) {
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [showResult, setShowResult] = useState(!!tab.executionResult)
+  const [mdRendered, setMdRendered] = useState(true) // Default to rendered view for .md
+
+  const isMarkdown = tab.language === 'markdown'
 
   // Detect current dark/light mode
   const theme = useSettingsStore((s) => s.appearance.theme)
@@ -87,6 +94,12 @@ export function CodeViewer({ tab }: CodeViewerProps) {
 
   const syntaxTheme = isDarkMode ? darkTheme : lightTheme
   const lineNumberColor = isDarkMode ? '#4a4a6a' : '#b0b0b0'
+
+  // Directory of the markdown file for resolving relative image paths
+  const mdDir = useMemo(() => {
+    if (!tab.filePath) return ''
+    return tab.filePath.substring(0, tab.filePath.lastIndexOf('/'))
+  }, [tab.filePath])
 
   // Auto-show result when it arrives
   useEffect(() => {
@@ -171,30 +184,73 @@ export function CodeViewer({ tab }: CodeViewerProps) {
         </button>
       </div>
 
+      {/* Toggle rendered/raw for markdown */}
+      {isMarkdown && (
+        <div className="h-8 border-b border-border bg-bg-secondary flex items-center px-3 shrink-0 gap-2">
+          <button
+            onClick={() => setMdRendered(true)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+              mdRendered
+                ? 'bg-accent-primary/10 text-accent-primary'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            <Eye className="w-3 h-3" />
+            <span>Rendered</span>
+          </button>
+          <button
+            onClick={() => setMdRendered(false)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+              !mdRendered
+                ? 'bg-accent-primary/10 text-accent-primary'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            <FileCode2 className="w-3 h-3" />
+            <span>Source</span>
+          </button>
+        </div>
+      )}
+
       {/* Code + Result split */}
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Code area */}
         <div className="flex-1 overflow-auto min-h-0">
-          <SyntaxHighlighter
-            language={language}
-            style={syntaxTheme}
-            showLineNumbers
-            lineNumberStyle={{
-              minWidth: '3em',
-              paddingRight: '1em',
-              color: lineNumberColor,
-              userSelect: 'none',
-            }}
-            customStyle={{
-              margin: 0,
-              borderRadius: 0,
-              height: '100%',
-            }}
-            wrapLines
-            wrapLongLines
-          >
-            {tab.content || ''}
-          </SyntaxHighlighter>
+          {isMarkdown && mdRendered ? (
+            <div className="p-6 max-w-[800px] mx-auto text-[14px] leading-[1.8] text-text-primary">
+              <MarkdownRenderer
+                markdown={tab.content || ''}
+                resolveImageSrc={mdDir ? (relPath: string) => {
+                  // If it's already an absolute URL, return as-is
+                  if (/^https?:\/\//.test(relPath)) return Promise.resolve(relPath)
+                  // Resolve relative path against the markdown file's directory
+                  const absPath = `${mdDir}/${relPath}`
+                  return pathToImageUrl(absPath)
+                } : undefined}
+              />
+            </div>
+          ) : (
+            <SyntaxHighlighter
+              language={language}
+              style={syntaxTheme}
+              showLineNumbers
+              lineNumberStyle={{
+                minWidth: '3em',
+                paddingRight: '1em',
+                color: lineNumberColor,
+                userSelect: 'none',
+              }}
+              customStyle={{
+                margin: 0,
+                borderRadius: 0,
+                height: '100%',
+              }}
+              wrapLines
+              wrapLongLines
+            >
+              {tab.content || ''}
+            </SyntaxHighlighter>
+          )}
         </div>
 
         {/* Execution result panel */}

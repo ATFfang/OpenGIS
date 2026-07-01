@@ -26,6 +26,8 @@ from typing import Any
 from opengis_backend.agent.agent_factory import build_agent_loop
 from opengis_backend.agent.agent_loop import AgentStep
 from opengis_backend.agent.context_manager import ContextManager
+from opengis_backend.agent.context_persistence import save_context, load_context
+from opengis_backend.workspace.memory import append as memory_append
 from opengis_backend.agent.events import (
     AgentEvent,
     AgentEventType,
@@ -44,6 +46,27 @@ from opengis_backend.skills.context import (
 )
 from opengis_backend.skills.registry import SkillRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
+
+
+def _extract_memory(workspace: str, user_message: str, final_answer: str) -> None:
+    """Extract key facts from a completed run and save to project memory.
+
+    Heuristic extraction — no extra LLM call. Saves the task summary
+    and user request under "Run History" so the agent remembers what
+    was done in previous conversations.
+    """
+    # Truncate to keep memory compact
+    task_summary = (user_message or "").strip()[:200]
+    answer_summary = (final_answer or "").strip()[:300]
+
+    if not task_summary:
+        return
+
+    entry = f"任务: {task_summary}"
+    if answer_summary:
+        entry += f"\n  结果: {answer_summary}"
+
+    memory_append(workspace, "Run History", entry)
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +154,25 @@ class GISCodeAgent:
                 shared_context.total_messages,
             )
         else:
-            shared_context = ContextManager()
+            # Try to restore context from disk (survives app restart).
+            restored = False
+            logger.info(
+                "Context lookup: conversation_id=%s, workspace=%s",
+                conversation_id, workspace,
+            )
+            if conversation_id and workspace:
+                shared_context = load_context(workspace, conversation_id)
+                if shared_context is not None:
+                    restored = True
+                    logger.info(
+                        "Restored context from disk for conversation %s (%d messages)",
+                        conversation_id, shared_context.total_messages,
+                    )
+            if not restored:
+                shared_context = ContextManager()
+                logger.info("Created new context for conversation %s", conversation_id)
             if conversation_id:
                 self._conversation_contexts[conversation_id] = shared_context
-                logger.info("Created new context for conversation %s", conversation_id)
 
         # Ensure the workspace is a git repo with our .gitignore.
         ws_ready = False
@@ -158,6 +196,7 @@ class GISCodeAgent:
         # Wire orchestration deps so the Agent-as-Tool sub-agent skills
         # (run_subagent / run_subagents) can spin up isolated child loops.
         # They read these back from ctx.meta and reuse build_agent_loop().
+        ctx.meta.setdefault("_agent_ref", self)  # for subagent cancel propagation
         ctx.meta.setdefault("_skill_registry", self.skills)
         ctx.meta.setdefault(
             "_llm_config",
@@ -363,6 +402,7 @@ class GISCodeAgent:
                 on_code_start=_on_code_start,
                 on_code_delta=_on_code_delta,
                 on_code_end=_on_code_end,
+                context=shared_context,
             )
             logger.info(
                 "Workflow mode: executing '%s' with %d nodes",
@@ -419,6 +459,18 @@ class GISCodeAgent:
             self.current_executor = None
             self._current_loop = None
             self._current_runner = None
+            # Persist conversation context to disk so it survives restarts.
+            if conversation_id and workspace:
+                try:
+                    save_context(workspace, conversation_id, shared_context)
+                except Exception:
+                    logger.exception("context persistence failed")
+            # Auto-extract key facts into project memory.
+            if workspace and final_state.get("final_answer"):
+                try:
+                    _extract_memory(workspace, user_message, final_state["final_answer"])
+                except Exception:
+                    logger.debug("memory extraction failed (non-fatal)", exc_info=True)
             # Post-run snapshot.
             if ws_ready:
                 try:

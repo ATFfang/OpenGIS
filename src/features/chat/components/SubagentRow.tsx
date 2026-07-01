@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { Bot, Check, Loader2, X, Users, ChevronDown, ChevronRight } from 'lucide-react'
 import type { SubagentData, SubagentTask } from '@/types/chat'
+import { useT } from '@/i18n'
 
 interface SubagentRowProps {
   data?: SubagentData
@@ -19,11 +20,13 @@ interface SubagentRowProps {
  *   backend streams incremental `subagent_update`s.
  */
 export const SubagentRow = memo(({ data }: SubagentRowProps) => {
+  const t = useT()
   const [expanded, setExpanded] = useState(true)
 
   if (!data) return <div className="h-px" aria-hidden />
 
   const running = data.status === 'running'
+  const cancelled = data.status === 'cancelled'
   const tasks = data.tasks ?? []
   const total = data.total ?? tasks.length
   const okCount = data.okCount ?? tasks.filter((t) => t.status === 'done').length
@@ -41,7 +44,7 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
     }
   }, [running])
 
-  const title = parallel ? 'Sub-agents' : 'Sub-agent'
+  const title = parallel ? t.chat.subagents : t.chat.subagent
 
   return (
     <div className="rounded-xl border border-border/60 bg-bg-tertiary/30 overflow-hidden">
@@ -52,7 +55,7 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
       >
         <div
           className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
-            running ? 'bg-accent-primary/10' : failedCount > 0 ? 'bg-accent-danger/10' : 'bg-accent-success/10'
+            running ? 'bg-accent-primary/10' : cancelled ? 'bg-text-muted/10' : failedCount > 0 ? 'bg-accent-danger/10' : 'bg-accent-success/10'
           }`}
         >
           {parallel ? (
@@ -69,6 +72,8 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>Running{parallel && total > 1 ? ` ${total} tasks` : ''}…</span>
           </span>
+        ) : cancelled ? (
+          <span className="text-[11px] text-text-muted">{t.chat.cancelled}</span>
         ) : (
           <span
             className={`text-[11px] ${failedCount > 0 ? 'text-accent-danger' : 'text-accent-success'}`}

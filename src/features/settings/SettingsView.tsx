@@ -1039,6 +1039,24 @@ export function SettingsView() {
                       onChange={(v) => setAgent({ useAutoCondense: v })}
                     />
                   </SettingItem>
+
+                  {/* Debug Mode */}
+                  <SettingItem
+                    id="agent-debug"
+                    label={t.settings.debugMode}
+                    description={t.settings.debugModeDesc}
+                  >
+                    <SettingCheckbox
+                      id="agent-debug"
+                      checked={agent.debugMode}
+                      onChange={(v) => {
+                        setAgent({ debugMode: v })
+                        pythonClient.send('rpc.debug.set_log_level', {
+                          level: v ? 'DEBUG' : 'INFO',
+                        }).catch(() => {/* ignore if backend not ready */})
+                      }}
+                    />
+                  </SettingItem>
                 </SettingSection>
 
                 <SettingSection title={t.settings.customInstructions}>

@@ -217,15 +217,148 @@ CodeStepRow.displayName = 'CodeStepRow'
 
 /**
  * CodeResultRow — renders the sandbox output of a CodeAgent step.
- * Default expanded (so you see the data); errors get an alert band.
+ * Features:
+ *   - Duration display (execution time)
+ *   - Diff detection and syntax-highlighted rendering
+ *   - DataFrame/pipe-table detection and HTML table rendering
+ *   - Collapsible long outputs
  */
 interface CodeResultRowProps {
   message: UIMessage
 }
 
+/** Format milliseconds as a human-readable duration string. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const m = Math.floor(ms / 60_000)
+  const s = Math.round((ms % 60_000) / 1000)
+  return `${m}m ${s}s`
+}
+
+/** Detect if output looks like a unified diff. */
+function isDiffOutput(text: string): boolean {
+  const lines = text.split('\n')
+  let diffMarkers = 0
+  for (const line of lines.slice(0, 30)) {
+    if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@') || line.startsWith('diff --git')) {
+      diffMarkers++
+    }
+  }
+  return diffMarkers >= 2
+}
+
+/** Detect if output looks like a pipe-separated DataFrame table. */
+function isDataFrameOutput(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim())
+  if (lines.length < 3) return false
+  // Look for a separator line like |---|---|---|
+  const hasSeparator = lines.some((l) => /^\|?[\s]*:?-{3,}/.test(l) && l.includes('|'))
+  // Look for pipe-delimited data rows
+  const pipeRows = lines.filter((l) => l.includes('|') && l.trim().startsWith('|')).length
+  return hasSeparator && pipeRows >= 2
+}
+
+/**
+ * DiffBlock — renders a unified diff with syntax highlighting.
+ */
+const DiffBlock = memo(({ diff }: { diff: string }) => {
+  const lines = diff.split('\n')
+  return (
+    <div className="rounded-lg overflow-hidden border border-border/60 font-mono text-[12px] leading-[1.6]">
+      {lines.map((line, i) => {
+        let bg = 'bg-bg-tertiary/30'
+        let color = 'text-text-secondary'
+        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
+          bg = 'bg-bg-tertiary/60'
+          color = 'text-text-primary font-semibold'
+        } else if (line.startsWith('@@')) {
+          bg = 'bg-accent-primary/8'
+          color = 'text-accent-primary/80'
+        } else if (line.startsWith('+')) {
+          bg = 'bg-green-500/10'
+          color = 'text-green-400'
+        } else if (line.startsWith('-')) {
+          bg = 'bg-red-500/10'
+          color = 'text-red-400'
+        }
+        return (
+          <div key={i} className={`px-3 py-0.5 ${bg} ${color} whitespace-pre`}>
+            {line || ' '}
+          </div>
+        )
+      })}
+    </div>
+  )
+})
+DiffBlock.displayName = 'DiffBlock'
+
+/**
+ * DataFrameTable — renders a pipe-separated DataFrame output as an HTML table.
+ */
+const DataFrameTable = memo(({ text }: { text: string }) => {
+  const lines = text.split('\n').filter((l) => l.trim())
+  // Find the separator line to split header from body
+  const sepIdx = lines.findIndex((l) => /^\|?[\s]*:?-{3,}/.test(l) && l.includes('|'))
+  if (sepIdx < 1) return <MarkdownBlock markdown={text} />
+
+  const parseRow = (line: string) =>
+    line
+      .split('|')
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0)
+
+  const headers = parseRow(lines[sepIdx - 1])
+  const bodyLines = lines.slice(sepIdx + 1).filter((l) => l.includes('|') && !/^\|?[\s]*:?-{3,}/.test(l))
+  const rows = bodyLines.map(parseRow)
+
+  if (headers.length === 0 || rows.length === 0) return <MarkdownBlock markdown={text} />
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border/60">
+      <table className="border-collapse w-full text-[12px] font-mono">
+        <thead>
+          <tr>
+            {headers.map((h, i) => (
+              <th
+                key={i}
+                className="px-2.5 py-1.5 border-b border-border text-left bg-bg-tertiary/50 font-semibold text-text-primary whitespace-nowrap"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? '' : 'bg-bg-tertiary/20'}>
+              {row.map((cell, ci) => (
+                <td key={ci} className="px-2.5 py-1 border-b border-border/30 text-text-secondary whitespace-nowrap">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+})
+DataFrameTable.displayName = 'DataFrameTable'
+
+/**
+ * Smart output renderer — picks the best rendering strategy.
+ */
+function SmartOutput({ text }: { text: string }) {
+  if (isDiffOutput(text)) return <DiffBlock diff={text} />
+  if (isDataFrameOutput(text)) return <DataFrameTable text={text} />
+  return <MarkdownBlock markdown={text} />
+}
+
 export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   const output = message.text ?? ''
   const error = message.codeError || null
+  const durationMs = message.durationMs
 
   const hasOutput = !!output.trim()
   const hasError = !!error
@@ -238,16 +371,23 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   // Nothing to show — skip the row entirely.
   if (!hasOutput && !hasError) return null
 
-  // ── Success path: render output as Markdown for rich formatting
-  //    (tables, lists, bold, code blocks, etc.). ──
+  // Format duration badge
+  const durationBadge = durationMs != null && durationMs > 0 ? formatDuration(durationMs) : null
+
+  // ── Success path ──
   if (!hasError) {
     // Short output — render inline without collapse
     if (!isLongOutput) {
       return (
         <div className="ml-[30px] -mt-1">
           <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
-            <MarkdownBlock markdown={output} />
+            <SmartOutput text={output} />
           </div>
+          {durationBadge && (
+            <div className="px-1 pb-1">
+              <span className="text-[10px] text-text-muted/50 font-mono">{durationBadge}</span>
+            </div>
+          )}
         </div>
       )
     }
@@ -268,6 +408,9 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
                 ({lineCount} {lineCount === 1 ? 'line' : 'lines'}, {output.length.toLocaleString()} chars)
               </span>
             </span>
+            {durationBadge && (
+              <span className="text-[10px] text-text-muted/40 font-mono">{durationBadge}</span>
+            )}
             <span className="flex-1" />
             {collapsed ? (
               <ChevronRight className="w-3 h-3 text-text-muted" />
@@ -279,7 +422,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
           {!collapsed && (
             <div className="border-t border-border/40 p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
               <div className="text-[13px] leading-[1.7] text-text-primary/85">
-                <MarkdownBlock markdown={output} />
+                <SmartOutput text={output} />
               </div>
             </div>
           )}
@@ -288,8 +431,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
     )
   }
 
-  // ── Error path: keep collapsible card so long tracebacks don't
-  //    dominate the conversation, but chrome stays neutral. ──
+  // ── Error path ──
   const stepNumber = message.stepNumber
   const lineCount = error!.split('\n').length
 
@@ -308,6 +450,9 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
               ({lineCount} {lineCount === 1 ? 'line' : 'lines'})
             </span>
           </span>
+          {durationBadge && (
+            <span className="text-[10px] text-text-muted/40 font-mono">{durationBadge}</span>
+          )}
           <span className="flex-1" />
           {collapsed ? (
             <ChevronRight className="w-3 h-3 text-text-muted" />

@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -95,7 +96,7 @@ except ImportError:
 # The LLM is prompted to use ```python fences (more natural than <code>
 # tags now that we control the prompt).
 _CODE_FENCE_RE = re.compile(
-    r"```(?:python|py)?\s*\n(.*?)```",
+    r"```\w*\s*\n(.*?)```",
     re.DOTALL,
 )
 _CODE_TAG_RE = re.compile(
@@ -136,7 +137,7 @@ def extract_thought(text: str) -> str:
 # a regex because we need to distinguish "fence is fully open" from
 # "fence is being typed character-by-character" (the LLM may stream
 # `'`, `'`, `'` on three separate ticks).
-_FENCE_OPEN_PREFIXES = ("```python", "```py", "```")
+_FENCE_OPEN_MARKER = "```"
 _FENCE_CLOSE = "```"
 
 
@@ -263,34 +264,29 @@ class StreamingParser:
     # state: "in_fence_open" — saw ` and waiting to confirm/refute fence
     def _step_fence_open(self) -> bool:
         buf = self._pending
-        # Is what we have a prefix of any fence opener?
-        # Possible openers we care about:
-        #   ```\n   ```python\n   ```py\n
-        # We need to either see a full opener (with newline), or see
-        # something that *can't* be one and bail out.
-        for opener in _FENCE_OPEN_PREFIXES:
-            # Full match with terminating newline?
+        # We accept ``` followed by any language tag (or none) and a
+        # newline.  This handles ```python, ```py, ```bash, ```json,
+        # bare ```, etc. — the agent always executes the body as Python
+        # regardless of the tag.
+        if buf.startswith(_FENCE_OPEN_MARKER):
+            # Look for the terminating newline after ```.
             for suffix in ("\n", "\r\n"):
-                full = opener + suffix
-                if buf.startswith(full):
-                    # Open the code body.
-                    self._pending = buf[len(full):]
+                idx = buf.find(suffix, len(_FENCE_OPEN_MARKER))
+                if idx >= 0:
+                    # Found ```...<lang>\n — open the code body.
+                    self._pending = buf[idx + len(suffix):]
                     self._enter_code()
                     return True
-        # Could it still become an opener with more input?
-        # i.e. is buf a strict prefix of any candidate?
-        candidates = [op + s for op in _FENCE_OPEN_PREFIXES for s in ("\n", "\r\n")]
-        if any(c.startswith(buf) for c in candidates):
-            # Need more input — but if we've held too much, give up
-            # and flush as plain text (this means the LLM wrote
-            # backticks for a different reason, e.g. inline ```bash`).
+            # No newline yet — could still be typing.  But if we've
+            # held too much (e.g. ``` followed by a very long non-newline
+            # token), give up and emit one char.
             if len(buf) > self._MAX_HOLD:
                 self._emit_thought(buf[0])
                 self._pending = buf[1:]
                 self._state = "thought"
                 return True
             return False  # wait for more chunks
-        # Definitively not a fence opener — emit one char and re-scan.
+        # Doesn't start with ``` — emit one char and re-scan.
         self._emit_thought(buf[0])
         self._pending = buf[1:]
         self._state = "thought"
@@ -489,8 +485,7 @@ class AgentLoop:
 
     def interrupt(self) -> None:
         """Signal the loop to stop at the next safe point."""
-        import threading
-        logger.info("[LOOP-DEBUG] interrupt() called from thread=%d, setting _interrupted=True", threading.get_ident())
+        logger.debug("[AGENT] interrupt() called from thread=%d, setting _interrupted=True", threading.get_ident())
         self._interrupted = True
 
     # -- Public API --------------------------------------------------
@@ -512,10 +507,10 @@ class AgentLoop:
 
         for iteration in range(self.max_steps * AGENT_LOOP_SAFETY_MULTIPLIER):  # Safety cap on total iterations
             # Check for external interruption.
-            logger.info("[LOOP-DEBUG] iteration=%d, code_steps=%d, _interrupted=%s, thread=%d",
-                        iteration, code_steps, self._interrupted, __import__('threading').get_ident())
+            logger.debug("[AGENT] iteration=%d, code_steps=%d, _interrupted=%s, thread=%d",
+                        iteration, code_steps, self._interrupted, threading.get_ident())
             if self._interrupted:
-                logger.info("[LOOP-DEBUG] EXITING due to _interrupted=True at iteration top")
+                logger.debug("[AGENT] EXITING due to _interrupted=True at iteration top")
                 logger.info("Agent loop interrupted externally after %d code steps.", code_steps)
                 return "(Task interrupted by user.)"
             # 0. Compression check BEFORE building messages. Doing it here
@@ -638,16 +633,20 @@ class AgentLoop:
             def _on_llm_delta(piece: str) -> None:
                 parser.feed(piece)
 
-            logger.info("[LOOP-DEBUG] LLM call START, _interrupted=%s", self._interrupted)
+            logger.debug("[AGENT] LLM call START, _interrupted=%s", self._interrupted)
             response = None
             for _retry_attempt in range(LLM_MAX_RETRIES + 1):
                 try:
                     response = self.llm_call(messages, on_delta=_on_llm_delta)
                     parser.finish()
                     break
-                except TypeError:
-                    # llm_call doesn't accept on_delta (older shim) — fall
-                    # back to non-streaming and emit a single thought delta.
+                except TypeError as te:
+                    # Only fall back to non-streaming if the TypeError is
+                    # about the on_delta parameter (older shim that doesn't
+                    # accept it).  Re-raise any other TypeError so real bugs
+                    # aren't silently swallowed.
+                    if "on_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
+                        raise
                     response = self.llm_call(messages)
                     if response and self.on_thought_delta:
                         try:
@@ -657,7 +656,7 @@ class AgentLoop:
                     break
                 except LLM_RETRYABLE_EXCEPTIONS as e:
                     if self._interrupted:
-                        logger.info("[LOOP-DEBUG] Interrupted during retry, not retrying.")
+                        logger.debug("[AGENT] Interrupted during retry, not retrying.")
                         raise
                     if _retry_attempt >= LLM_MAX_RETRIES:
                         logger.error("[LOOP-DEBUG] LLM call failed after %d retries: %s(%s)",
@@ -687,12 +686,20 @@ class AgentLoop:
                     raise
 
             duration_ms = (time.monotonic() - t0) * 1000
-            logger.info("[LOOP-DEBUG] LLM call END, duration=%.0fms, _interrupted=%s, response_len=%d",
+            logger.debug("[AGENT] LLM call END, duration=%.0fms, _interrupted=%s, response_len=%d",
                         duration_ms, self._interrupted, len(response) if response else 0)
 
             # 3. Parse response: extract thought + code block.
             code_block = extract_code_block(response)
             thought = extract_thought(response)
+
+            # DEBUG: log LLM response details
+            _has_code = code_block is not None
+            logger.info("LLM response: %d chars, code=%s", len(response) if response else 0, _has_code)
+            if response:
+                logger.debug("[AGENT] LLM response preview: %.300s", response)
+            if code_block:
+                logger.debug("[AGENT] Code block (%d chars):\n%.2000s", len(code_block), code_block)
 
             # 4a. Pure text reply -- no code block.
             #
@@ -721,7 +728,9 @@ class AgentLoop:
                     self.context.add_user_message(
                         "[System] You are mid-task. Either write a ```python code block "
                         "to continue, or call final_answer(\"summary\") to finish. "
-                        "A plain text reply will end the task."
+                        "A plain text reply will end the task.\n"
+                        "[系统] 任务尚未完成。请继续写 ```python 代码块，"
+                        "或调用 final_answer(\"summary\") 结束。纯文本回复将终止任务。"
                     )
                     continue
 
@@ -774,7 +783,7 @@ class AgentLoop:
                     progress_callback=self.progress_callback,
                 )
             except Exception:
-                logger.debug("auto_install check failed (non-fatal)", exc_info=True)
+                logger.warning("auto_install check failed (non-fatal), code execution may fail if packages are missing", exc_info=True)
 
             # Notify the UI that code is about to execute.
             if self.progress_callback:
@@ -787,18 +796,25 @@ class AgentLoop:
                     pass
 
             t1 = time.monotonic()
-            logger.info("[LOOP-DEBUG] CODE EXEC START step=%d, _interrupted=%s, code_len=%d",
+            logger.debug("[AGENT] CODE EXEC START step=%d, _interrupted=%s, code_len=%d",
                         code_steps, self._interrupted, len(code_block))
             try:
                 result = self.executor_call(code_block)
             except Exception as e:
                 # Executor-level failure (child died, timeout, etc.)
                 error_msg = f"{type(e).__name__}: {e}"
-                logger.info("[LOOP-DEBUG] CODE EXEC EXCEPTION: %s, _interrupted=%s", error_msg, self._interrupted)
+                logger.debug("[AGENT] CODE EXEC EXCEPTION: %s, _interrupted=%s", error_msg, self._interrupted)
                 result = CodeExecResult(error=error_msg)
             exec_duration_ms = (time.monotonic() - t1) * 1000
-            logger.info("[LOOP-DEBUG] CODE EXEC END step=%d, duration=%.0fms, error=%s, is_final=%s, _interrupted=%s",
+            logger.debug("[AGENT] CODE EXEC END step=%d, duration=%.0fms, error=%s, is_final=%s, _interrupted=%s",
                         code_steps, exec_duration_ms, result.error is not None, result.is_final_answer, self._interrupted)
+
+            # DEBUG: log execution output
+            if result.error:
+                logger.warning("Step %d error: %.500s", code_steps, result.error)
+            _output = result.logs or str(result.output or "")
+            if _output:
+                logger.debug("[AGENT] Step %d output (%d chars):\n%.2000s", code_steps, len(_output), _output)
 
             # Build the step record.
             step = AgentStep(
@@ -827,7 +843,9 @@ class AgentLoop:
             # tool result as protected (never pruned). Skills carry
             # artifacts (layer ids, file paths, snapshot ids) the agent
             # references many turns later.
-            tool_name = "skill" if "skill(" in (code_block or "") else None
+            # Detect skill calls at word boundary to avoid false positives
+            # from comments or strings containing "skill(".
+            tool_name = "skill" if re.search(r'\bskill\s*\(', code_block or "") else None
             self.context.add_code_output(
                 step=code_steps,
                 code=code_block,

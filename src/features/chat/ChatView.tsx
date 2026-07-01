@@ -134,7 +134,7 @@ export function ChatView() {
   // Virtuoso owns the scroll container. `followOutput` keeps us pinned to the
   // bottom while streaming (text grows in place), and `atBottomStateChange`
   // drives the floating "scroll to bottom" affordance.
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior })
   }, [])
 
@@ -704,20 +704,20 @@ export function ChatView() {
           {/* Bottom hint */}
           <div className="flex items-center justify-between mt-1.5 px-1">
             <span className="text-[10px] text-text-muted/40">
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">↵</kbd> send
+              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">↵</kbd> {t.chat.sendHint}
               <span className="mx-1.5">·</span>
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> new line
+              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> {t.chat.newLineHint}
             </span>
             <span className="text-[10px] text-text-muted/40 flex items-center gap-1">
               {isStreaming ? (
                 <>
                   <Zap className="w-2.5 h-2.5 text-accent-primary" />
-                  <span className="text-accent-primary">Streaming</span>
+                  <span className="text-accent-primary">{t.chat.streaming}</span>
                 </>
               ) : (
                 <>
                   <div className="w-1.5 h-1.5 rounded-full bg-accent-success/60" />
-                  {t.common.success === '成功' ? '就绪' : 'Ready'}
+                  {t.chat.ready}
                 </>
               )}
             </span>
@@ -792,6 +792,7 @@ function MessageGroup({
   onEditUser?: (text: string) => void
   children: ReactNode
 }) {
+  const t = useT()
   if (role === 'system') {
     // 细条系统消息（token/cost 指示）不占头像位。
     return <div className="px-5">{children}</div>
@@ -807,7 +808,7 @@ function MessageGroup({
             <div className="flex justify-end gap-0.5 mt-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
               {userText && onEditUser && (
                 <MessageActionButton
-                  title="Edit & resend"
+                  title={t.chat.editAndResend}
                   onClick={() => onEditUser(userText)}
                   icon={<Pencil className="w-3 h-3" />}
                 />
@@ -871,6 +872,7 @@ function MessageActionButton({
 }
 
 function CopyActionButton({ text }: { text: string }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text)
@@ -879,7 +881,7 @@ function CopyActionButton({ text }: { text: string }) {
   }, [text])
   return (
     <MessageActionButton
-      title="Copy"
+      title={t.common.copy}
       onClick={handleCopy}
       icon={copied ? <Check className="w-3 h-3 text-accent-success" /> : <Copy className="w-3 h-3" />}
     />
@@ -954,7 +956,32 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
     gradient: string
     iconColor: string
     borderColor: string
-  }> = []
+  }> = [
+    {
+      text: t.chat.suggestionLoadData,
+      icon: <FolderOpen className="w-4 h-4" />,
+      desc: t.chat.suggestionLoadDataDesc,
+      gradient: 'from-blue-500/20 to-cyan-500/20',
+      iconColor: 'text-blue-400',
+      borderColor: 'hover:border-blue-500/30',
+    },
+    {
+      text: t.chat.suggestionBuffer,
+      icon: <Globe className="w-4 h-4" />,
+      desc: t.chat.suggestionBufferDesc,
+      gradient: 'from-green-500/20 to-emerald-500/20',
+      iconColor: 'text-green-400',
+      borderColor: 'hover:border-green-500/30',
+    },
+    {
+      text: t.chat.suggestionChoropleth,
+      icon: <Zap className="w-4 h-4" />,
+      desc: t.chat.suggestionChoroplethDesc,
+      gradient: 'from-purple-500/20 to-pink-500/20',
+      iconColor: 'text-purple-400',
+      borderColor: 'hover:border-purple-500/30',
+    },
+  ]
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -1028,7 +1055,7 @@ function ConversationListDropdown({
   onDelete,
   onClose,
 }: {
-  conversations: { id: string; title: string; messages: any[]; updatedAt: number }[]
+  conversations: { id: string; title: string; messages: UIMessage[]; updatedAt: number }[]
   activeId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
@@ -1119,7 +1146,7 @@ function ConversationListDropdown({
                 </p>
               )}
               <p className="text-[10px] text-text-muted mt-0.5">
-                {conv.messages.length} messages
+                {conv.messages.length} {t.chat.messages}
               </p>
             </div>
             <div className="flex items-center gap-0.5">
@@ -1292,24 +1319,24 @@ function AttachPanel({
           </div>
         </button>
         <button
-          onClick={() => onAttachSkill('数据源', ['datasource'])}
+          onClick={() => onAttachSkill('DataSources', ['datasource'])}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedSkills.includes('数据源')
+            attachedSkills.includes('DataSources')
               ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
               : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
           }`}
         >
           <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedSkills.includes('数据源')
+            attachedSkills.includes('DataSources')
               ? 'bg-cyan-500/20 ring-cyan-500/30'
               : 'bg-cyan-500/10 ring-cyan-500/20'
           }`}>
             <Database className="w-3 h-3 text-cyan-400" />
           </div>
           <div className="text-left flex-1 min-w-0">
-            <p className="text-[12px] font-medium leading-tight">数据源</p>
+            <p className="text-[12px] font-medium leading-tight">{t.chat.dataSources}</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('数据源') ? t.chat.attachedClickDetach : t.chat.datasourceCatalog}
+              {attachedSkills.includes('DataSources') ? t.chat.attachedClickDetach : t.chat.dataSourcesGuide}
             </p>
           </div>
         </button>
@@ -1317,9 +1344,7 @@ function AttachPanel({
         {/* Hint */}
         <div className="px-2 pt-2 pb-1">
           <p className="text-[10px] text-text-muted/60 leading-relaxed">
-            💡 {['成功', 'Success'].includes(t.common.success)
-              ? '附加工作流来引导 Agent 按预定义的流程执行，或附加数据文件提供上下文。'
-              : 'Attach a workflow to guide the agent through a predefined pipeline, or attach data files for context.'}
+            💡 {t.chat.attachWorkflowHint}
           </p>
         </div>
       </div>

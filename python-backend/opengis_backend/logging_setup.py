@@ -133,3 +133,24 @@ def configure_logging(log_dir: Optional[Path] = None, level: int = logging.INFO)
 def get_log_dir() -> Optional[Path]:
     """Return the currently active log directory, or None if not configured."""
     return _active_log_dir
+
+
+def set_level(level: int) -> None:
+    """Change the root logger level at runtime.
+
+    Updates all handlers (file + stdout) to the new level.
+    Call with ``logging.DEBUG`` for verbose output or ``logging.INFO``
+    for normal operation.
+    """
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in root.handlers:
+        handler.setLevel(level)
+    logging.getLogger(__name__).info(
+        "Log level changed to %s", logging.getLevelName(level)
+    )
+
+
+def get_level() -> str:
+    """Return the current root log level as a string."""
+    return logging.getLevelName(logging.getLogger().level)

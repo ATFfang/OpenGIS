@@ -36,7 +36,7 @@ def _compose_system_prompt(registered_skills, ctx: Optional[SkillContext] = None
 
     When a ``ctx`` is given and has a ``workspace_path``, we append an
     additional ``## Workspace`` block so the LLM knows the absolute cwd
-    of the subprocess.
+    of the subprocess, plus any persisted project memory.
     """
     base = OPENGIS_SYSTEM_PROMPT.format(
         skill_signatures=build_skill_signatures(registered_skills)
@@ -53,6 +53,14 @@ def _compose_system_prompt(registered_skills, ctx: Optional[SkillContext] = None
         "write to / read from any file under this directory. Writes\n"
         "are snapshotted by git so the user can revert any run.\n"
     )
+    # Inject project memory (key facts from previous conversations).
+    try:
+        from opengis_backend.workspace.memory import load as load_memory
+        memory = load_memory(workspace)
+        if memory:
+            suffix += f"\n## Project Memory\n{memory}\n"
+    except Exception:
+        pass
     return base + suffix
 
 
