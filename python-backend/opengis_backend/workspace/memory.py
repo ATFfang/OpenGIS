@@ -108,9 +108,35 @@ def append(workspace: str, section: str, entry: str) -> str:
 
 
 def _truncate_to_fit(content: str) -> str:
-    """Truncate content to _MAX_CHARS by dropping oldest non-user entries."""
+    """Truncate content to _MAX_CHARS by dropping oldest entries.
+
+    Preserves section headers (## ...) and drops the oldest entries
+    (lines starting with "- ") from the "Run History" section first.
+    """
     lines = content.split("\n")
-    # Keep dropping from the end until it fits
+    # Find Run History section entries and drop oldest first
+    in_run_history = False
+    drop_candidates = []
+    for i, line in enumerate(lines):
+        if line.strip() == "## Run History":
+            in_run_history = True
+            continue
+        if line.startswith("## "):
+            in_run_history = False
+        if in_run_history and line.strip().startswith("- "):
+            drop_candidates.append(i)
+
+    # Drop oldest entries (first in the section)
+    for idx in sorted(drop_candidates, reverse=False):
+        if len("\n".join(lines)) <= _MAX_CHARS:
+            break
+        lines[idx] = ""
+
+    # Remove empty lines
+    lines = [l for l in lines if l.strip() or l == ""]
+
+    # If still too long, drop from the end as last resort
     while len("\n".join(lines)) > _MAX_CHARS and len(lines) > 1:
         lines.pop()
+
     return "\n".join(lines)

@@ -430,10 +430,9 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
     if (isDirectory) {
       handleToggle()
     } else {
-      // Single-click only opens code scripts directly;
-      // data/config files (.json, .yaml, .csv, etc.) require right-click → "View Code"
+      // Single-click opens code scripts and image files directly
       const ext = node.extension.toLowerCase()
-      if (isCodeScript(ext)) {
+      if (isCodeScript(ext) || IMAGE_EXTS.has(ext)) {
         openFileInViewer(node)
       }
     }
@@ -1130,10 +1129,6 @@ async function openFileInViewer(node: FileNode) {
   }
 
   // Workflow files (*.flow.json) route to the workflow canvas editor
-  // instead of the plain-text CodeViewer. We flip the `language` tag
-  // to "workflow" and MainLayout's CodeTabContent picks the right
-  // viewer — no content preload needed (WorkflowEditorView reads the
-  // file through its own store).
   if (/\.flow\.json$/i.test(node.name)) {
     const displayName = node.name.replace(/\.flow\.json$/i, '')
     useViewStore.getState().openTab({
@@ -1141,6 +1136,19 @@ async function openFileInViewer(node: FileNode) {
       type: 'code',
       filePath: node.path,
       language: 'workflow',
+    })
+    return
+  }
+
+  // Image files open in the image viewer (no content preload needed)
+  const IMAGE_EXTS_LOCAL = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg']
+  const ext = node.extension.toLowerCase()
+  if (IMAGE_EXTS_LOCAL.includes(ext)) {
+    useViewStore.getState().openTab({
+      title: node.name,
+      type: 'image',
+      filePath: node.path,
+      language: 'image',
     })
     return
   }

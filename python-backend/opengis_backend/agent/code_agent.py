@@ -42,6 +42,7 @@ from opengis_backend.runs import RunArchive
 from opengis_backend.skills.context import (
     SkillContext,
     reset_current_context,
+    run_async_from_sync,
     set_current_context,
 )
 from opengis_backend.skills.registry import SkillRegistry
@@ -51,20 +52,42 @@ from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
 def _extract_memory(workspace: str, user_message: str, final_answer: str) -> None:
     """Extract key facts from a completed run and save to project memory.
 
-    Heuristic extraction — no extra LLM call. Saves the task summary
-    and user request under "Run History" so the agent remembers what
-    was done in previous conversations.
+    Heuristic extraction — no extra LLM call. Extracts:
+    - Task summary (what was asked)
+    - File paths mentioned in the answer
+    - Key numbers/statistics
+    - Brief result summary
     """
-    # Truncate to keep memory compact
+    import re
+
     task_summary = (user_message or "").strip()[:200]
-    answer_summary = (final_answer or "").strip()[:300]
+    answer = (final_answer or "").strip()
 
     if not task_summary:
         return
 
+    # Extract file paths from the answer
+    path_pattern = re.compile(
+        r"(/[\w./\-]+\.(?:geojson|shp|gpkg|csv|json|tif|tiff|png|jpg|pdf|md))"
+    )
+    paths = list(set(path_pattern.findall(answer)))[:5]
+
+    # Extract key numbers (feature counts, statistics, percentages)
+    number_pattern = re.compile(r"(\d[\d,]+(?:\.\d+)?)\s*(?:条|个|家|features?|rows?|%)")
+    numbers = number_pattern.findall(answer)[:3]
+
+    # Build structured entry
     entry = f"任务: {task_summary}"
-    if answer_summary:
-        entry += f"\n  结果: {answer_summary}"
+    if paths:
+        entry += f"\n  产出: {', '.join(paths)}"
+    if numbers:
+        entry += f"\n  数据: {', '.join(numbers)}"
+    # Brief result (first meaningful sentence)
+    for sentence in answer.split("。"):
+        s = sentence.strip()
+        if len(s) > 15 and not s.startswith("#"):
+            entry += f"\n  摘要: {s[:150]}"
+            break
 
     memory_append(workspace, "Run History", entry)
 
@@ -384,6 +407,16 @@ class GISCodeAgent:
         # ── Route: WorkflowLoop or AgentLoop ──────────────────────
         if workflow is not None:
             # DAG-driven workflow execution.
+            # Plan callback: emits plan_update events for compact workflow UI.
+            # The `workflow: true` flag tells the frontend to suppress
+            # detailed events (code blocks, tool calls) and show only the plan.
+            def _plan_callback(plan_data: dict) -> None:
+                plan_data["workflow"] = True
+                try:
+                    run_async_from_sync(ctx.notify("rpc.ui.chat.plan_update", plan_data))
+                except Exception:
+                    logger.debug("plan_callback notify failed", exc_info=True)
+
             agent_loop, executor = build_workflow_loop(
                 skills=self.skills,
                 llm_config=LLMConfig(
@@ -402,6 +435,7 @@ class GISCodeAgent:
                 on_code_start=_on_code_start,
                 on_code_delta=_on_code_delta,
                 on_code_end=_on_code_end,
+                plan_callback=_plan_callback,
                 context=shared_context,
             )
             logger.info(

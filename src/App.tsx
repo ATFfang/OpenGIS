@@ -16,6 +16,7 @@ function App() {
   const theme = useSettingsStore((s) => s.appearance.theme)
   const debugMode = useSettingsStore((s) => s.agent.debugMode)
   const setWorkspacePath = useAssetStore((s) => s.setWorkspacePath)
+  const workspacePath = useAssetStore((s) => s.workspacePath)
 
   // Wire up the v3.0 JSON-RPC 2.0 three-channel bridge once, at app start.
   useEffect(() => {
@@ -164,6 +165,15 @@ function App() {
       level: debugMode ? 'DEBUG' : 'INFO',
     }).catch(() => {/* backend may not be ready yet */})
   }, [debugMode])
+
+  // Install built-in workflow templates when workspace is opened
+  useEffect(() => {
+    if (workspacePath) {
+      pythonClient.send('rpc.workspace.install_templates', {
+        workspace_path: workspacePath,
+      }).catch(() => {/* backend may not be ready yet */})
+    }
+  }, [workspacePath])
 
   return (
     <>

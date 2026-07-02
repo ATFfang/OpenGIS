@@ -40,6 +40,8 @@ interface ChatStore {
   isStreaming: boolean
   isWaitingForUser: boolean
   _persistenceReady: boolean
+  /** True when a workflow plan is active — suppresses detailed events. */
+  workflowPlanActive: boolean
 
   activeConversation: () => Conversation | null
 
@@ -152,6 +154,7 @@ function installNotificationBridge(
           }
         }
         get().setStreaming(false)
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.code_block': {
@@ -456,6 +459,7 @@ function installNotificationBridge(
           }
         }
         get().setStreaming(false)
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.progress': {
@@ -517,6 +521,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     activeConversationId: null,
     isStreaming: false,
     isWaitingForUser: false,
+    workflowPlanActive: false,
     _persistenceReady: false,
 
     activeConversation: () => {
@@ -605,6 +610,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
       try {
         const loaded = await loadConversations(workspacePath)
+        // Mark pending screenshot cards as expired — the backend session
+        // that created them is gone, so they can never be captured.
+        for (const conv of loaded) {
+          for (const msg of conv.messages) {
+            if (msg.say === 'screenshot' && msg.screenshotData) {
+              msg.say = 'text'
+              msg.text = '📸 [截图已过期]'
+              msg.screenshotData = undefined
+            }
+          }
+        }
         set({
           conversations: loaded,
           activeConversationId: loaded[0]?.id ?? null,

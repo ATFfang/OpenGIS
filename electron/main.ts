@@ -352,6 +352,19 @@ app.whenReady().then(async () => {
     return { success: true, path: dir }
   })
 
+  // ── Write binary data (ArrayBuffer) to file ─────────────────────
+  ipcMain.handle('file:write-binary', (_event, filePath: string, buffer: ArrayBuffer) => {
+    try {
+      const { writeFileSync, mkdirSync } = require('fs')
+      const { dirname } = require('path')
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(buffer))
+      return { success: true, path: filePath }
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) }
+    }
+  })
+
   // ── Show file/folder in OS file manager ──────────────────────────
   ipcMain.handle('file:show-in-folder', (_event, filePath: string) => {
     try {

@@ -181,6 +181,8 @@ class RpcHandler:
             # debug channel: runtime log level control
             "rpc.debug.set_log_level": self._handle_set_log_level,
             "rpc.debug.get_log_level": self._handle_get_log_level,
+            # workspace channel: template management
+            "rpc.workspace.install_templates": self._handle_install_templates,
         }
 
     async def handle_message(self, raw: str) -> None:
@@ -655,6 +657,31 @@ class RpcHandler:
         """Return the current log level."""
         from opengis_backend.logging_setup import get_level
         return {"status": "ok", "level": get_level()}
+
+    # ─── Workspace: install built-in templates ───────────────────────
+
+    async def _handle_install_templates(self, params: dict) -> Any:
+        """Install built-in workflow templates to workspace.
+
+        Params: {"workspace_path": str}
+        Idempotent — only copies files that don't already exist.
+        """
+        from pathlib import Path
+
+        workspace = params.get("workspace_path")
+        if not workspace:
+            return {"status": "error", "message": "Missing workspace_path"}
+
+        try:
+            from opengis_backend.workspace.manager import WorkspaceManager
+            wm = WorkspaceManager()
+            ws = Path(workspace)
+            if not ws.is_dir():
+                return {"status": "error", "message": f"Not a directory: {workspace}"}
+            wm._ensure_builtin_templates(ws)
+            return {"status": "ok", "workspace": workspace}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     # ─── A4: workspace revert ──────────────────────────────────────────
 

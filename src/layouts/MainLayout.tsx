@@ -11,6 +11,7 @@ import { LayerPanel } from '@/features/layers/LayerPanel'
 import { AssetExplorer } from '@/features/assets/AssetExplorer'
 import { CodeViewer, CodeTabHeader } from '@/features/code/CodeViewer'
 import { CsvTableView } from '@/features/code/CsvTableView'
+import { ImageViewer } from '@/features/code/ImageViewer'
 import { ScriptRunnerView } from '@/features/script-runner/ScriptRunnerView'
 import { WorkflowsPanel } from '@/features/workflows/WorkflowsPanel'
 import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
@@ -364,6 +365,12 @@ function CodeTabContent({ tab }: { tab: ViewTab }) {
     || path.endsWith('.csv') || path.endsWith('.tsv')
   if (isCsv) {
     return <CsvTableView tab={tab} />
+  }
+
+  const isImage = lang === 'image'
+    || /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(path)
+  if (isImage) {
+    return <ImageViewer tab={tab} />
   }
 
   return <CodeViewer tab={tab} />

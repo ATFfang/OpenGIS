@@ -9,6 +9,7 @@ import { CodeStepRow, CodeResultRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
 import PlanRow from './PlanRow'
 import { SubagentRow } from './SubagentRow'
+import { ScreenshotRow } from './ScreenshotRow'
 import { useChatStore } from '@/stores/chatStore'
 
 interface ChatRowProps {
@@ -116,6 +117,17 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
   // Sub-agent running indicator emitted via rpc.ui.chat.subagent_update.
   if (type === 'subagent') {
     return <SubagentRow data={message.subagentData} />
+  }
+
+  // Interactive screenshot card emitted via rpc.ui.chat.interactive_snapshot.
+  if (type === 'screenshot' && message.screenshotData) {
+    return (
+      <ScreenshotRow
+        requestId={message.screenshotData.requestId}
+        savePath={message.screenshotData.savePath}
+        prompt={message.screenshotData.prompt}
+      />
+    )
   }
 
   // Soft stop: agent hit its step budget. Shows summary (already streamed

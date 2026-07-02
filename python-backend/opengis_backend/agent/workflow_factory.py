@@ -60,6 +60,7 @@ def build_workflow_loop(
     on_code_delta: Optional[Callable[[int, str], None]] = None,
     on_code_end: Optional[Callable[[int], None]] = None,
     context: Optional[ContextManager] = None,
+    plan_callback: Optional[Callable[[dict], None]] = None,
 ) -> tuple["WorkflowLoop", Any]:
     """Build a fresh WorkflowLoop + subprocess executor.
 
@@ -150,7 +151,9 @@ def build_workflow_loop(
         on_code_start=on_code_start,
         on_code_delta=on_code_delta,
         on_code_end=on_code_end,
+        plan_callback=plan_callback,
         context=context if context is not None else ContextManager(),
+        workspace=str((getattr(ctx, "meta", None) or {}).get("workspace_path", "")),
     )
 
     return workflow_loop, executor

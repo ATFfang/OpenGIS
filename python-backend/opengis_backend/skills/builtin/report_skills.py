@@ -23,225 +23,217 @@ from opengis_backend.skills.registry import skill
 logger = logging.getLogger("opengis.report")
 
 
-# ── Map Snapshot ────────────────────────────────────────────────────
+# ── Interactive Snapshot ────────────────────────────────────────────
 
 @skill(
-    name="export_map_snapshot",
-    display_name="Export Map Snapshot",
+    name="interactive_snapshot",
+    display_name="Interactive Map Snapshot",
     description=(
-        "Export the current map view as a PNG/JPG image. Automatically switches "
-        "to the map tab before exporting, so the map is always visible. "
-        "Supports switching to a specific basemap and controlling layer visibility. "
-        "The original map state is automatically restored after export.\n\n"
-        "Use cases:\n"
-        "- Academic report figures: use basemap='carto-light-nolabels' for clean maps\n"
-        "- Multi-layer comparison: export multiple times with different visible_layers\n"
-        "- Presentation slides: use hide_basemap=True for white background\n\n"
-        "Available basemap IDs: 'osm-streets', 'carto-dark', 'carto-dark-nolabels', "
-        "'carto-light', 'carto-light-nolabels', 'carto-voyager', 'carto-voyager-nolabels'.\n\n"
-        "Note: This skill blocks until the file is written. If the map has no data, "
-        "the export will be a blank basemap."
+        "Request the user to manually adjust the map and take a screenshot. "
+        "This skill blocks indefinitely until the user clicks 'Capture' or "
+        "'Skip' in the chat panel. The agent waits as long as needed — no timeout.\n\n"
+        "The user can pan, zoom, toggle layers, and switch basemaps before "
+        "clicking capture. The screenshot is saved to the specified path.\n\n"
+        "If the agent is cancelled by the user while waiting, the skill "
+        "automatically unblocks."
     ),
     category="report",
     group="report",
     params=[
         {"name": "save_path", "type": "string", "required": True,
-         "description": "Absolute path where the image will be saved (e.g. '/workspace/figures/map1.png')."},
-        {"name": "basemap_id", "type": "string", "required": False,
-         "description": "Basemap to use. Default: 'carto-light-nolabels' (clean, light, no labels — ideal for academic figures)."},
-        {"name": "visible_layers", "type": "string", "required": False,
-         "description": "JSON array of layer IDs to show. Other layers will be hidden. Omit to keep current visibility."},
-        {"name": "hide_basemap", "type": "boolean", "required": False,
-         "description": "If true, hide the basemap entirely (white background). Default: false."},
-        {"name": "dpi_scale", "type": "number", "required": False,
-         "description": "DPI multiplier for high-res export (1=screen, 2=2x, 3=3x). Default: 2 for print quality."},
+         "description": "Absolute path where the screenshot will be saved (e.g. '/workspace/figures/map.png')."},
+        {"name": "prompt", "type": "string", "required": False,
+         "description": "Instruction shown to the user (e.g. '请调整到中国全境视图'). Default: generic prompt."},
     ],
-    returns="dict with saved_to, width, height, format",
+    returns="dict with saved_to path, or {skipped: true} if user cancelled",
     needs_context=True,
 )
-def export_map_snapshot(
+def interactive_snapshot(
     ctx: SkillContext,
     save_path: str,
-    basemap_id: str = "carto-light-nolabels",
-    visible_layers: str | None = None,
-    hide_basemap: bool = False,
-    dpi_scale: float = 2.0,
-    timeout: float = 30.0,
+    prompt: str = "",
 ) -> dict[str, Any]:
-    """Export map snapshot via frontend RPC.
+    """Request interactive map screenshot from the user.
 
-    Blocks until the frontend confirms the file has been written.
-    Polls save_path every 0.5s up to `timeout` seconds.
+    Sends a notification to the frontend which renders a capture card
+    in the chat. Blocks indefinitely until the user clicks 'Capture'
+    or 'Skip'. No timeout — the user decides when to proceed.
     """
     import time
+    from uuid import uuid4
 
-    payload: dict[str, Any] = {
-        "save_path": save_path,
-        "basemap_id": basemap_id,
-        "dpi_scale": dpi_scale,
-        "hide_basemap": hide_basemap,
-    }
+    request_id = uuid4().hex
+    resolved_path = Path(save_path)
+    if not resolved_path.is_absolute():
+        workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path", "")
+        if workspace:
+            resolved_path = Path(workspace) / resolved_path
 
-    if visible_layers:
-        try:
-            layers = json.loads(visible_layers) if isinstance(visible_layers, str) else visible_layers
-            if isinstance(layers, list):
-                payload["visible_layers"] = layers
-        except json.JSONDecodeError:
-            pass
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
-    run_async_from_sync(ctx.notify("rpc.ui.map.export_map", payload))
+    # Notify frontend to show the capture card
+    run_async_from_sync(ctx.notify("rpc.ui.chat.interactive_snapshot", {
+        "request_id": request_id,
+        "save_path": str(resolved_path),
+        "prompt": prompt or "请调整地图到满意位置，然后点击截图。",
+    }))
 
-    # Wait for the frontend to write the file.
-    target = Path(save_path)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if target.exists() and target.stat().st_size > 0:
-            size_kb = target.stat().st_size / 1024
-            return {
-                "saved_to": save_path,
-                "basemap": basemap_id,
-                "dpi_scale": dpi_scale,
-                "size_kb": round(size_kb, 1),
-            }
+    # Poll for the result file (written by frontend after capture).
+    # No timeout — blocks until user acts or agent is interrupted.
+    result_path = resolved_path.parent / f".snapshot_{request_id}.result"
+
+    while True:
+        if result_path.exists():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                result_path.unlink(missing_ok=True)
+                if result.get("skipped"):
+                    return {"skipped": True, "save_path": str(resolved_path)}
+                return {
+                    "saved_to": str(resolved_path),
+                    "width": result.get("width"),
+                    "height": result.get("height"),
+                }
+            except Exception:
+                result_path.unlink(missing_ok=True)
+                return {"saved_to": str(resolved_path)}
         time.sleep(0.5)
 
-    raise TimeoutError(
-        f"Map export timed out after {timeout}s. "
-        f"File not found: {save_path}. "
-        "Check that the frontend map is visible and rendering."
-    )
 
-
-# ── Write Report ────────────────────────────────────────────────────
+# ── Write Report Section ────────────────────────────────────────────
 
 @skill(
-    name="write_report",
-    display_name="Write Academic Report",
+    name="write_report_section",
+    display_name="Write Report Section",
     description=(
-        "Generate a structured academic report in Markdown format with "
-        "embedded figure references. Creates a report.md file and a figures/ "
-        "directory for images.\n\n"
-        "The report follows standard academic structure: Title, Abstract, "
-        "Introduction, Methods, Results, Discussion, Conclusion, References.\n\n"
-        "Use export_map_snapshot first to generate figure PNGs, then reference "
-        "them in the report via their filenames."
+        "Write one section of a Markdown report. Call this multiple times "
+        "to build a report incrementally — each call appends one section "
+        "to report.md. First call creates the file with a title header.\n\n"
+        "Use this instead of write_file for long reports, because the LLM "
+        "cannot generate very long text in a single code block (output token "
+        "limit). Writing one section per call avoids truncation.\n\n"
+        "Example workflow:\n"
+        "  1. write_report_section(dir, title='My Report', heading='Abstract', content='...')\n"
+        "  2. write_report_section(dir, heading='1. Introduction', content='...')\n"
+        "  3. write_report_section(dir, heading='2. Results', content='...', figures='[{...}]')\n"
+        "  4. write_report_section(dir, heading='3. Conclusion', content='...')"
     ),
     category="report",
     group="report",
     params=[
         {"name": "output_dir", "type": "string", "required": True,
-         "description": "Directory where report.md and figures/ will be created."},
-        {"name": "title", "type": "string", "required": True,
-         "description": "Report title."},
-        {"name": "authors", "type": "string", "required": False,
-         "description": "Author names. Default: 'OpenGIS Analysis'."},
-        {"name": "sections", "type": "string", "required": True,
-         "description": "JSON array of section objects: [{\"heading\": \"...\", \"content\": \"...\"}]. Content supports Markdown."},
+         "description": "Directory where report.md and figures/ will be created (e.g. 'report')."},
+        {"name": "title", "type": "string", "required": False,
+         "description": "Report title. Only needed on the first call — creates report.md with a title header."},
+        {"name": "heading", "type": "string", "required": True,
+         "description": "Section heading (e.g. 'Abstract', '1. Introduction', '2. Results')."},
+        {"name": "content", "type": "string", "required": True,
+         "description": "Section content in Markdown. Keep each call under 2000 chars to avoid truncation."},
         {"name": "figures", "type": "string", "required": False,
-         "description": "JSON array of figure objects: [{\"path\": \"/abs/path/to/image.png\", \"caption\": \"...\", \"label\": \"fig-1\"}]. Paths are copied to figures/ dir."},
-        {"name": "references", "type": "string", "required": False,
-         "description": "JSON array of reference strings: [\"Author (Year). Title. Journal.\"]."},
+         "description": "JSON array of figure objects for this section: [{\"path\": \"/abs/path.png\", \"caption\": \"...\"}]. Figures are copied to figures/ dir and referenced in the report."},
     ],
-    returns="dict with report_path and figures_dir",
+    returns="dict with report_path and section count",
     needs_context=True,
 )
-def write_report(
+def write_report_section(
     ctx: SkillContext,
     output_dir: str,
-    title: str,
-    sections: str,
-    authors: str = "OpenGIS Analysis",
+    heading: str,
+    content: str,
+    title: str = "",
     figures: str | None = None,
-    references: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a structured academic report in Markdown."""
-    out = Path(output_dir)
+    """Write one section of a report, appending to report.md."""
+    import shutil
 
-    # Resolve relative paths against the workspace directory.
+    out = Path(output_dir)
     if not out.is_absolute():
         workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path", "")
         if workspace:
             out = Path(workspace) / out
 
+    out.mkdir(parents=True, exist_ok=True)
     fig_dir = out / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse sections
-    section_list = json.loads(sections) if isinstance(sections, str) else sections
+    report_path = out / "report.md"
+    is_new = not report_path.exists()
 
-    # Parse and copy figures
+    lines: list[str] = []
+
+    # First call: create title header
+    if is_new and title:
+        lines.append(f"# {title}\n")
+
+    # Parse explicit figures
     fig_list = []
     if figures:
-        fig_list = json.loads(figures) if isinstance(figures, str) else figures
+        try:
+            fig_list = json.loads(figures) if isinstance(figures, str) else figures
+        except json.JSONDecodeError:
+            logger.warning("write_report_section: invalid figures JSON")
 
-    # Build Markdown
-    lines: list[str] = []
-    lines.append(f"# {title}\n")
-    lines.append(f"**Authors:** {authors}\n")
-    lines.append(f"**Date:** {_today()}\n")
-    lines.append("---\n")
+    # Resolve relative figure paths
+    workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path", "")
+    for fig in fig_list:
+        p = Path(fig.get("path", ""))
+        if not p.is_absolute() and workspace:
+            fig["path"] = str(Path(workspace) / p)
 
-    fig_counter = 0
-    for sec in section_list:
-        heading = sec.get("heading", "")
-        content = sec.get("content", "")
-        lines.append(f"## {heading}\n")
-        lines.append(content)
-        lines.append("")
+    # Auto-detect image paths referenced in content
+    # Matches: ![caption](path) or ![caption](/abs/path.png)
+    import re
+    img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    for match in img_pattern.finditer(content):
+        caption = match.group(1)
+        img_path = match.group(2)
+        # Skip URLs (http/https)
+        if img_path.startswith("http://") or img_path.startswith("https://"):
+            continue
+        # Resolve relative paths
+        p = Path(img_path)
+        if not p.is_absolute() and workspace:
+            p = Path(workspace) / p
+        # Add to fig_list if not already there
+        if not any(fig.get("path") == str(p) for fig in fig_list):
+            fig_list.append({"path": str(p), "caption": caption})
 
-        # Insert figures after the section that references them
-        for fig in fig_list:
-            if fig.get("after_section") == heading:
-                fig_counter += 1
-                fig_path = Path(fig["path"])
-                fig_name = fig.get("label", f"fig-{fig_counter}")
-                caption = fig.get("caption", fig_path.stem)
+    # Append section heading
+    lines.append(f"\n## {heading}\n")
+    lines.append(content)
+    lines.append("")
 
-                # Copy figure to figures/ directory
-                dest = fig_dir / fig_path.name
-                if fig_path.exists() and fig_path.resolve() != dest.resolve():
-                    import shutil
-                    shutil.copy2(fig_path, dest)
-
-                lines.append(f"![{caption}](figures/{fig_path.name})")
-                lines.append(f"*Figure {fig_counter}: {caption}*\n")
-
-    # Append remaining figures not tied to a section
-    remaining = [f for f in fig_list if not f.get("after_section")]
-    if remaining:
-        lines.append("## Figures\n")
-        for fig in remaining:
-            fig_counter += 1
-            fig_path = Path(fig["path"])
-            caption = fig.get("caption", fig_path.stem)
+    # Copy figures and append references
+    for fig in fig_list:
+        fig_path = Path(fig["path"])
+        caption = fig.get("caption", fig_path.stem)
+        if fig_path.exists():
             dest = fig_dir / fig_path.name
-            if fig_path.exists() and fig_path.resolve() != dest.resolve():
-                import shutil
+            if not dest.exists():
                 shutil.copy2(fig_path, dest)
-            lines.append(f"![{caption}](figures/{fig_path.name})")
-            lines.append(f"*Figure {fig_counter}: {caption}*\n")
+            # Only append reference if not already in content
+            ref = f"figures/{fig_path.name}"
+            if ref not in content:
+                lines.append(f"![{caption}]({ref})\n")
+        else:
+            logger.warning("write_report_section: figure not found: %s", fig["path"])
 
-    # References
-    ref_list = []
-    if references:
-        ref_list = json.loads(references) if isinstance(references, str) else references
-    if ref_list:
-        lines.append("## References\n")
-        for i, ref in enumerate(ref_list, 1):
-            lines.append(f"[{i}] {ref}")
-        lines.append("")
+    # Append to file
+    with open(report_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
-    report_path = out / "report.md"
-    report_path.write_text("\n".join(lines), encoding="utf-8")
+    # Count sections
+    try:
+        existing = report_path.read_text(encoding="utf-8")
+        section_count = existing.count("\n## ")
+    except Exception:
+        section_count = -1
 
     return {
         "report_path": str(report_path),
-        "figures_dir": str(fig_dir),
-        "sections": len(section_list),
-        "figures": fig_counter,
+        "sections": section_count,
+        "is_new": is_new,
     }
-
 
 # ── Export PDF ──────────────────────────────────────────────────────
 
@@ -365,11 +357,6 @@ th, td {{ border: 1px solid #ccc; padding: 6px; text-align: left; }}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
-
-def _today() -> str:
-    from datetime import date
-    return date.today().isoformat()
-
 
 def _cmd_exists(cmd: str) -> bool:
     """Check if a command is available on PATH."""

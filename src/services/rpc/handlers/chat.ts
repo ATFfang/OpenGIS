@@ -97,6 +97,11 @@ export const chatHandlers: Record<string, RpcHandler> = {
       });
     }
 
+    // Track workflow plan state for compact UI mode
+    if (parsed.workflow) {
+      useChatStore.setState({ workflowPlanActive: true })
+    }
+
     return { ok: true, plan_id: parsed.plan_id, steps: parsed.steps.length };
   },
 
@@ -152,5 +157,31 @@ export const chatHandlers: Record<string, RpcHandler> = {
     }
 
     return { ok: true, subagent_id: parsed.subagent_id };
+  },
+
+  /**
+   * Interactive map screenshot request. The backend skill sends this
+   * to show a capture card in the chat. The user adjusts the map and
+   * clicks "Capture" — the frontend saves the image and writes a
+   * result marker so the backend skill can unblock.
+   */
+  'rpc.ui.chat.interactive_snapshot': (params) => {
+    const requestId = params?.request_id as string;
+    const savePath = params?.save_path as string;
+    const prompt = params?.prompt as string;
+
+    if (!requestId || !savePath) {
+      return { ok: false, error: 'Missing request_id or save_path' };
+    }
+
+    const store = useChatStore.getState();
+    store._addMessage({
+      ts: Date.now(),
+      type: 'say',
+      say: 'screenshot',
+      screenshotData: { requestId, savePath, prompt: prompt || '' },
+    });
+
+    return { ok: true, request_id: requestId };
   },
 };

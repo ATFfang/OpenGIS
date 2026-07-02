@@ -80,6 +80,7 @@ export function ChatView() {
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const conversations = useChatStore((s) => s.conversations)
   const isStreaming = useChatStore((s) => s.isStreaming)
+  const workflowPlanActive = useChatStore((s) => s.workflowPlanActive)
   const sendMessage = useChatStore((s) => s.sendMessage)
   const abortTask = useChatStore((s) => s.abortTask)
   const createConversation = useChatStore((s) => s.createConversation)
@@ -560,7 +561,16 @@ export function ChatView() {
                 items={group.items}
                 onEditUser={handleEditUserMessage}
               >
-                {group.items.map((msg, index) => {
+                {group.items
+                  .filter((msg) => {
+                    // In workflow mode, suppress detailed events — only show
+                    // plan, text replies, and errors.
+                    if (!workflowPlanActive) return true
+                    const say = msg.say
+                    if (say === 'plan' || say === 'text' || say === 'error' || say === 'user_feedback') return true
+                    return false
+                  })
+                  .map((msg, index) => {
                   const globalIndex = messageIndexMap.get(msg) ?? 0
                   return (
                     <ChatRow

@@ -263,6 +263,8 @@ export const PlanUpdateSchema = z.object({
     .min(1)
     .max(50),
   run_id: z.string().optional(),
+  /** When true, the plan is from a workflow — suppress detailed events. */
+  workflow: z.boolean().optional(),
 });
 
 /**

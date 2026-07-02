@@ -47,6 +47,7 @@ export type SayType =
   | 'max_steps_reached'
   | 'api_req_started'
   | 'mcp_server_response'
+  | 'screenshot'
 
 export type AskType =
   | 'followup'
@@ -158,6 +159,13 @@ export interface UIMessage {
   // Sub-agent delegation card — filled for say='subagent'. Upserted by
   // subagentId so the running → done transition animates in place.
   subagentData?: SubagentData
+
+  // Interactive screenshot card — filled for say='screenshot'.
+  screenshotData?: {
+    requestId: string
+    savePath: string
+    prompt: string
+  }
 
   // Model attribution
   modelInfo?: {

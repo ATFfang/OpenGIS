@@ -22,6 +22,10 @@ const electronAPI = {
   writeFile: (path: string, content: string) =>
     ipcRenderer.invoke('file:write', path, content),
 
+  /** Write binary data (ArrayBuffer) to a file. Used for image exports. */
+  writeFileBinary: (path: string, buffer: ArrayBuffer) =>
+    ipcRenderer.invoke('file:write-binary', path, buffer),
+
   getFileInfo: (path: string) =>
     ipcRenderer.invoke('file:info', path),
 
