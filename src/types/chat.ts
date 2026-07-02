@@ -36,7 +36,9 @@ export type SayType =
   | 'code_result'      // Stdout/stderr from executing a code block
   | 'image'            // Inline image (e.g. matplotlib plot saved by save_plot)
   | 'command'          // A frontend command (map.addLayer etc.)
+  | 'plan'             // A TODO / plan checklist emitted by update_plan
   | 'progress'         // Execution progress indicator
+  | 'subagent'         // Isolated sub-agent delegation card (run_subagent / run_subagents)
   | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
   | 'error'
   | 'followup'
@@ -45,6 +47,7 @@ export type SayType =
   | 'max_steps_reached'
   | 'api_req_started'
   | 'mcp_server_response'
+  | 'screenshot'
 
 export type AskType =
   | 'followup'
@@ -52,6 +55,57 @@ export type AskType =
   | 'command'
   | 'completion_result'
   | 'resume_task'
+
+// ── Plan / TODO checklist (emitted by the backend `update_plan` skill) ──
+export type PlanStepStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'done'
+  | 'skipped'
+  | 'failed'
+
+export interface PlanStep {
+  id: string
+  title: string
+  status: PlanStepStatus
+  note?: string
+}
+
+export interface PlanData {
+  /** Stable id; repeated updates with the same id replace the same card. */
+  planId: string
+  title?: string
+  steps: PlanStep[]
+  runId?: string
+  /** Wall-clock of the latest update, for subtle "updated" affordances. */
+  updatedAt?: number
+}
+
+// ── Sub-agent delegation card (emitted by run_subagent / run_subagents) ──
+// We deliberately surface ONLY a content-free status (task title + state),
+// never the child agent's internal steps — the whole point of a sub-agent
+// is to keep that mess out of the main context.
+export type SubagentTaskStatus = 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface SubagentTask {
+  title: string
+  status: SubagentTaskStatus
+}
+
+export interface SubagentData {
+  /** Stable id; repeated updates with the same id replace the same card. */
+  subagentId: string
+  status: 'running' | 'done' | 'cancelled'
+  /** True when this is a parallel fan-out (run_subagents with >1 task). */
+  parallel: boolean
+  tasks: SubagentTask[]
+  okCount?: number
+  total?: number
+  runId?: string
+  /** Wall-clock of first/last update — drives the elapsed-time chip. */
+  startedAt?: number
+  updatedAt?: number
+}
 
 export interface UIMessage {
   ts: number
@@ -81,6 +135,8 @@ export interface UIMessage {
   scriptAbsPath?: string
   runId?: string
   codeError?: string | null
+  /** Execution duration in milliseconds (filled for code_result). */
+  durationMs?: number
 
   // Whether a backend command finished (for command-type messages)
   commandCompleted?: boolean
@@ -95,6 +151,21 @@ export interface UIMessage {
   // Progress indicator — filled for say='progress'.
   progressStage?: string
   progressDetail?: string
+
+  // Plan / TODO checklist — filled for say='plan'. Upserted by planId so
+  // repeated update_plan() calls within a run update the same card.
+  planData?: PlanData
+
+  // Sub-agent delegation card — filled for say='subagent'. Upserted by
+  // subagentId so the running → done transition animates in place.
+  subagentData?: SubagentData
+
+  // Interactive screenshot card — filled for say='screenshot'.
+  screenshotData?: {
+    requestId: string
+    savePath: string
+    prompt: string
+  }
 
   // Model attribution
   modelInfo?: {

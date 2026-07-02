@@ -25,7 +25,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult, extract_code_block, extract_thought
+from opengis_backend.agent.agent_loop import (
+    AgentStep, CodeExecResult, StreamingParser,
+    LLM_MAX_RETRIES, LLM_BASE_DELAY, LLM_RETRYABLE_EXCEPTIONS,
+    extract_code_block, extract_thought,
+)
 from opengis_backend.agent.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,9 @@ class WorkflowNode:
     node_type: str = "process"  # process | input | output | decision
     config: dict = field(default_factory=dict)
     max_retries: int = 3
+    # Validation hooks — parsed but NOT yet evaluated. Stored so they
+    # round-trip through from_json and are available for future use.
+    hooks: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -73,13 +80,18 @@ class WorkflowDocument:
 
         nodes = []
         for n in data.get("nodes", []):
+            hooks_raw = n.get("hooks", [])
+            hooks = hooks_raw if isinstance(hooks_raw, list) else []
+
             nodes.append(WorkflowNode(
                 id=n.get("id", ""),
                 title=n.get("title", n.get("label", "Untitled")),
                 description=n.get("description", ""),
-                node_type=n.get("type", "process"),
-                config=n.get("config", {}),
-                max_retries=n.get("max_retries", 3),
+                # Accept both frontend (camelCase) and backend (snake_case) names.
+                node_type=n.get("nodeType", n.get("type", "process")),
+                config=n.get("params", n.get("config", {})),
+                max_retries=n.get("maxRetries", n.get("max_retries", 3)),
+                hooks=hooks,
             ))
 
         edges = []
@@ -239,14 +251,27 @@ class WorkflowLoop:
         Optional pre-existing ContextManager.
     """
 
-    llm_call: Callable[[list[dict]], str]
+    llm_call: Callable[..., str]
     executor_call: Callable[[str], CodeExecResult]
     system_prompt: str
     workflow: WorkflowDocument
     max_retries_per_node: int = 3
     step_callback: Optional[Callable[[AgentStep], None]] = None
     progress_callback: Optional[Callable[[str, str], None]] = None
+    # Streaming hooks — same as AgentLoop. When provided, the LLM call
+    # uses stream=True and tokens are forwarded in real-time.
+    on_thought_delta: Optional[Callable[[str], None]] = None
+    on_code_start: Optional[Callable[[int], None]] = None
+    on_code_delta: Optional[Callable[[int, str], None]] = None
+    on_code_end: Optional[Callable[[int], None]] = None
+    # Plan callback — emits plan_update events for compact workflow UI.
+    plan_callback: Optional[Callable[[dict], None]] = None
     context: ContextManager = field(default_factory=ContextManager)
+    # Workspace path for writing intermediate files.
+    workspace: str = ""
+    # When True, the workflow stops immediately if any node fails
+    # (instead of continuing with a failure string as predecessor output).
+    halt_on_failure: bool = False
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point.
     _interrupted: bool = field(default=False, init=False, repr=False)
@@ -287,6 +312,9 @@ class WorkflowLoop:
         )
         self.context.add_user_message(workflow_intro)
 
+        # Emit initial plan (all steps pending)
+        self._emit_plan(execution_order, node_outputs, total_steps)
+
         for step_index, node in enumerate(execution_order, 1):
             # Check for external interruption.
             if self._interrupted:
@@ -325,6 +353,27 @@ class WorkflowLoop:
 
             node_outputs[node.id] = node_result
             completed_nodes.append(node.id)
+
+            # Update plan after each step
+            self._emit_plan(execution_order, node_outputs, total_steps)
+
+            # Halt on failure: if the node failed and halt_on_failure is set,
+            # stop the workflow immediately instead of continuing with bad data.
+            if self.halt_on_failure and node_result.startswith("(Step '"):
+                logger.warning(
+                    "Workflow halted: node '%s' failed and halt_on_failure=True",
+                    node.title,
+                )
+                return (
+                    f"Workflow '{self.workflow.name}' halted at step {step_index}/{total_steps} "
+                    f"('{node.title}') due to failure.\n\n"
+                    f"{node_result}\n\n"
+                    "Steps completed before failure:\n"
+                    + "\n".join(
+                        f"  - {nid}: {node_outputs.get(nid, '(no output)')[:200]}"
+                        for nid in completed_nodes[:-1]
+                    )
+                )
 
         # Generate final summary.
         return self._generate_workflow_summary(
@@ -368,6 +417,8 @@ class WorkflowLoop:
         error_count = 0
         max_errors = node.max_retries or self.max_retries_per_node
         accumulated_output: list[str] = []
+        nudged = False  # Track whether we've nudged the LLM to write code.
+        sub_step = 0    # Incremented per code execution within this node.
 
         for iteration in range(max_iterations):
             # Check for external interruption.
@@ -389,11 +440,101 @@ class WorkflowLoop:
                     pass
 
             t0 = time.monotonic()
-            try:
-                response = self.llm_call(messages)
-            except Exception as e:
-                logger.error("LLM call failed at node %s: %s", node.id, e)
-                raise
+
+            # Build a streaming parser for this LLM call when streaming
+            # callbacks are provided. Tokens are forwarded to the UI in
+            # real-time, just like in the free-form AgentLoop.
+            code_started = {"v": False}
+
+            def _wf_on_thought(text: str) -> None:
+                if self.on_thought_delta:
+                    try:
+                        self.on_thought_delta(text)
+                    except Exception:
+                        logger.exception("on_thought_delta failed")
+
+            def _wf_on_code_start() -> None:
+                code_started["v"] = True
+                if self.on_code_start:
+                    try:
+                        self.on_code_start(step_index)
+                    except Exception:
+                        logger.exception("on_code_start failed")
+
+            def _wf_on_code_delta(text: str) -> None:
+                if self.on_code_delta:
+                    try:
+                        self.on_code_delta(step_index, text)
+                    except Exception:
+                        logger.exception("on_code_delta failed")
+
+            def _wf_on_code_end() -> None:
+                if self.on_code_end:
+                    try:
+                        self.on_code_end(step_index)
+                    except Exception:
+                        logger.exception("on_code_end failed")
+
+            parser = StreamingParser(
+                on_thought_delta=_wf_on_thought,
+                on_code_start=_wf_on_code_start,
+                on_code_delta=_wf_on_code_delta,
+                on_code_end=_wf_on_code_end,
+            )
+
+            def _on_llm_delta(piece: str) -> None:
+                parser.feed(piece)
+
+            response = None
+            for _retry_attempt in range(LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.llm_call(messages, on_delta=_on_llm_delta)
+                    parser.finish()
+                    break
+                except TypeError as te:
+                    # Only fall back if the TypeError is about on_delta.
+                    if "on_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
+                        raise
+                    response = self.llm_call(messages)
+                    if response and self.on_thought_delta:
+                        try:
+                            self.on_thought_delta(response)
+                        except Exception:
+                            logger.exception("on_thought_delta failed on fallback")
+                    break
+                except LLM_RETRYABLE_EXCEPTIONS as e:
+                    if self._interrupted:
+                        raise
+                    if _retry_attempt >= LLM_MAX_RETRIES:
+                        logger.error("LLM call failed after %d retries at node %s: %s",
+                                     LLM_MAX_RETRIES, node.id, e)
+                        raise
+                    import random
+                    delay = LLM_BASE_DELAY * (2 ** _retry_attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "[WF-RETRY] node %s attempt %d/%d failed (%s: %s), retrying in %.1fs...",
+                        node.id, _retry_attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, delay,
+                    )
+                    # Notify UI that we're retrying (not failed)
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(
+                                "retrying",
+                                f"Connection interrupted, retrying ({_retry_attempt + 1}/{LLM_MAX_RETRIES})...",
+                            )
+                        except Exception:
+                            pass
+                    time.sleep(delay)
+                    # Reset streaming parser for retry
+                    parser = StreamingParser(
+                        on_thought_delta=_wf_on_thought,
+                        on_code_start=_wf_on_code_start,
+                        on_code_delta=_wf_on_code_delta,
+                        on_code_end=_wf_on_code_end,
+                    )
+                except Exception as e:
+                    logger.error("LLM call failed at node %s: %s", node.id, e)
+                    raise
             duration_ms = (time.monotonic() - t0) * 1000
 
             # Parse response.
@@ -402,6 +543,27 @@ class WorkflowLoop:
 
             # If no code block, the LLM considers this node DONE.
             if code_block is None:
+                # Nudge: if the LLM replies with text instead of code,
+                # give it ONE nudge to write actual code. This catches
+                # both "plan explanation before coding" and "premature
+                # completion after one code block" cases.
+                if not nudged:
+                    nudged = True
+                    logger.info(
+                        "Text-only reply at start of node %s (iteration %d) — nudging to write code.",
+                        node.id, iteration,
+                    )
+                    self.context.add_assistant_message(response)
+                    self.context.add_user_message(
+                        "[System] This step requires code execution. "
+                        "Write a ```python code block to accomplish the task. "
+                        "A plain text reply will end this step.\n"
+                        "[系统] 此步骤需要执行代码。请写 ```python 代码块来完成任务。"
+                        "纯文本回复将结束此步骤。"
+                    )
+                    continue
+
+                # Genuine completion: either after code execution or after nudge.
                 self.context.add_assistant_message(response)
                 step = AgentStep(
                     step_num=step_index,
@@ -417,9 +579,12 @@ class WorkflowLoop:
                         logger.exception("step_callback failed")
                 # Return accumulated output + final text.
                 accumulated_output.append(response)
-                return "\n".join(accumulated_output)
+                return self._finalize_step(
+                    node, step_index, "\n".join(accumulated_output),
+                )
 
             # Execute the code block.
+            sub_step += 1
             self.context.add_assistant_message(response)
 
             # Notify the UI that code is about to execute.
@@ -440,10 +605,12 @@ class WorkflowLoop:
                 result = CodeExecResult(error=error_msg)
             exec_duration_ms = (time.monotonic() - t1) * 1000
 
-            # Build step record.
+            # Build step record. Use a unique step number that accounts
+            # for multiple code executions within the same node.
+            unique_step = step_index * 100 + sub_step
             output_str = result.logs or str(result.output or "")
             step = AgentStep(
-                step_num=step_index,
+                step_num=unique_step,
                 thought=thought,
                 code=code_block,
                 output=output_str,
@@ -462,13 +629,15 @@ class WorkflowLoop:
             # Check for final_answer().
             if result.is_final_answer:
                 accumulated_output.append(str(result.output) if result.output else "(done)")
-                return "\n".join(accumulated_output)
+                return self._finalize_step(
+                    node, step_index, "\n".join(accumulated_output),
+                )
 
             if result.error is None:
                 # Success — feed the output back to the LLM so it can
                 # continue with the next sub-step of this node.
                 self.context.add_code_output(
-                    step=step_index,
+                    step=unique_step,
                     code=code_block,
                     output=output_str,
                     error=None,
@@ -480,7 +649,7 @@ class WorkflowLoop:
                 # Error — feed back to LLM for retry.
                 error_count += 1
                 self.context.add_code_output(
-                    step=step_index,
+                    step=unique_step,
                     code=code_block,
                     output=result.logs or "",
                     error=result.error,
@@ -490,7 +659,9 @@ class WorkflowLoop:
                         "Node %s exhausted error budget (%d errors).",
                         node.id, error_count,
                     )
-                    return f"(Step '{node.title}' failed after {error_count} errors)"
+                    full_output = "\n".join(accumulated_output) if accumulated_output else ""
+                    error_msg = f"(Step '{node.title}' failed after {error_count} errors)"
+                    return self._finalize_step(node, step_index, full_output + "\n" + error_msg) if full_output else error_msg
 
                 error_feedback = (
                     f"The code failed with error:\n"
@@ -510,7 +681,167 @@ class WorkflowLoop:
         logger.warning(
             "Node %s reached iteration limit (%d).", node.id, max_iterations,
         )
-        return "\n".join(accumulated_output) if accumulated_output else f"(Step '{node.title}' reached iteration limit)"
+        full_output = "\n".join(accumulated_output) if accumulated_output else ""
+        return self._finalize_step(node, step_index, full_output) if full_output else f"(Step '{node.title}' reached iteration limit)"
+
+    def _write_step_output(
+        self,
+        node: WorkflowNode,
+        step_index: int,
+        full_output: str,
+        workspace: str,
+    ) -> str | None:
+        """Write full step output to an intermediate markdown file.
+
+        Returns the file path, or None if writing failed.
+        """
+        try:
+            from pathlib import Path
+            steps_dir = Path(workspace) / ".opengis" / "workflow_steps"
+            steps_dir.mkdir(parents=True, exist_ok=True)
+            path = steps_dir / f"step{step_index}_{node.id}.md"
+
+            lines = [
+                f"# Step {step_index}: {node.title}\n",
+                f"## Full Output\n",
+                full_output,
+            ]
+            path.write_text("\n".join(lines), encoding="utf-8")
+            logger.debug("Step output written to %s (%d chars)", path, len(full_output))
+            return str(path)
+        except Exception as e:
+            logger.warning("Failed to write step output: %s", e)
+            return None
+
+    def _summarize_step(
+        self,
+        node: WorkflowNode,
+        step_index: int,
+        full_output: str,
+        file_path: str | None,
+    ) -> str:
+        """Extract a compact summary from step output.
+
+        Heuristic extraction — no extra LLM call. Pulls out:
+        - Data paths (file paths ending in common GIS extensions)
+        - Key numbers (feature counts, statistics)
+        - The first meaningful line of output
+        """
+        import re
+
+        lines = full_output.strip().split("\n")
+
+        # Extract file paths mentioned in output
+        path_pattern = re.compile(
+            r"(/[\w./\-]+\.(?:geojson|shp|gpkg|csv|json|tif|tiff|png|jpg|pdf|md))"
+        )
+        paths = list(set(path_pattern.findall(full_output)))
+
+        # Extract key numbers (feature counts, statistics)
+        number_pattern = re.compile(
+            r"(?:要素|记录|features?|rows?|count|数量|总计|共)\D*?(\d[\d,]+)",
+            re.IGNORECASE,
+        )
+        numbers = number_pattern.findall(full_output)[:5]
+
+        # Build summary
+        parts = [f"Step {step_index}: {node.title}"]
+
+        if paths:
+            path_strs = [f"  - {p}" for p in paths[:8]]
+            parts.append("产出:\n" + "\n".join(path_strs))
+
+        if numbers:
+            parts.append(f"关键数据: {', '.join(numbers[:5])}")
+
+        # First meaningful line
+        for line in lines:
+            stripped = line.strip()
+            if stripped and len(stripped) > 10 and not stripped.startswith("#"):
+                preview = stripped[:150] + ("..." if len(stripped) > 150 else "")
+                parts.append(f"摘要: {preview}")
+                break
+
+        if file_path:
+            parts.append(f"详情: {file_path}")
+
+        return "\n".join(parts)
+
+    def _finalize_step(
+        self,
+        node: WorkflowNode,
+        step_index: int,
+        full_output: str,
+    ) -> str:
+        """Write full output to file and return a compact summary.
+
+        This is the single exit point for _execute_node. It ensures
+        every step's output is persisted to disk and a short summary
+        is returned to the caller (for predecessor_outputs).
+        """
+        # Write full output to intermediate file
+        file_path = None
+        if self.workspace:
+            file_path = self._write_step_output(node, step_index, full_output, self.workspace)
+
+        # Generate compact summary
+        summary = self._summarize_step(node, step_index, full_output, file_path)
+
+        # Proactive compression after each step — prevents context from
+        # growing unbounded across 6+ step workflows.
+        try:
+            should, reason = self.context.should_compress()
+            if should:
+                logger.info("Workflow step %d compression triggered: %s", step_index, reason)
+                self.context.compress(self.llm_call)
+        except Exception:
+            logger.warning("Post-step compression failed (non-fatal)", exc_info=True)
+
+        logger.info(
+            "Step %d (%s) finalized: %d chars output → %d char summary",
+            step_index, node.id, len(full_output), len(summary),
+        )
+        return summary
+
+    def _emit_plan(
+        self,
+        execution_order: list[WorkflowNode],
+        node_outputs: dict[str, str],
+        total_steps: int,
+    ) -> None:
+        """Emit a plan_update event showing current workflow progress."""
+        if not self.plan_callback:
+            return
+
+        steps = []
+        for i, node in enumerate(execution_order, 1):
+            if node.id in node_outputs:
+                output = node_outputs[node.id]
+                if output.startswith("(Step '") and "failed" in output:
+                    status = "failed"
+                elif output.startswith("(Workflow interrupted"):
+                    status = "skipped"
+                else:
+                    status = "done"
+            elif i == len([n for n in execution_order[:i] if n.id in node_outputs]) + 1:
+                status = "in_progress"
+            else:
+                status = "pending"
+
+            steps.append({
+                "id": node.id,
+                "title": f"{i}. {node.title}",
+                "status": status,
+            })
+
+        try:
+            self.plan_callback({
+                "plan_id": f"workflow-{id(self)}",
+                "steps": steps,
+                "title": self.workflow.name,
+            })
+        except Exception:
+            logger.debug("plan_callback failed (non-fatal)", exc_info=True)
 
     def _generate_workflow_summary(
         self,
@@ -552,7 +883,48 @@ class WorkflowLoop:
                 pass
 
         try:
-            response = self.llm_call(messages)
+            response = None
+
+            # Build a streaming parser for the summary call if streaming
+            # callbacks are available — same pattern as _execute_node.
+            summary_parser = StreamingParser(
+                on_thought_delta=lambda t: self.on_thought_delta(t) if self.on_thought_delta else None,
+                on_code_start=None,
+                on_code_delta=None,
+                on_code_end=None,
+            )
+
+            for _retry_attempt in range(LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.llm_call(messages, on_delta=lambda p: summary_parser.feed(p))
+                    summary_parser.finish()
+                    break
+                except TypeError:
+                    # llm_call doesn't accept on_delta — fall back.
+                    response = self.llm_call(messages)
+                    break
+                except LLM_RETRYABLE_EXCEPTIONS as e:
+                    if _retry_attempt >= LLM_MAX_RETRIES:
+                        raise
+                    import random
+                    delay = LLM_BASE_DELAY * (2 ** _retry_attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "[WF-RETRY] summary attempt %d/%d failed (%s), retrying in %.1fs...",
+                        _retry_attempt + 1, LLM_MAX_RETRIES, type(e).__name__, delay,
+                    )
+                    time.sleep(delay)
+                    summary_parser = StreamingParser(
+                        on_thought_delta=lambda t: self.on_thought_delta(t) if self.on_thought_delta else None,
+                        on_code_start=None,
+                        on_code_delta=None,
+                        on_code_end=None,
+                    )
+            if response is None:
+                logger.error("Workflow summary LLM call returned None after all retries")
+                response = (
+                    f"Workflow '{self.workflow.name}' completed all {len(execution_order)} steps. "
+                    "Summary generation returned no response."
+                )
             self.context.add_assistant_message(response)
             # Emit as a text reply step.
             step = AgentStep(

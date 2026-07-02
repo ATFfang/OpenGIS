@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
+from uuid import uuid4
 
 from opengis_backend.skills.context import SkillContext, run_async_from_sync
 from opengis_backend.skills.registry import skill
@@ -52,13 +53,6 @@ def _load_geojson_from_path(geojson_path: str) -> tuple[dict, str]:
     # Default: treat as GeoJSON
     geojson_obj = json.loads(p.read_text(encoding="utf-8"))
     return geojson_obj, stem
-
-# In-process registry so the agent can look a layer up by id after
-# add_layer() has returned. Keyed by layer_id → {bbox, feature_count,
-# geometry_type, name}. Lives for the lifetime of the backend process,
-# which is fine — layer_ids are scoped to the current map.
-_LAYER_INDEX: dict[str, dict[str, Any]] = {}
-
 
 def _notify_map(ctx: SkillContext, canonical: str, payload: dict) -> None:
     """
@@ -233,8 +227,9 @@ def add_layer(
     payload["geojson"] = geojson_obj
 
     if not layer_id:
-        # Stable-ish id from name or hash of payload
-        layer_id = f"layer_{abs(hash((name or '', geojson_path or ''))) % 10**8}"
+        # 内容无关的唯一 id：同名图层多轮生成不互相覆盖，并行 subagent
+        # 同时造层也不会因 hash 碰撞而丢失。
+        layer_id = f"layer_{uuid4().hex}"
 
     payload["layer_id"] = layer_id
     payload["name"] = name or layer_id
@@ -251,15 +246,13 @@ def add_layer(
 
     _notify_map(ctx, "rpc.ui.map.add_layer_from_geojson", payload)
 
-    info = {
+    return {
         "layer_id": layer_id,
         "bbox": bbox,
         "feature_count": feature_count,
         "geometry_type": geometry_type,
         "name": payload["name"],
     }
-    _LAYER_INDEX[layer_id] = info
-    return info
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -281,7 +274,6 @@ def add_layer(
 )
 def remove_layer(ctx: SkillContext, layer_id: str) -> bool:
     _notify_map(ctx, "rpc.ui.map.remove_layer", {"layer_id": layer_id})
-    _LAYER_INDEX.pop(layer_id, None)
     return True
 
 
@@ -391,25 +383,15 @@ def zoom_to_layer(
     duration: Optional[float] = None,
     padding: Optional[float] = None,
 ) -> bool:
-    info = _LAYER_INDEX.get(layer_id)
-    if info is None:
-        raise ValueError(
-            f"Unknown layer_id '{layer_id}'. "
-            f"Did you call add_layer() and use its returned info['layer_id']?"
-        )
-    bbox = info.get("bbox")
-    if not bbox:
-        raise ValueError(
-            f"Layer '{layer_id}' has no bbox (likely empty or invalid geometry). "
-            f"Cannot fit camera."
-        )
-    payload: dict = {"bbox": [float(x) for x in bbox]}
+    # 单一数据源：bbox 由前端从 mapStore 实时查得，Python 不再维护
+    # 影子记账 _LAYER_INDEX。这样既消除了双源不一致（用户/拖拽/agent
+    # 任一路径造的层都能被命中），也避免了过期 bbox 飞错位置。
+    payload: dict = {"layer_id": layer_id}
     if duration is not None:
         payload["duration"] = float(duration)
     if padding is not None:
         payload["padding"] = float(padding)
-    # zoom_to_layer always fits a bbox — canonical method is zoom_to_bbox.
-    _notify_map(ctx, "rpc.ui.map.zoom_to_bbox", payload)
+    _notify_map(ctx, "rpc.ui.map.zoom_to_layer", payload)
     return True
 
 
@@ -431,10 +413,10 @@ def zoom_to_layer(
     needs_context=True,
 )
 def set_basemap(ctx: SkillContext, basemap_id: str) -> bool:
-    # Canonical payload uses `basemap` (matches SetBasemapSchema);
-    # legacy payload keeps `basemap_id` for the old CommandBus listener.
+    # 只发 canonical 通道。之前同时发 legacy `map.setBasemap` 会让前端
+    # 触发两次 setStyle —— 而 setStyle 会清空所有图层再靠 style reload
+    # 重挂，重复触发放大了 basemap 切换 + 并发 add_layer 的竞态风险。
     run_async_from_sync(ctx.notify("rpc.ui.map.set_basemap", {"basemap": basemap_id}))
-    run_async_from_sync(ctx.notify("map.setBasemap", {"basemap_id": basemap_id}))
     return True
 
 
@@ -655,7 +637,8 @@ def add_raster(
     if not name:
         name = p.stem
 
-    layer_id = f"raster_{abs(hash(name + path)) % 10**8}"
+    # 内容无关的唯一 id，避免同名栅格多次加载互相覆盖。
+    layer_id = f"raster_{uuid4().hex}"
 
     payload: dict = {
         "path": str(p.resolve()),

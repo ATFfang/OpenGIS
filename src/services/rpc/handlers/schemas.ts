@@ -134,6 +134,12 @@ export const ExportMapSchema = z.object({
   quality: z.number().min(0).max(1).optional(),
   /** 可选：如果提供且在 Electron 下，会把结果写到该路径，不返回 base64。 */
   save_path: z.string().optional(),
+  /** 可选：导出前切换到指定底图（basemap id），导出后恢复原底图。 */
+  basemap_id: z.string().optional(),
+  /** 可选：导出前只显示指定图层（layer id 列表），导出后恢复。传空数组 = 隐藏所有图层。 */
+  visible_layers: z.array(z.string()).optional(),
+  /** 可选：导出前隐藏底图（纯白/纯黑背景），导出后恢复。 */
+  hide_basemap: z.boolean().optional(),
 });
 
 /**
@@ -228,6 +234,61 @@ export const ShowTableSchema = z.object({
   rows: z.array(z.array(z.unknown())),
   caption: z.string().optional(),
   max_rows: z.number().int().positive().optional(),
+});
+
+/**
+ * 计划 / TODO 清单更新。后端 `update_plan` skill 调用本 method，每次携带
+ * 完整的步骤列表（声明式全量替换）。前端按 `plan_id` upsert 同一张卡片。
+ */
+export const PlanStepStatusSchema = z.enum([
+  'pending',
+  'in_progress',
+  'done',
+  'skipped',
+  'failed',
+]);
+
+export const PlanUpdateSchema = z.object({
+  plan_id: z.string().min(1),
+  title: z.string().optional(),
+  steps: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        status: PlanStepStatusSchema,
+        note: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+  run_id: z.string().optional(),
+  /** When true, the plan is from a workflow — suppress detailed events. */
+  workflow: z.boolean().optional(),
+});
+
+/**
+ * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents skill
+ * 在委派子任务时调用本 method，前端按 `subagent_id` upsert 同一张卡片。
+ * 只携带任务标题与状态，不携带子智能体的内部步骤/输出（上下文隔离的本意）。
+ */
+export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed']);
+
+export const SubagentUpdateSchema = z.object({
+  subagent_id: z.string().min(1),
+  status: z.enum(['running', 'done']),
+  parallel: z.boolean().optional(),
+  tasks: z
+    .array(
+      z.object({
+        title: z.string(),
+        status: SubagentTaskStatusSchema,
+      }),
+    )
+    .max(8),
+  ok_count: z.number().int().nonnegative().optional(),
+  total: z.number().int().nonnegative().optional(),
+  run_id: z.string().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────

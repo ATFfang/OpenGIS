@@ -26,6 +26,8 @@ from typing import Any
 from opengis_backend.agent.agent_factory import build_agent_loop
 from opengis_backend.agent.agent_loop import AgentStep
 from opengis_backend.agent.context_manager import ContextManager
+from opengis_backend.agent.context_persistence import save_context, load_context
+from opengis_backend.workspace.memory import append as memory_append
 from opengis_backend.agent.events import (
     AgentEvent,
     AgentEventType,
@@ -40,10 +42,54 @@ from opengis_backend.runs import RunArchive
 from opengis_backend.skills.context import (
     SkillContext,
     reset_current_context,
+    run_async_from_sync,
     set_current_context,
 )
 from opengis_backend.skills.registry import SkillRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
+
+
+def _extract_memory(workspace: str, user_message: str, final_answer: str) -> None:
+    """Extract key facts from a completed run and save to project memory.
+
+    Heuristic extraction — no extra LLM call. Extracts:
+    - Task summary (what was asked)
+    - File paths mentioned in the answer
+    - Key numbers/statistics
+    - Brief result summary
+    """
+    import re
+
+    task_summary = (user_message or "").strip()[:200]
+    answer = (final_answer or "").strip()
+
+    if not task_summary:
+        return
+
+    # Extract file paths from the answer
+    path_pattern = re.compile(
+        r"(/[\w./\-]+\.(?:geojson|shp|gpkg|csv|json|tif|tiff|png|jpg|pdf|md))"
+    )
+    paths = list(set(path_pattern.findall(answer)))[:5]
+
+    # Extract key numbers (feature counts, statistics, percentages)
+    number_pattern = re.compile(r"(\d[\d,]+(?:\.\d+)?)\s*(?:条|个|家|features?|rows?|%)")
+    numbers = number_pattern.findall(answer)[:3]
+
+    # Build structured entry
+    entry = f"任务: {task_summary}"
+    if paths:
+        entry += f"\n  产出: {', '.join(paths)}"
+    if numbers:
+        entry += f"\n  数据: {', '.join(numbers)}"
+    # Brief result (first meaningful sentence)
+    for sentence in answer.split("。"):
+        s = sentence.strip()
+        if len(s) > 15 and not s.startswith("#"):
+            entry += f"\n  摘要: {s[:150]}"
+            break
+
+    memory_append(workspace, "Run History", entry)
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +177,25 @@ class GISCodeAgent:
                 shared_context.total_messages,
             )
         else:
-            shared_context = ContextManager()
+            # Try to restore context from disk (survives app restart).
+            restored = False
+            logger.info(
+                "Context lookup: conversation_id=%s, workspace=%s",
+                conversation_id, workspace,
+            )
+            if conversation_id and workspace:
+                shared_context = load_context(workspace, conversation_id)
+                if shared_context is not None:
+                    restored = True
+                    logger.info(
+                        "Restored context from disk for conversation %s (%d messages)",
+                        conversation_id, shared_context.total_messages,
+                    )
+            if not restored:
+                shared_context = ContextManager()
+                logger.info("Created new context for conversation %s", conversation_id)
             if conversation_id:
                 self._conversation_contexts[conversation_id] = shared_context
-                logger.info("Created new context for conversation %s", conversation_id)
 
         # Ensure the workspace is a git repo with our .gitignore.
         ws_ready = False
@@ -154,6 +215,21 @@ class GISCodeAgent:
             ctx.meta = {}
         ctx.meta.setdefault("run_id", archive.run_id)
         ctx.meta.setdefault("script_dir", str(archive.script_dir))
+
+        # Wire orchestration deps so the Agent-as-Tool sub-agent skills
+        # (run_subagent / run_subagents) can spin up isolated child loops.
+        # They read these back from ctx.meta and reuse build_agent_loop().
+        ctx.meta.setdefault("_agent_ref", self)  # for subagent cancel propagation
+        ctx.meta.setdefault("_skill_registry", self.skills)
+        ctx.meta.setdefault(
+            "_llm_config",
+            LLMConfig(
+                protocol=self.protocol,
+                model=self.model,
+                api_key=self.api_key,
+                base_url=self.base_url,
+            ),
+        )
 
         # Open the run archive.
         run_archive = RunArchive.open(
@@ -331,6 +407,16 @@ class GISCodeAgent:
         # ── Route: WorkflowLoop or AgentLoop ──────────────────────
         if workflow is not None:
             # DAG-driven workflow execution.
+            # Plan callback: emits plan_update events for compact workflow UI.
+            # The `workflow: true` flag tells the frontend to suppress
+            # detailed events (code blocks, tool calls) and show only the plan.
+            def _plan_callback(plan_data: dict) -> None:
+                plan_data["workflow"] = True
+                try:
+                    run_async_from_sync(ctx.notify("rpc.ui.chat.plan_update", plan_data))
+                except Exception:
+                    logger.debug("plan_callback notify failed", exc_info=True)
+
             agent_loop, executor = build_workflow_loop(
                 skills=self.skills,
                 llm_config=LLMConfig(
@@ -345,6 +431,12 @@ class GISCodeAgent:
                 step_callback=_step_callback,
                 progress_callback=_progress_callback,
                 risky_op_listener=risky_listener,
+                on_thought_delta=_on_thought_delta,
+                on_code_start=_on_code_start,
+                on_code_delta=_on_code_delta,
+                on_code_end=_on_code_end,
+                plan_callback=_plan_callback,
+                context=shared_context,
             )
             logger.info(
                 "Workflow mode: executing '%s' with %d nodes",
@@ -401,6 +493,18 @@ class GISCodeAgent:
             self.current_executor = None
             self._current_loop = None
             self._current_runner = None
+            # Persist conversation context to disk so it survives restarts.
+            if conversation_id and workspace:
+                try:
+                    save_context(workspace, conversation_id, shared_context)
+                except Exception:
+                    logger.exception("context persistence failed")
+            # Auto-extract key facts into project memory.
+            if workspace and final_state.get("final_answer"):
+                try:
+                    _extract_memory(workspace, user_message, final_state["final_answer"])
+                except Exception:
+                    logger.debug("memory extraction failed (non-fatal)", exc_info=True)
             # Post-run snapshot.
             if ws_ready:
                 try:

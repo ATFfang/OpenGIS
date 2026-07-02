@@ -40,6 +40,8 @@ interface ChatStore {
   isStreaming: boolean
   isWaitingForUser: boolean
   _persistenceReady: boolean
+  /** True when a workflow plan is active — suppresses detailed events. */
+  workflowPlanActive: boolean
 
   activeConversation: () => Conversation | null
 
@@ -152,6 +154,7 @@ function installNotificationBridge(
           }
         }
         get().setStreaming(false)
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.code_block': {
@@ -345,7 +348,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.code_result': {
-        // 参数: { step, output, error, run_id }
+        // 参数: { step, output, error, run_id, duration_ms }
         state._addMessage({
           ts: Date.now(),
           type: 'say',
@@ -354,6 +357,7 @@ function installNotificationBridge(
           stepNumber: params?.step as number | undefined,
           codeError: (params?.error as string | null) ?? null,
           runId: params?.run_id as string | undefined,
+          durationMs: params?.duration_ms as number | undefined,
         })
         break
       }
@@ -415,7 +419,47 @@ function installNotificationBridge(
         break
       }
       case 'chat.cancelled': {
+        // Clean up all partial UI state — same as stream_end.
+        // Without this, thinking bubbles, progress bars, and subagent
+        // cards stay stuck in their "running" state after cancel.
+        const cancelConv = state.activeConversation()
+        if (cancelConv) {
+          for (const msg of cancelConv.messages) {
+            // Mark partial thinking / progress as finished
+            if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
+              state._updateMessage(msg.ts, { partial: false })
+            }
+            // Mark running subagent cards as cancelled
+            if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
+              state._updateMessage(msg.ts, {
+                subagentData: {
+                  ...msg.subagentData,
+                  status: 'cancelled',
+                  updatedAt: Date.now(),
+                },
+              })
+            }
+            // Mark in_progress plan steps as cancelled
+            if (msg.say === 'plan' && msg.planData?.steps?.some((s: any) => s.status === 'in_progress')) {
+              state._updateMessage(msg.ts, {
+                planData: {
+                  ...msg.planData,
+                  steps: msg.planData.steps.map((s: any) =>
+                    s.status === 'in_progress' ? { ...s, status: 'failed' } : s
+                  ),
+                  updatedAt: Date.now(),
+                },
+              })
+            }
+          }
+          // Close any partial assistant text
+          const last = cancelConv.messages[cancelConv.messages.length - 1]
+          if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
+            state._updateMessage(last.ts, { partial: false })
+          }
+        }
         get().setStreaming(false)
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.progress': {
@@ -477,6 +521,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     activeConversationId: null,
     isStreaming: false,
     isWaitingForUser: false,
+    workflowPlanActive: false,
     _persistenceReady: false,
 
     activeConversation: () => {
@@ -565,6 +610,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
       try {
         const loaded = await loadConversations(workspacePath)
+        // Mark pending screenshot cards as expired — the backend session
+        // that created them is gone, so they can never be captured.
+        for (const conv of loaded) {
+          for (const msg of conv.messages) {
+            if (msg.say === 'screenshot' && msg.screenshotData) {
+              msg.say = 'text'
+              msg.text = '📸 [截图已过期]'
+              msg.screenshotData = undefined
+            }
+          }
+        }
         set({
           conversations: loaded,
           activeConversationId: loaded[0]?.id ?? null,

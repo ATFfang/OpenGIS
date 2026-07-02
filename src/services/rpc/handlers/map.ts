@@ -72,6 +72,8 @@ import {
   ZoomToLayerSchema,
 } from './schemas';
 import { pathToImageUrl } from './_image_url';
+import { newLayerId } from '../idGen';
+import { v4 as uuidv4 } from 'uuid';
 
 // ─────────────────────────────────────────────────────────────────────
 // Basemap 别名表
@@ -151,7 +153,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       );
     }
 
-    const layerId = `layer_${Math.abs(hashString(displayName + filePath)) % 10 ** 8}`;
+    const layerId = newLayerId();
     const meta: DataSourceMeta = {
       fileName: filePath.split(/[\\/]/).pop() || displayName,
       extension: ext,
@@ -212,7 +214,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       bandCount: 3,
       crs: 'EPSG:3857',
     };
-    const layerId = `raster_${Math.abs(hashString(parsed.name + parsed.url)) % 10 ** 8}`;
+    const layerId = `raster_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName: parsed.name,
       extension: '.tile',
@@ -300,7 +302,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       );
     }
 
-    const layerId = `raster_${Math.abs(hashString(displayName + parsed.path)) % 10 ** 8}`;
+    const layerId = `raster_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName,
       extension: '.tif',
@@ -406,7 +408,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       imageCoordinates,
     };
 
-    const layerId = `image_${Math.abs(hashString(parsed.path)) % 10 ** 8}`;
+    const layerId = `image_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName,
       extension: getExtensionLower(parsed.path) || '.png',
@@ -516,69 +518,141 @@ export const mapHandlers: Record<string, RpcHandler> = {
    */
   'rpc.ui.map.export_map': async (params) => {
     const parsed = parseParams(ExportMapSchema, params, 'rpc.ui.map.export_map');
-    const result = await exportMap({
-      format: parsed.format ?? 'png',
-      dpiScale: parsed.dpi_scale ?? 1,
-      quality: parsed.quality ?? 0.92,
-      autoDownload: false,
-    });
+    const store = useMapStore.getState();
+    const map = mapEngine.getMap();
 
-    if (parsed.save_path) {
-      // electronAPI.writeFile 目前签名是 (path, string)，没有 binary 通道。
-      // 我们把 PNG/JPG blob 转成 base64，Python 或 main 进程拿到 data_url
-      // 自行 decode 写盘。**不抛错**，只是在返回里附上 note。
-      const arrayBuffer = await result.blob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = '';
-      const CHUNK = 0x8000;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode.apply(
-          null,
-          Array.from(bytes.subarray(i, i + CHUNK)) as any,
-        );
+    // ── Ensure map tab is active so the canvas is visible ─────────
+    // The map must be rendering for MapLibre to produce a valid
+    // screenshot.  If the user is on the code/chat tab, the canvas
+    // is hidden and toDataURL() returns a black image.
+    try {
+      const { useViewStore } = await import('@/stores/viewStore');
+      useViewStore.getState().setActiveTab('map');
+      useViewStore.getState().setShowCodePanel(false);
+    } catch { /* non-fatal */ }
+
+    // Wait for the map to be style-loaded and repainted.
+    if (map) {
+      if (!map.isStyleLoaded()) {
+        await new Promise<void>((r) => map.once('style.load', () => r()));
       }
-      const base64 = btoa(binary);
-      const api = (globalThis as any).window?.electronAPI;
-      // 尝试通过 writeFile(path, content) 落盘——但 PNG 不是文本，
-      // 直接写会乱码。我们改用带 base64 解码能力的新 IPC；没有就回退
-      // 返回 data_url 让调用方自己处理。
-      if (api?.writeFileBinary) {
-        try {
-          await api.writeFileBinary(parsed.save_path, arrayBuffer);
-          return {
-            saved_to: parsed.save_path,
-            width: result.width,
-            height: result.height,
-            format: result.format,
-          };
-        } catch (err) {
-          throw RpcError.internal(
-            `export_map: writeFileBinary failed: ${(err as Error).message}`,
-            { method: 'rpc.ui.map.export_map' },
-          );
+      // Force a repaint so the canvas is fresh after tab switch.
+      map.triggerRepaint();
+      await new Promise<void>((r) => {
+        map.once('idle', r);
+        setTimeout(r, 5000); // safety timeout
+      });
+    }
+
+    // ── Save original state for restoration ────────────────────────
+    const originalBasemapVisible = store.basemapVisible
+    const originalBasemapId = store.basemap?.id
+    const originalLayerVisibility = new Map<string, boolean>()
+    if (parsed.visible_layers !== undefined || parsed.hide_basemap) {
+      for (const layer of store.layers) {
+        originalLayerVisibility.set(layer.id, layer.visible)
+      }
+    }
+
+    try {
+      // ── Apply basemap switch ─────────────────────────────────────
+      if (parsed.basemap_id) {
+        const target = BUILTIN_BASEMAPS.find((b) => b.id === parsed.basemap_id)
+        if (target) {
+          store.setBasemap(target)
+          // Wait for new tiles to load
+          if (map) await new Promise<void>((r) => { map.once('idle', r); setTimeout(r, 3000) })
         }
       }
-      // 没 writeFileBinary 时，把 base64 一并返回给调用方，让它自己写
+
+      // ── Apply basemap visibility ─────────────────────────────────
+      if (parsed.hide_basemap !== undefined) {
+        store.setBasemapVisible(!parsed.hide_basemap)
+        if (map) await new Promise<void>((r) => { map.once('idle', r); setTimeout(r, 1000) })
+      }
+
+      // ── Apply layer visibility ───────────────────────────────────
+      if (parsed.visible_layers !== undefined) {
+        const visibleSet = new Set(parsed.visible_layers)
+        for (const layer of store.layers) {
+          const shouldBeVisible = visibleSet.has(layer.id)
+          if (layer.visible !== shouldBeVisible) {
+            store.setLayerVisibility(layer.id, shouldBeVisible)
+            mapEngine.setLayerVisibility(layer.id, shouldBeVisible)
+          }
+        }
+        if (map) await new Promise<void>((r) => { map.once('idle', r); setTimeout(r, 1000) })
+      }
+
+      // ── Export ───────────────────────────────────────────────────
+      const result = await exportMap({
+        format: parsed.format ?? 'png',
+        dpiScale: parsed.dpi_scale ?? 1,
+        quality: parsed.quality ?? 0.92,
+        autoDownload: false,
+      });
+
+      // ── Save to file if requested ────────────────────────────────
+      if (parsed.save_path) {
+        const arrayBuffer = await result.blob.arrayBuffer();
+        const api = (globalThis as any).window?.electronAPI;
+        if (api?.writeFileBinary) {
+          try {
+            await api.writeFileBinary(parsed.save_path, arrayBuffer);
+            return {
+              saved_to: parsed.save_path,
+              width: result.width,
+              height: result.height,
+              format: result.format,
+            };
+          } catch (err) {
+            throw RpcError.internal(
+              `export_map: writeFileBinary failed: ${(err as Error).message}`,
+              { method: 'rpc.ui.map.export_map' },
+            );
+          }
+        }
+        // Fallback: return base64
+        const bytes = new Uint8Array(arrayBuffer)
+        let binary = ''
+        const CHUNK = 0x8000
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)) as any)
+        }
+        return {
+          data_url: `data:image/${result.format};base64,${btoa(binary)}`,
+          width: result.width,
+          height: result.height,
+          format: result.format,
+          save_path_requested: parsed.save_path,
+        };
+      }
+
       return {
-        data_url: `data:image/${result.format};base64,${base64}`,
+        data_url: result.dataUrl,
         width: result.width,
         height: result.height,
         format: result.format,
         file_name: result.fileName,
-        save_path_requested: parsed.save_path,
-        note:
-          'save_path was provided but electronAPI.writeFileBinary is not available; ' +
-          'decode data_url in caller to write file.',
       };
+    } finally {
+      // ── Restore original state ───────────────────────────────────
+      if (parsed.basemap_id && originalBasemapId) {
+        const original = BUILTIN_BASEMAPS.find((b) => b.id === originalBasemapId)
+        if (original) store.setBasemap(original)
+      }
+      if (parsed.hide_basemap !== undefined) {
+        store.setBasemapVisible(originalBasemapVisible)
+      }
+      if (parsed.visible_layers !== undefined) {
+        for (const [layerId, wasVisible] of originalLayerVisibility) {
+          if (store.getLayerById(layerId)?.visible !== wasVisible) {
+            store.setLayerVisibility(layerId, wasVisible)
+            mapEngine.setLayerVisibility(layerId, wasVisible)
+          }
+        }
+      }
     }
-
-    return {
-      data_url: result.dataUrl,
-      width: result.width,
-      height: result.height,
-      format: result.format,
-      file_name: result.fileName,
-    };
   },
 
   /**
@@ -714,10 +788,13 @@ export const mapHandlers: Record<string, RpcHandler> = {
     const geometryType = detectGeometryType(fc);
     const bbox = computeBBox(fc);
     const displayName = parsed.name;
+    // id 必须内容无关且唯一：同名图层多轮生成不应互相覆盖，
+    // 并行 subagent 同时造层也不会因 hash 碰撞而丢失。
+    // Python 端会显式带上 layer_id（uuid），这里只是兜底。
     const layerId =
       typeof extras.layer_id === 'string' && extras.layer_id
         ? (extras.layer_id as string)
-        : `layer_${Math.abs(hashString(displayName)) % 10 ** 8}`;
+        : newLayerId();
 
     const data: ParsedVectorData = {
       kind: 'vector',
@@ -827,32 +904,52 @@ export const mapHandlers: Record<string, RpcHandler> = {
   'rpc.ui.map.set_layer_style': (params) => {
     const parsed = parseParams(SetLayerStyleSchema, params, 'rpc.ui.map.set_layer_style');
     const store = useMapStore.getState();
-    if (!store.getLayerById(parsed.layer_id)) {
+    const layer = store.getLayerById(parsed.layer_id);
+    if (!layer) {
       throw RpcError.invalidParams(
         `set_layer_style: layer_id '${parsed.layer_id}' not found`,
         { method: 'rpc.ui.map.set_layer_style' },
       );
     }
 
-    // Python display.py::update_layer_style 发来的 paint 里只有
-    // `fill-color` / `fill-opacity`（或 `circle-color` / `line-color` 等
-    // 同义 key 取决于 type）。我们从 paint 里提 color/opacity 投影到
-    // LayerStore 的 `style.color / style.opacity` 字段，并忠实保留
-    // 原 style 给 MapEngine 将来细粒度消费。
+    // Python display.py::update_layer_style 发来的 paint 里通常只有
+    // `fill-color` / `fill-opacity`，但 MapLibre paint 可能携带 stroke /
+    // radius 等更多字段。这里把所有能映射到 LayerStyle 的字段都透传，
+    // 避免之前只取 color/opacity 造成的样式丢失。
     const paint = (parsed.style.paint ?? {}) as Record<string, unknown>;
-    const color =
-      firstDefinedString(paint, ['fill-color', 'line-color', 'circle-color']) ?? undefined;
-    const opacity =
-      firstDefinedNumber(paint, ['fill-opacity', 'line-opacity', 'circle-opacity']) ?? undefined;
 
-    if (color !== undefined) {
-      store.updateLayerStyle(parsed.layer_id, { color });
+    // graduated / categorized 专题层的颜色由分级/分类配置决定，
+    // 直接改 style.color 是无效语义且会让 style.color 与实际渲染不一致，
+    // 因此对专题层屏蔽基础 color 的写入（opacity/stroke 等仍可改）。
+    const isThematic =
+      layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized';
+
+    const styleUpdates: Partial<LayerStyle> = {};
+
+    if (!isThematic) {
+      const color = firstDefinedString(paint, ['fill-color', 'line-color', 'circle-color']);
+      if (color !== null) styleUpdates.color = color;
     }
-    if (opacity !== undefined) {
-      store.setLayerOpacity(parsed.layer_id, opacity);
+    const opacity = firstDefinedNumber(paint, ['fill-opacity', 'line-opacity', 'circle-opacity']);
+    if (opacity !== null) styleUpdates.opacity = opacity;
+    const fillOpacity = firstDefinedNumber(paint, ['fill-opacity']);
+    if (fillOpacity !== null) styleUpdates.fillOpacity = fillOpacity;
+    const strokeColor = firstDefinedString(paint, ['stroke-color', 'circle-stroke-color']);
+    if (strokeColor !== null) styleUpdates.strokeColor = strokeColor;
+    const strokeWidth = firstDefinedNumber(paint, [
+      'stroke-width',
+      'line-width',
+      'circle-stroke-width',
+    ]);
+    if (strokeWidth !== null) styleUpdates.strokeWidth = strokeWidth;
+    const radius = firstDefinedNumber(paint, ['circle-radius']);
+    if (radius !== null) styleUpdates.radius = radius;
+
+    if (Object.keys(styleUpdates).length > 0) {
+      store.updateLayerStyle(parsed.layer_id, styleUpdates);
     }
 
-    return { layer_id: parsed.layer_id, applied: { color, opacity } };
+    return { layer_id: parsed.layer_id, applied: styleUpdates };
   },
 
   'rpc.ui.map.set_layer_visibility': (params) => {
@@ -897,17 +994,6 @@ function firstDefinedNumber(
     if (typeof v === 'number' && Number.isFinite(v)) return v;
   }
   return null;
-}
-
-/** FNV-1a 简易哈希——只用来给 layer_id 造默认短串，冲突不关键。 */
-function hashString(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  // 映射到 32-bit signed 范围
-  return h | 0;
 }
 
 /** 从路径里拿小写扩展名（含点），没扩展名返回空串。 */

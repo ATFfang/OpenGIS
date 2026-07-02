@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import {
   Send,
   Paperclip,
@@ -20,6 +21,8 @@ import {
   Pencil,
   Wrench,
   Database,
+  Copy,
+  Check,
 } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
 import { useAssetStore } from '@/stores/assetStore'
@@ -36,12 +39,16 @@ import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrow
 import type { UIMessage } from '@/types/chat'
 import { groupMessages, type MessageRole } from './groupMessages'
 
+// Stable empty reference so the `messages` selector fallback doesn't create a
+// new array each render (which would defeat memoization downstream).
+const EMPTY_MESSAGES: UIMessage[] = []
+
 /**
  * ChatView — Cline-inspired AI chat panel with polished UI.
  *
  * Layout:
  * 1. Header with model indicator and actions
- * 2. Scrollable messages area
+ * 2. Scrollable messages area (virtualized via react-virtuoso)
  * 3. Sticky input footer with rich controls
  */
 export function ChatView() {
@@ -63,23 +70,27 @@ export function ChatView() {
   const [editingTitle, setEditingTitle] = useState('')
   const headerTitleInputRef = useRef<HTMLInputElement>(null)
 
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textAreaRef = useRef<HTMLTextAreaElement>(null)
 
-  const {
-    activeConversation,
-    activeConversationId,
-    conversations,
-    isStreaming,
-    sendMessage,
-    abortTask,
-    createConversation,
-    setActiveConversation,
-  } = useChatStore()
+  // Fine-grained selectors: subscribe to exactly what we use so unrelated
+  // store changes don't re-render the whole panel. The streaming hot-path
+  // still re-renders ChatView (it owns the list), but virtualization + the
+  // memoized ChatRow keep that cheap — only the changed row actually repaints.
+  const activeConversationId = useChatStore((s) => s.activeConversationId)
+  const conversations = useChatStore((s) => s.conversations)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const workflowPlanActive = useChatStore((s) => s.workflowPlanActive)
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const abortTask = useChatStore((s) => s.abortTask)
+  const createConversation = useChatStore((s) => s.createConversation)
+  const setActiveConversation = useChatStore((s) => s.setActiveConversation)
 
-  const conversation = activeConversation()
-  const messages: UIMessage[] = conversation?.messages ?? []
+  const conversation = useMemo(
+    () => conversations.find((c) => c.id === activeConversationId) ?? null,
+    [conversations, activeConversationId],
+  )
+  const messages: UIMessage[] = conversation?.messages ?? EMPTY_MESSAGES
 
   // 把消息按 "一轮 assistant 回答" 分组：两次 user_feedback 之间的所有 assistant
   // 消息（text / reasoning / code / code_result / tool / completion_result / ...）
@@ -120,23 +131,33 @@ export function ChatView() {
     })
   }, [])
 
-  // --- Scroll behavior ---
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    messagesEndRef.current?.scrollIntoView({ behavior })
+  // --- Scroll behavior (virtualized) ---
+  // Virtuoso owns the scroll container. `followOutput` keeps us pinned to the
+  // bottom while streaming (text grows in place), and `atBottomStateChange`
+  // drives the floating "scroll to bottom" affordance.
+  const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+    virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior })
   }, [])
 
-  useEffect(() => {
-    if (!showScrollToBottom) {
-      scrollToBottom('smooth')
-    }
-  }, [messages.length, scrollToBottom, showScrollToBottom])
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    setShowScrollToBottom((prev) => (prev !== !atBottom ? !atBottom : prev))
+  }, [])
 
-  const handleScroll = useCallback(() => {
-    if (messagesContainerRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
-      setShowScrollToBottom(prev => (prev !== !isNearBottom ? !isNearBottom : prev))
-    }
+  // Load text from a past user message back into the composer for editing /
+  // resending — the standard "edit & re-run" affordance.
+  const handleEditUserMessage = useCallback((text: string) => {
+    setInputValue(text)
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = ''
+    requestAnimationFrame(() => {
+      const ta = textAreaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.style.height = 'auto'
+      ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'
+      const end = text.length
+      ta.setSelectionRange(end, end)
+    })
   }, [])
 
   useEffect(() => {
@@ -511,63 +532,60 @@ export function ChatView() {
         </div>
       </header>
 
-      {/* === Messages Area === */}
+      {/* === Messages Area (virtualized) === */}
       {hasTask ? (
-        <div
-          ref={messagesContainerRef}
-          onScroll={handleScroll}
-          data-chat-scroll
-          className="flex-1 overflow-y-auto overflow-x-hidden"
+        <Virtuoso
+          key={activeConversationId ?? 'none'}
+          ref={virtuosoRef}
+          data={messageGroups}
+          className="flex-1 min-h-0"
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--text-muted) transparent' }}
-        >
-          <div className="py-3">
-            {messageGroups.map((group, gi) => {
-              // Find the first item in this group that carries a run_id.
-              // Only assistant groups will have code/code_result/max_steps
-              // messages with this field populated — user / system groups
-              // will produce `undefined` and therefore hide the revert button.
-              const runId = group.items.find((m) => m.runId)?.runId
-              return (
-                <MessageGroup
-                  key={`g-${gi}-${group.items[0]?.ts ?? gi}`}
-                  role={group.role}
-                  runId={runId}
-                >
-                  {group.items.map((msg, index) => {
-                    // 全局索引（在原始 messages 里的位置），用于 isLast 判定。
-                    const globalIndex = messageIndexMap.get(msg) ?? 0
-                    return (
-                      <ChatRow
-                        key={`${msg.ts}-${index}`}
-                        message={msg}
-                        isExpanded={expandedRows.has(msg.ts)}
-                        onToggleExpand={toggleRowExpansion}
-                        isLast={globalIndex === messages.length - 1}
-                      />
-                    )
-                  })}
-                </MessageGroup>
-              )
-            })}
-
-            {/* Typing indicator */}
-            {isWaitingForResponse && (
-              <div className="px-5 py-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 ring-1 ring-accent-primary/10">
-                    <img src={machineAvatar} alt="Bot" className="w-full h-full object-cover" />
-                  </div>
-                  <div className="flex items-center gap-2 pt-1">
-                    <img src={thinkingGif} alt="Thinking" className="w-5 h-5" />
-                    <span className="text-xs text-text-muted">{t.chat.thinking}...</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div ref={messagesEndRef} className="min-h-1" />
-        </div>
+          followOutput={(atBottom) => (atBottom ? 'smooth' : false)}
+          atBottomThreshold={100}
+          atBottomStateChange={handleAtBottomChange}
+          increaseViewportBy={{ top: 600, bottom: 600 }}
+          initialTopMostItemIndex={Math.max(0, messageGroups.length - 1)}
+          computeItemKey={(index, group) => `g-${group.items[0]?.ts ?? index}`}
+          components={{ Header: ListSpacer, Footer: TypingFooter }}
+          context={{ waiting: isWaitingForResponse, thinkingLabel: t.chat.thinking }}
+          itemContent={(_index, group) => {
+            // Find the first item in this group that carries a run_id.
+            // Only assistant groups will have code/code_result/max_steps
+            // messages with this field populated — user / system groups
+            // will produce `undefined` and therefore hide the revert button.
+            const runId = group.items.find((m) => m.runId)?.runId
+            return (
+              <MessageGroup
+                role={group.role}
+                runId={runId}
+                items={group.items}
+                onEditUser={handleEditUserMessage}
+              >
+                {group.items
+                  .filter((msg) => {
+                    // In workflow mode, suppress detailed events — only show
+                    // plan, text replies, and errors.
+                    if (!workflowPlanActive) return true
+                    const say = msg.say
+                    if (say === 'plan' || say === 'text' || say === 'error' || say === 'user_feedback') return true
+                    return false
+                  })
+                  .map((msg, index) => {
+                  const globalIndex = messageIndexMap.get(msg) ?? 0
+                  return (
+                    <ChatRow
+                      key={`${msg.ts}-${index}`}
+                      message={msg}
+                      isExpanded={expandedRows.has(msg.ts)}
+                      onToggleExpand={toggleRowExpansion}
+                      isLast={globalIndex === messages.length - 1}
+                    />
+                  )
+                })}
+              </MessageGroup>
+            )
+          }}
+        />
       ) : (
         <div className="flex-1 overflow-y-auto">
           <WelcomeContent onSuggestionClick={handleSuggestionClick} />
@@ -696,20 +714,20 @@ export function ChatView() {
           {/* Bottom hint */}
           <div className="flex items-center justify-between mt-1.5 px-1">
             <span className="text-[10px] text-text-muted/40">
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">↵</kbd> send
+              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">↵</kbd> {t.chat.sendHint}
               <span className="mx-1.5">·</span>
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> new line
+              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> {t.chat.newLineHint}
             </span>
             <span className="text-[10px] text-text-muted/40 flex items-center gap-1">
               {isStreaming ? (
                 <>
                   <Zap className="w-2.5 h-2.5 text-accent-primary" />
-                  <span className="text-accent-primary">Streaming</span>
+                  <span className="text-accent-primary">{t.chat.streaming}</span>
                 </>
               ) : (
                 <>
                   <div className="w-1.5 h-1.5 rounded-full bg-accent-success/60" />
-                  {t.common.success === '成功' ? '就绪' : 'Ready'}
+                  {t.chat.ready}
                 </>
               )}
             </span>
@@ -730,27 +748,84 @@ export function ChatView() {
 // --- Message grouping ---
 // `groupMessages` / `roleOf` / `MessageRole` 提取到 ./groupMessages 以便单测。
 
+// --- Virtuoso list chrome (top spacer + streaming "thinking" footer) ---
+
+function ListSpacer() {
+  return <div className="h-3" aria-hidden />
+}
+
+function TypingFooter({ context }: { context?: { waiting: boolean; thinkingLabel: string } }) {
+  if (!context?.waiting) return <div className="h-3" aria-hidden />
+  return (
+    <div className="px-5 py-3">
+      <div className="flex items-start gap-3">
+        <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 ring-1 ring-accent-primary/10">
+          <img src={machineAvatar} alt="Bot" className="w-full h-full object-cover" />
+        </div>
+        <div className="flex items-center gap-2 pt-1">
+          <img src={thinkingGif} alt="Thinking" className="w-5 h-5" />
+          <span className="text-xs text-text-muted">{context.thinkingLabel}...</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Concatenate a group's user-visible text so it can be copied as one block. */
+function extractGroupText(items: UIMessage[]): string {
+  const parts: string[] = []
+  for (const m of items) {
+    const say = m.say
+    if (say === 'text' || say === 'completion_result' || say === 'user_feedback') {
+      if (m.text?.trim()) parts.push(m.text.trim())
+    } else if (say === 'code' && m.text?.trim()) {
+      parts.push('```python\n' + m.text.trim() + '\n```')
+    } else if (say === 'code_result' && m.text?.trim()) {
+      parts.push(m.text.trim())
+    }
+  }
+  return parts.join('\n\n')
+}
+
 // --- Message group wrapper with a single avatar per group ---
 
 function MessageGroup({
   role,
   runId,
+  items,
+  onEditUser,
   children,
 }: {
   role: MessageRole
   runId?: string
+  items: UIMessage[]
+  onEditUser?: (text: string) => void
   children: ReactNode
 }) {
+  const t = useT()
   if (role === 'system') {
     // 细条系统消息（token/cost 指示）不占头像位。
     return <div className="px-5">{children}</div>
   }
 
   if (role === 'user') {
+    const userText = items.find((m) => m.say === 'user_feedback')?.text ?? ''
     return (
-      <div className="px-5 py-2 animate-fade-in">
+      <div className="px-5 py-2 animate-fade-in group/msg">
         <div className="flex justify-end">
-          <div className="max-w-[85%] min-w-0">{children}</div>
+          <div className="max-w-[85%] min-w-0">
+            {children}
+            <div className="flex justify-end gap-0.5 mt-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+              {userText && onEditUser && (
+                <MessageActionButton
+                  title={t.chat.editAndResend}
+                  onClick={() => onEditUser(userText)}
+                  icon={<Pencil className="w-3 h-3" />}
+                />
+              )}
+              {userText && <CopyActionButton text={userText} />}
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -760,8 +835,9 @@ function MessageGroup({
   // 全部堆在同一个头像右边，子消息之间留一点竖向间距。
   // 若整组涉及到过 code 执行（runId 非空），在头像下方挂一个 "Revert" 小按钮，
   // 一键把 workspace reset 到这次 run 开始前的 git SHA。
+  const groupText = extractGroupText(items)
   return (
-    <div className="px-5 py-2 animate-fade-in">
+    <div className="px-5 py-2 animate-fade-in group/msg">
       <div className="flex items-start gap-3">
         <div className="flex flex-col items-center shrink-0">
           <div className="w-7 h-7 rounded-lg overflow-hidden mt-0.5 ring-1 ring-accent-primary/10">
@@ -769,9 +845,56 @@ function MessageGroup({
           </div>
           {runId && <RevertRunButton runId={runId} />}
         </div>
-        <div className="flex-1 min-w-0 space-y-2.5">{children}</div>
+        <div className="flex-1 min-w-0 space-y-2.5">
+          {children}
+          {groupText && (
+            <div className="flex gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+              <CopyActionButton text={groupText} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  )
+}
+
+// --- Hover message-action buttons ---
+
+function MessageActionButton({
+  title,
+  onClick,
+  icon,
+}: {
+  title: string
+  onClick: () => void
+  icon: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted/70 hover:text-text-primary hover:bg-bg-hover transition-colors"
+    >
+      {icon}
+    </button>
+  )
+}
+
+function CopyActionButton({ text }: { text: string }) {
+  const t = useT()
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [text])
+  return (
+    <MessageActionButton
+      title={t.common.copy}
+      onClick={handleCopy}
+      icon={copied ? <Check className="w-3 h-3 text-accent-success" /> : <Copy className="w-3 h-3" />}
+    />
   )
 }
 
@@ -843,7 +966,32 @@ function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: strin
     gradient: string
     iconColor: string
     borderColor: string
-  }> = []
+  }> = [
+    {
+      text: t.chat.suggestionLoadData,
+      icon: <FolderOpen className="w-4 h-4" />,
+      desc: t.chat.suggestionLoadDataDesc,
+      gradient: 'from-blue-500/20 to-cyan-500/20',
+      iconColor: 'text-blue-400',
+      borderColor: 'hover:border-blue-500/30',
+    },
+    {
+      text: t.chat.suggestionBuffer,
+      icon: <Globe className="w-4 h-4" />,
+      desc: t.chat.suggestionBufferDesc,
+      gradient: 'from-green-500/20 to-emerald-500/20',
+      iconColor: 'text-green-400',
+      borderColor: 'hover:border-green-500/30',
+    },
+    {
+      text: t.chat.suggestionChoropleth,
+      icon: <Zap className="w-4 h-4" />,
+      desc: t.chat.suggestionChoroplethDesc,
+      gradient: 'from-purple-500/20 to-pink-500/20',
+      iconColor: 'text-purple-400',
+      borderColor: 'hover:border-purple-500/30',
+    },
+  ]
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -917,7 +1065,7 @@ function ConversationListDropdown({
   onDelete,
   onClose,
 }: {
-  conversations: { id: string; title: string; messages: any[]; updatedAt: number }[]
+  conversations: { id: string; title: string; messages: UIMessage[]; updatedAt: number }[]
   activeId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
@@ -1008,7 +1156,7 @@ function ConversationListDropdown({
                 </p>
               )}
               <p className="text-[10px] text-text-muted mt-0.5">
-                {conv.messages.length} messages
+                {conv.messages.length} {t.chat.messages}
               </p>
             </div>
             <div className="flex items-center gap-0.5">
@@ -1181,24 +1329,24 @@ function AttachPanel({
           </div>
         </button>
         <button
-          onClick={() => onAttachSkill('数据源', ['datasource'])}
+          onClick={() => onAttachSkill('DataSources', ['datasource'])}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedSkills.includes('数据源')
+            attachedSkills.includes('DataSources')
               ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
               : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
           }`}
         >
           <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedSkills.includes('数据源')
+            attachedSkills.includes('DataSources')
               ? 'bg-cyan-500/20 ring-cyan-500/30'
               : 'bg-cyan-500/10 ring-cyan-500/20'
           }`}>
             <Database className="w-3 h-3 text-cyan-400" />
           </div>
           <div className="text-left flex-1 min-w-0">
-            <p className="text-[12px] font-medium leading-tight">数据源</p>
+            <p className="text-[12px] font-medium leading-tight">{t.chat.dataSources}</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('数据源') ? t.chat.attachedClickDetach : t.chat.datasourceCatalog}
+              {attachedSkills.includes('DataSources') ? t.chat.attachedClickDetach : t.chat.dataSourcesGuide}
             </p>
           </div>
         </button>
@@ -1206,9 +1354,7 @@ function AttachPanel({
         {/* Hint */}
         <div className="px-2 pt-2 pb-1">
           <p className="text-[10px] text-text-muted/60 leading-relaxed">
-            💡 {['成功', 'Success'].includes(t.common.success)
-              ? '附加工作流来引导 Agent 按预定义的流程执行，或附加数据文件提供上下文。'
-              : 'Attach a workflow to guide the agent through a predefined pipeline, or attach data files for context.'}
+            💡 {t.chat.attachWorkflowHint}
           </p>
         </div>
       </div>

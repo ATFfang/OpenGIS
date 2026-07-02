@@ -14,7 +14,9 @@ import { installExtensions } from '@/features/map/extensions'
 function App() {
   const loadFromElectron = useSettingsStore((s) => s.loadFromElectron)
   const theme = useSettingsStore((s) => s.appearance.theme)
+  const debugMode = useSettingsStore((s) => s.agent.debugMode)
   const setWorkspacePath = useAssetStore((s) => s.setWorkspacePath)
+  const workspacePath = useAssetStore((s) => s.workspacePath)
 
   // Wire up the v3.0 JSON-RPC 2.0 three-channel bridge once, at app start.
   useEffect(() => {
@@ -156,6 +158,22 @@ function App() {
       return () => mediaQuery.removeEventListener('change', applyTheme)
     }
   }, [theme])
+
+  // Sync debug mode to backend on startup and when setting changes
+  useEffect(() => {
+    pythonClient.send('rpc.debug.set_log_level', {
+      level: debugMode ? 'DEBUG' : 'INFO',
+    }).catch(() => {/* backend may not be ready yet */})
+  }, [debugMode])
+
+  // Install built-in workflow templates when workspace is opened
+  useEffect(() => {
+    if (workspacePath) {
+      pythonClient.send('rpc.workspace.install_templates', {
+        workspace_path: workspacePath,
+      }).catch(() => {/* backend may not be ready yet */})
+    }
+  }, [workspacePath])
 
   return (
     <>

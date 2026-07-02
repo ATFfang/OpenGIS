@@ -45,6 +45,7 @@ interface SettingsState {
     autoRenderResults: boolean
     useAutoCondense: boolean
     customInstructions: string
+    debugMode: boolean
   }
 
   // 操作方法
@@ -88,6 +89,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     autoRenderResults: true,
     useAutoCondense: true,
     customInstructions: '',
+    debugMode: false,
   },
 
   // 操作方法

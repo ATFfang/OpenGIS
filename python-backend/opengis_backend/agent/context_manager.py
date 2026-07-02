@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 # for English + code mixed content. We use 3.5 as a conservative estimate.
 _CHARS_PER_TOKEN = 3.5
 
+# CJK (Chinese/Japanese/Korean) characters tokenize MUCH denser than
+# Latin text — typically ~1.5 chars/token (often 1 token per char for
+# Chinese). Using the English ratio for Chinese text underestimates the
+# token count by ~2.3x, which makes compression trigger far too late and
+# risks context-window overflow on long Chinese sessions. We therefore
+# count CJK characters separately with their own ratio.
+_CHARS_PER_TOKEN_CJK = 1.5
+_CJK_PATTERN = re.compile(
+    r"[\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf\uac00-\ud7af\uf900-\ufaff]"
+)
+
 # Tool names whose outputs MUST NEVER be pruned (reference: opencode).
 # Skills are user-invoked first-class capabilities; their outputs often
 # carry artifacts (file paths, layer ids, snapshot ids) that the agent
@@ -39,8 +50,18 @@ _PRUNE_PROTECTED_TOOLS: tuple[str, ...] = ("skill",)
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token count estimate from character length."""
-    return int(len(text) / _CHARS_PER_TOKEN)
+    """Rough token count estimate from character length.
+
+    CJK characters are counted with a denser ratio (~1.5 chars/token) and
+    the remaining characters with the Latin ratio (~3.5 chars/token). This
+    avoids the ~2.3x underestimation that a single ratio produces on
+    Chinese-heavy conversations.
+    """
+    if not text:
+        return 0
+    cjk_count = len(_CJK_PATTERN.findall(text))
+    other_count = len(text) - cjk_count
+    return int(cjk_count / _CHARS_PER_TOKEN_CJK + other_count / _CHARS_PER_TOKEN)
 
 
 def _estimate_messages_tokens(messages: list[dict]) -> int:
@@ -60,7 +81,7 @@ def _estimate_messages_tokens(messages: list[dict]) -> int:
     return total
 
 
-def _truncate_output(text: str, max_chars: int = 4000) -> str:
+def _truncate_output(text: str, max_chars: int = 3000) -> str:
     """Truncate long code output, keeping head and tail.
 
     Head gets 70% of the budget (usually contains the useful result),
@@ -215,6 +236,16 @@ class ContextManager:
     # Whether to enable token-based pruning (default: True)
     use_token_based_pruning: bool = True
 
+    # Cached token count of the system prompt (set by build_messages).
+    # Included in should_compress() so the budget accounts for the prompt.
+    _system_prompt_tokens: int = field(default=0, init=False)
+
+    # Hard cap (in estimated tokens) for any SINGLE tool-result message,
+    # even when it sits inside the protected ``keep_recent`` window. A
+    # single giant output (e.g. an accidental full-DataFrame dump) can
+    # otherwise blow up the live window on its own. Set to 0 to disable.
+    max_single_result_tokens: int = 6000
+
     # ── State ──────────────────────────────────────────────────────
 
     # The conversation history. Each entry is a standard chat message
@@ -234,6 +265,36 @@ class ContextManager:
 
     # Maximum file size to re-read (single file)
     max_file_chars_for_reread: int = 5000
+
+    # ── Serialization ─────────────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        """Serialize the context state to a JSON-safe dict.
+
+        Only persists the fields needed to restore the conversation:
+        messages, summary, summary_cutoff, and recently_edited_files.
+        Configuration fields (token_budget, etc.) are NOT persisted —
+        they come from the constructor defaults.
+        """
+        return {
+            "messages": self.messages,
+            "summary": self._summary,
+            "summary_cutoff": self._summary_cutoff,
+            "recently_edited_files": list(self._recently_edited_files),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ContextManager":
+        """Restore a ContextManager from a serialized dict.
+
+        Returns a fresh ContextManager with the persisted state applied.
+        """
+        ctx = cls()
+        ctx.messages = data.get("messages", [])
+        ctx._summary = data.get("summary")
+        ctx._summary_cutoff = data.get("summary_cutoff", 0)
+        ctx._recently_edited_files = data.get("recently_edited_files", [])
+        return ctx
 
     # ── Public API ──────────────────────────────────────────────────────
 
@@ -316,6 +377,8 @@ class ContextManager:
         result: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
         ]
+        # Cache system prompt token count for should_compress().
+        self._system_prompt_tokens = _estimate_tokens(system_prompt)
 
         if user_instructions and user_instructions.strip():
             result.append({
@@ -346,11 +409,11 @@ class ContextManager:
             (should_compress, reason)
         """
         live = self.messages[self._summary_cutoff:]
-        estimated = _estimate_messages_tokens(live)
+        estimated = _estimate_messages_tokens(live) + self._system_prompt_tokens
         threshold = int(self.token_budget * self.compress_threshold)
 
         if estimated > threshold:
-            return True, f"Token count ({estimated}) exceeded threshold ({threshold})"
+            return True, f"Token count ({estimated}, incl. prompt {self._system_prompt_tokens}) exceeded threshold ({threshold})"
 
         # Check tool result ratio
         tool_result_tokens = sum(
@@ -384,23 +447,37 @@ class ContextManager:
         # OpenCode-style: prune old tool outputs to free context space.
         self._prune_outputs()
 
+        # Track whether the LLM-based anchored merge actually succeeded.
+        # On failure we must NOT replace the existing anchored summary with
+        # a lossy simple-concat one (that would silently drop the merged
+        # history accumulated over previous compactions).
+        llm_merge_ok = False
         if llm_call is not None:
             try:
                 summary = self._llm_summarize(
                     to_summarize, llm_call, previous_summary=self._summary
                 )
+                if summary and summary.strip():
+                    llm_merge_ok = True
+                else:
+                    logger.warning("LLM summarization returned empty, falling back to simple")
+                    summary = self._simple_summarize(to_summarize)
             except Exception:
                 logger.warning("LLM summarization failed, falling back to simple")
                 summary = self._simple_summarize(to_summarize)
         else:
             summary = self._simple_summarize(to_summarize)
 
-        # Anchored merge (Gap #1): when the LLM is available, the new
+        # Anchored merge (Gap #1): when the LLM merge succeeded, the new
         # summary already INCLUDES the previous one (we passed it inside
         # a <previous-summary> block). Replace, don't concatenate, to
         # prevent unbounded growth across multiple compactions.
-        # The simple fallback path appends because it cannot merge.
-        if llm_call is not None:
+        #
+        # When the LLM merge FAILED (#5 fix), we fell back to a simple
+        # concat summary that does NOT contain the previous anchored
+        # summary — so we must APPEND it to preserve earlier history
+        # instead of overwriting and losing it.
+        if llm_merge_ok:
             self._summary = summary
         elif self._summary:
             self._summary = self._summary + "\n\n---\n\n" + summary
@@ -566,6 +643,31 @@ class ContextManager:
 
             saved_tokens += original_tokens - _estimate_tokens(placeholder)
             pruned += 1
+
+        # #6 fix: also hard-cap any single oversized tool result inside the
+        # protected window. Protected messages are never replaced by a
+        # skeleton, but an individual giant dump still gets head/tail
+        # truncated so one message can't dominate the live context.
+        if self.max_single_result_tokens > 0:
+            cap_chars = int(self.max_single_result_tokens * _CHARS_PER_TOKEN)
+            for i in range(cutoff, total):
+                msg = self.messages[i]
+                if not self._is_tool_result(msg):
+                    continue
+                content = msg.get("content", "")
+                if content.endswith("body removed to save tokens"):
+                    continue
+                if _estimate_tokens(content) <= self.max_single_result_tokens:
+                    continue
+                # Skip protected tools — their artifacts must stay intact.
+                meta = msg.get("_meta") or {}
+                tool_name = meta.get("tool_name") if isinstance(meta, dict) else None
+                if tool_name in _PRUNE_PROTECTED_TOOLS:
+                    continue
+                original_tokens = _estimate_tokens(content)
+                msg["content"] = _truncate_output(content, cap_chars)
+                saved_tokens += original_tokens - _estimate_tokens(msg["content"])
+                pruned += 1
 
         if pruned:
             logger.info(

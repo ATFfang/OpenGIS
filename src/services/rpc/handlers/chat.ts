@@ -9,9 +9,16 @@
 
 import type { RpcHandler } from '../registry';
 import { notImplemented, parseParams } from './_util';
-import { ShowImageSchema, ShowTableSchema, ShowTextSchema } from './schemas';
+import {
+  PlanUpdateSchema,
+  ShowImageSchema,
+  ShowTableSchema,
+  ShowTextSchema,
+  SubagentUpdateSchema,
+} from './schemas';
 import { useChatStore } from '@/stores/chatStore';
 import { pathToImageUrl } from './_image_url';
+import type { PlanData, SubagentData } from '@/types/chat';
 
 export const chatHandlers: Record<string, RpcHandler> = {
   'rpc.ui.chat.show_text': (params) => {
@@ -43,5 +50,138 @@ export const chatHandlers: Record<string, RpcHandler> = {
   'rpc.ui.chat.show_table': (params) => {
     parseParams(ShowTableSchema, params, 'rpc.ui.chat.show_table');
     notImplemented('rpc.ui.chat.show_table');
+  },
+
+  /**
+   * Plan / TODO checklist. The backend `update_plan` skill sends the FULL
+   * plan on every call; we upsert a single `say='plan'` message keyed by
+   * `plan_id` so repeated updates animate the same card in place rather
+   * than spamming the chat with one card per update.
+   */
+  'rpc.ui.chat.plan_update': (params) => {
+    const parsed = parseParams(PlanUpdateSchema, params, 'rpc.ui.chat.plan_update');
+
+    const planData: PlanData = {
+      planId: parsed.plan_id,
+      title: parsed.title,
+      steps: parsed.steps,
+      runId: parsed.run_id,
+      updatedAt: Date.now(),
+    };
+
+    const store = useChatStore.getState();
+    const conv = store.activeConversation();
+
+    // Upsert: find an existing plan message with the same planId in the
+    // active conversation and update it in place; otherwise append a new
+    // one. Searching newest-first keeps it O(updates) in practice.
+    let existingTs: number | null = null;
+    if (conv) {
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const m = conv.messages[i];
+        if (m.say === 'plan' && m.planData?.planId === parsed.plan_id) {
+          existingTs = m.ts;
+          break;
+        }
+      }
+    }
+
+    if (existingTs != null) {
+      store._updateMessage(existingTs, { planData });
+    } else {
+      store._addMessage({
+        ts: Date.now(),
+        type: 'say',
+        say: 'plan',
+        planData,
+      });
+    }
+
+    // Track workflow plan state for compact UI mode
+    if (parsed.workflow) {
+      useChatStore.setState({ workflowPlanActive: true })
+    }
+
+    return { ok: true, plan_id: parsed.plan_id, steps: parsed.steps.length };
+  },
+
+  /**
+   * Sub-agent running indicator. The backend run_subagent / run_subagents
+   * skills push a content-free status card (task titles + state) while an
+   * isolated child agent churns — mirroring opencode's collapsed sub-agent
+   * affordance. Upserted by `subagent_id` so the running → done transition
+   * (and per-task progress in a parallel fan-out) animates the same card.
+   */
+  'rpc.ui.chat.subagent_update': (params) => {
+    const parsed = parseParams(SubagentUpdateSchema, params, 'rpc.ui.chat.subagent_update');
+
+    const store = useChatStore.getState();
+    const conv = store.activeConversation();
+
+    let existingTs: number | null = null;
+    let startedAt: number | undefined;
+    if (conv) {
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const m = conv.messages[i];
+        if (m.say === 'subagent' && m.subagentData?.subagentId === parsed.subagent_id) {
+          existingTs = m.ts;
+          startedAt = m.subagentData?.startedAt;
+          break;
+        }
+      }
+    }
+
+    const now = Date.now();
+    const subagentData: SubagentData = {
+      subagentId: parsed.subagent_id,
+      status: parsed.status,
+      parallel: parsed.parallel ?? parsed.tasks.length > 1,
+      tasks: parsed.tasks,
+      okCount: parsed.ok_count,
+      total: parsed.total ?? parsed.tasks.length,
+      runId: parsed.run_id,
+      startedAt: startedAt ?? now,
+      updatedAt: now,
+    };
+
+    if (existingTs != null) {
+      store._updateMessage(existingTs, { subagentData });
+    } else {
+      store._addMessage({
+        ts: now,
+        type: 'say',
+        say: 'subagent',
+        subagentData,
+        runId: parsed.run_id,
+      });
+    }
+
+    return { ok: true, subagent_id: parsed.subagent_id };
+  },
+
+  /**
+   * Interactive map screenshot request. The backend skill sends this
+   * to show a capture card in the chat. The user adjusts the map and
+   * clicks "Capture" — the frontend saves the image and writes a
+   * result marker so the backend skill can unblock.
+   */
+  'rpc.ui.chat.interactive_snapshot': (params) => {
+    const requestId = params?.request_id as string;
+    const savePath = params?.save_path as string;
+    const prompt = params?.prompt as string;
+
+    if (!requestId || !savePath) {
+      return { ok: false, error: 'Missing request_id or save_path' };
+    }
+
+    const store = useChatStore.getState();
+    store._addMessage({
+      ts: Date.now(),
+      type: 'say',
+      say: 'screenshot',
+      screenshotData: { requestId, savePath, prompt: prompt || '' },
+    });
+
+    return { ok: true, request_id: requestId };
   },
 };

@@ -24,11 +24,14 @@ See ``_subprocess_runner.py`` for the full wire format. In short:
 from __future__ import annotations
 
 import json
+import logging
 import asyncio
 import os
 import queue
 import signal
 import subprocess
+
+logger = logging.getLogger(__name__)
 import sys
 import threading
 import time
@@ -264,38 +267,38 @@ class SubprocessPythonExecutor:
         import logging as _logging
         _log = _logging.getLogger(__name__)
         proc = self._proc
-        _log.info("[EXEC-DEBUG] interrupt() called, proc=%s, poll=%s",
+        logger.debug("[EXEC] interrupt() called, proc=%s, poll=%s",
                   proc.pid if proc else None,
                   proc.poll() if proc else "N/A")
         if proc is None or proc.poll() is not None:
-            _log.info("[EXEC-DEBUG] interrupt() early return: proc already dead or None")
+            logger.debug("[EXEC] interrupt() early return: proc already dead or None")
             return
         try:
             if _IS_WINDOWS:
-                _log.info("[EXEC-DEBUG] sending CTRL_BREAK_EVENT to pid=%d", proc.pid)
+                logger.debug("[EXEC] sending CTRL_BREAK_EVENT to pid=%d", proc.pid)
                 proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
             else:
-                _log.info("[EXEC-DEBUG] sending SIGINT to pid=%d", proc.pid)
+                logger.debug("[EXEC] sending SIGINT to pid=%d", proc.pid)
                 proc.send_signal(signal.SIGINT)
         except Exception as e:
             self._log_stderr(f"[executor] interrupt send failed: {e}\n")
         try:
             proc.wait(timeout=self.config.kill_grace)
-            _log.info("[EXEC-DEBUG] child exited after signal, code=%s", proc.returncode)
+            logger.debug("[EXEC] child exited after signal, code=%s", proc.returncode)
             return
         except subprocess.TimeoutExpired:
-            _log.info("[EXEC-DEBUG] child did not exit in %.1fs, escalating...", self.config.kill_grace)
+            logger.debug("[EXEC] child did not exit in %.1fs, escalating...", self.config.kill_grace)
         # Grace window expired — kill the whole tree.
         if _IS_WINDOWS:
             try:
-                _log.info("[EXEC-DEBUG] running taskkill /F /T /PID %d", proc.pid)
+                logger.debug("[EXEC] running taskkill /F /T /PID %d", proc.pid)
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                     capture_output=True,
                     check=False,
                     timeout=5.0,
                 )
-                _log.info("[EXEC-DEBUG] taskkill done")
+                logger.debug("[EXEC] taskkill done")
             except Exception as e:
                 self._log_stderr(f"[executor] taskkill failed: {e}\n")
                 self._terminate(proc)
@@ -515,6 +518,8 @@ class SubprocessPythonExecutor:
 
     def _handle_tool_call(self, msg: dict) -> None:
         """Invoke a registered tool on behalf of the child."""
+        import time as _time
+
         call_id = msg.get("call_id") or uuid.uuid4().hex
         name = msg.get("name")
         args = msg.get("args") or []
@@ -522,6 +527,7 @@ class SubprocessPythonExecutor:
 
         tool = self._tools.get(name) if isinstance(name, str) else None
         if tool is None:
+            logger.error("TOOL NOT FOUND: %s (call_id=%s)", name, call_id[:8])
             self._send({
                 "kind": "tool_result",
                 "call_id": call_id,
@@ -530,6 +536,14 @@ class SubprocessPythonExecutor:
             })
             return
 
+        # Log tool call start (INFO — always visible)
+        _args_repr = repr(args)[:200] if args else ""
+        _kwargs_repr = repr(kwargs)[:200] if kwargs else ""
+        _params = ", ".join(filter(None, [_args_repr, _kwargs_repr]))
+        logger.info("TOOL CALL: %s(%s)", name, _params)
+        logger.debug("TOOL CALL [%s] full args=%s  kwargs=%s", name, args, kwargs)
+
+        t0 = _time.monotonic()
         try:
             # Tool is callable: tool(*args, **kwargs) invokes the skill.
             value = tool(*args, **kwargs)
@@ -545,6 +559,11 @@ class SubprocessPythonExecutor:
                     self._async_loop = _asyncio.new_event_loop()
                 value = self._async_loop.run_until_complete(value)
         except Exception as e:  # noqa: BLE001
+            duration_ms = (_time.monotonic() - t0) * 1000
+            logger.error(
+                "TOOL FAIL: %s — %s: %s (%.0fms)  params=%s",
+                name, type(e).__name__, e, duration_ms, _params,
+            )
             self._send({
                 "kind": "tool_result",
                 "call_id": call_id,
@@ -552,6 +571,8 @@ class SubprocessPythonExecutor:
                 "error": f"{type(e).__name__}: {e}",
             })
             return
+
+        duration_ms = (_time.monotonic() - t0) * 1000
 
         # Ensure the return value survives the pipe. If it doesn't,
         # fall back to repr — matches the JSON-RPC handler's NumpyEncoder
@@ -561,6 +582,11 @@ class SubprocessPythonExecutor:
             safe_value = value
         except (TypeError, ValueError):
             safe_value = repr(value)
+
+        # Log tool result (INFO for summary, DEBUG for full payload)
+        _result_summary = repr(safe_value)[:200]
+        logger.info("TOOL OK: %s — %.0fms — result: %s", name, duration_ms, _result_summary)
+        logger.debug("TOOL RESULT [%s] full: %s", name, repr(safe_value)[:1000])
 
         self._send({
             "kind": "tool_result",

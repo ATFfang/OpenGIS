@@ -55,6 +55,12 @@ def build_workflow_loop(
     step_callback: Optional[Callable[[AgentStep], None]] = None,
     progress_callback: Optional[Callable[[str, str], None]] = None,
     risky_op_listener: Optional[Callable[[dict], None]] = None,
+    on_thought_delta: Optional[Callable[[str], None]] = None,
+    on_code_start: Optional[Callable[[int], None]] = None,
+    on_code_delta: Optional[Callable[[int, str], None]] = None,
+    on_code_end: Optional[Callable[[int], None]] = None,
+    context: Optional[ContextManager] = None,
+    plan_callback: Optional[Callable[[dict], None]] = None,
 ) -> tuple["WorkflowLoop", Any]:
     """Build a fresh WorkflowLoop + subprocess executor.
 
@@ -131,7 +137,8 @@ def build_workflow_loop(
     def _executor_call(code: str) -> CodeExecResult:
         return executor(code)
 
-    # Build the workflow loop.
+    # Build the workflow loop. Reuse the shared conversation context if
+    # provided so the workflow can see prior chat history.
     workflow_loop = WorkflowLoop(
         llm_call=llm_call,
         executor_call=_executor_call,
@@ -140,7 +147,13 @@ def build_workflow_loop(
         max_retries_per_node=max_retries_per_node,
         step_callback=step_callback,
         progress_callback=progress_callback,
-        context=ContextManager(),
+        on_thought_delta=on_thought_delta,
+        on_code_start=on_code_start,
+        on_code_delta=on_code_delta,
+        on_code_end=on_code_end,
+        plan_callback=plan_callback,
+        context=context if context is not None else ContextManager(),
+        workspace=str((getattr(ctx, "meta", None) or {}).get("workspace_path", "")),
     )
 
     return workflow_loop, executor

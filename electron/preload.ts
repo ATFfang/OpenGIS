@@ -22,6 +22,10 @@ const electronAPI = {
   writeFile: (path: string, content: string) =>
     ipcRenderer.invoke('file:write', path, content),
 
+  /** Write binary data (ArrayBuffer) to a file. Used for image exports. */
+  writeFileBinary: (path: string, buffer: ArrayBuffer) =>
+    ipcRenderer.invoke('file:write-binary', path, buffer),
+
   getFileInfo: (path: string) =>
     ipcRenderer.invoke('file:info', path),
 
@@ -36,6 +40,10 @@ const electronAPI = {
 
   renameFile: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke('file:rename', oldPath, newPath),
+
+  /** Show a file or folder in the OS file manager (Finder / Explorer). */
+  showItemInFolder: (filePath: string) =>
+    ipcRenderer.invoke('file:show-in-folder', filePath),
 
   /**
    * Ensure a directory exists (creates intermediate parents as needed).

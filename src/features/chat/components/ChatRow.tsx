@@ -1,11 +1,15 @@
 import { memo, useMemo } from 'react'
 import { AlertCircle, Check, Loader2, Cpu, ChevronRight, Hourglass, AlertTriangle, RefreshCw, Brain } from 'lucide-react'
 import type { UIMessage, ApiReqInfo } from '@/types/chat'
+import { useT } from '@/i18n'
 import MarkdownBlock from './MarkdownBlock'
 import { ThinkingRow } from './ThinkingRow'
 import { ToolCallRow } from './ToolCallRow'
 import { CodeStepRow, CodeResultRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
+import PlanRow from './PlanRow'
+import { SubagentRow } from './SubagentRow'
+import { ScreenshotRow } from './ScreenshotRow'
 import { useChatStore } from '@/stores/chatStore'
 
 interface ChatRowProps {
@@ -38,6 +42,7 @@ export default ChatRow
 // --- ChatRowContent ---
 
 const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowProps) => {
+  const t = useT()
   const type = message.type === 'ask' ? message.ask : message.say
 
   const handleToggle = () => onToggleExpand(message.ts)
@@ -61,7 +66,7 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
         reasoningContent={message.text}
         showChevron={!isStreaming || hasText}
         showTitle={true}
-        title={isStreaming ? 'Thinking...' : 'Thought'}
+        title={isStreaming ? `${t.chat.thinkingLabel}...` : t.chat.thoughtLabel}
       />
     )
   }
@@ -102,6 +107,27 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
   // Inline image (matplotlib plot etc.) emitted via rpc.ui.chat.show_image.
   if (type === 'image') {
     return <ImageRow message={message} />
+  }
+
+  // Plan / TODO checklist emitted via rpc.ui.chat.plan_update.
+  if (type === 'plan') {
+    return <PlanRow planData={message.planData} />
+  }
+
+  // Sub-agent running indicator emitted via rpc.ui.chat.subagent_update.
+  if (type === 'subagent') {
+    return <SubagentRow data={message.subagentData} />
+  }
+
+  // Interactive screenshot card emitted via rpc.ui.chat.interactive_snapshot.
+  if (type === 'screenshot' && message.screenshotData) {
+    return (
+      <ScreenshotRow
+        requestId={message.screenshotData.requestId}
+        savePath={message.screenshotData.savePath}
+        prompt={message.screenshotData.prompt}
+      />
+    )
   }
 
   // Soft stop: agent hit its step budget. Shows summary (already streamed
@@ -152,7 +178,7 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
       <div className="bg-accent-primary/5 border border-accent-primary/15 rounded-xl p-3.5">
         <div className="flex items-center gap-2 mb-1.5">
           <ChevronRight className="w-3.5 h-3.5 text-accent-primary" />
-          <span className="text-accent-primary font-semibold text-xs uppercase tracking-wider">Question</span>
+          <span className="text-accent-primary font-semibold text-xs uppercase tracking-wider">{t.chat.questionLabel}</span>
         </div>
         <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
       </div>
@@ -170,16 +196,12 @@ ChatRowContent.displayName = 'ChatRowContent'
 function UserMessageRow({ message }: { message: UIMessage }) {
   return (
     <div
-      className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-[13px] shadow-sm"
+      className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-[13px] shadow-sm bg-accent-success/8 border border-accent-success/15"
       style={{
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
         maxWidth: '100%',
-        backgroundColor: 'rgba(74, 222, 128, 0.08)',
-        borderWidth: '1px',
-        borderStyle: 'solid',
-        borderColor: 'rgba(74, 222, 128, 0.18)',
       }}
     >
       <span className="block text-text-primary leading-relaxed">{message.text}</span>
@@ -222,7 +244,7 @@ function ErrorRow({ message }: { message: UIMessage }) {
   const mainText = isHumanized ? errorText : `⚠️ ${errorText}`
 
   return (
-    <div className="text-[13px] bg-accent-danger/5 border border-accent-danger/12 rounded-xl px-4 py-3 shadow-sm">
+    <div className="text-[13px] bg-accent-danger/5 border border-accent-danger/15 rounded-xl px-4 py-3 shadow-sm">
       <div className="flex items-start gap-2.5">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-accent-danger" />
         <div className="flex-1 min-w-0">
@@ -235,23 +257,28 @@ function ErrorRow({ message }: { message: UIMessage }) {
   )
 }
 
-// --- Progress stage labels ---
-const PROGRESS_LABELS: Record<string, string> = {
-  installing_packages: '📦 Installing packages...',
-  loading_geodata: '🗺️ Loading geodata...',
-  loading_raster: '🛰️ Loading raster data...',
-  loading_data: '📊 Loading data...',
-  spatial_analysis: '📐 Running spatial analysis...',
-  generating_visualization: '🎨 Generating visualization...',
-  rendering_map: '🗺️ Rendering to map...',
-  saving_results: '💾 Saving results...',
-  executing_code: '⚙️ Executing code...',
-  processing: '⏳ Processing...',
+// --- Progress stage labels (keys match backend progress_callback stage names) ---
+function useProgressLabels(): Record<string, string> {
+  const t = useT()
+  return {
+    installing_packages: `📦 ${t.chat.progressInstalling}`,
+    loading_geodata: `🗺️ ${t.chat.progressLoadingGeodata}`,
+    loading_raster: `🛰️ ${t.chat.progressLoadingRaster}`,
+    loading_data: `📊 ${t.chat.progressLoadingData}`,
+    spatial_analysis: `📐 ${t.chat.progressSpatialAnalysis}`,
+    generating_visualization: `🎨 ${t.chat.progressVisualization}`,
+    rendering_map: `🗺️ ${t.chat.progressRendering}`,
+    saving_results: `💾 ${t.chat.progressSaving}`,
+    executing_code: `⚙️ ${t.chat.progressExecuting}`,
+    processing: `⏳ ${t.chat.progressProcessing}`,
+  }
 }
 
 function ProgressRow({ message }: { message: UIMessage }) {
+  const t = useT()
+  const labels = useProgressLabels()
   const stage = message.progressStage || 'processing'
-  const label = PROGRESS_LABELS[stage] || PROGRESS_LABELS.processing
+  const label = labels[stage] || labels.processing
   const detail = message.progressDetail
 
   return (
@@ -268,6 +295,7 @@ function ProgressRow({ message }: { message: UIMessage }) {
 }
 
 function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: boolean }) {
+  const t = useT()
   const info = message.maxStepsInfo
   const isStreaming = useChatStore((s) => s.isStreaming)
   const sendMessage = useChatStore((s) => s.sendMessage)
@@ -280,7 +308,7 @@ function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: b
     if (!canContinue) return
     // Keeping the wording natural so the LLM resumes the same thread of
     // thought instead of treating it as a new task.
-    sendMessage('继续')
+    sendMessage(t.chat.continue)
   }
 
   return (
@@ -288,11 +316,10 @@ function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: b
       <Hourglass className="w-4 h-4 shrink-0 mt-0.5 text-text-muted" />
       <div className="flex-1 min-w-0">
         <div className="text-[13px] text-text-primary leading-relaxed">
-          已达到本轮 <span className="font-mono text-text-secondary">max_iterations = {info?.maxSteps ?? '?'}</span> 上限，
-          Agent 给了一个阶段性总结（见上方）。
+          {t.chat.maxStepsReached.replace('{maxSteps}', String(info?.maxSteps ?? '?'))}
         </div>
         <div className="text-[11px] text-text-muted mt-1">
-          想继续的话点下方按钮，或在 Settings → Agent → Max Iterations 调高上限再试。
+          {t.chat.maxStepsHint}
         </div>
         <div className="mt-2.5 flex gap-2">
           <button
@@ -301,7 +328,7 @@ function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: b
             disabled={!canContinue}
             className="px-3 py-1.5 rounded-md text-[12px] font-medium bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary border border-accent-primary/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            继续
+            {t.chat.continue}
           </button>
         </div>
       </div>
@@ -310,13 +337,14 @@ function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: b
 }
 
 function CompletionRow({ message }: { message: UIMessage }) {
+  const t = useT()
   return (
-    <div className="bg-accent-success/5 border border-accent-success/12 rounded-xl p-4 shadow-sm">
+    <div className="bg-accent-success/5 border border-accent-success/15 rounded-xl p-4 shadow-sm">
       <div className="flex items-center gap-2 mb-2.5">
         <div className="w-5 h-5 rounded-full bg-accent-success/15 flex items-center justify-center">
           <Check className="w-3 h-3 text-accent-success" />
         </div>
-        <span className="text-accent-success font-semibold text-sm">Task Completed</span>
+        <span className="text-accent-success font-semibold text-sm">{t.chat.taskCompleted}</span>
       </div>
       {message.text && (
         <div className="pl-7">

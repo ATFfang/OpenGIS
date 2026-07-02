@@ -178,6 +178,11 @@ class RpcHandler:
             "rpc.runs.replay": self._handle_runs_replay,
             # chat.* channel: long-running conversation turn (streams via notifications)
             "chat.user_message": self._handle_agent_chat,
+            # debug channel: runtime log level control
+            "rpc.debug.set_log_level": self._handle_set_log_level,
+            "rpc.debug.get_log_level": self._handle_get_log_level,
+            # workspace channel: template management
+            "rpc.workspace.install_templates": self._handle_install_templates,
         }
 
     async def handle_message(self, raw: str) -> None:
@@ -544,80 +549,139 @@ class RpcHandler:
         def _elapsed():
             return f"+{(_time.perf_counter() - _t0)*1000:.1f}ms"
 
-        logger.info("[CANCEL-DEBUG] %s _handle_agent_cancel ENTERED", _elapsed())
+        logger.debug("[CANCEL] %s _handle_agent_cancel ENTERED", _elapsed())
         cancelled = False
         agent = self._agent
-        logger.info("[CANCEL-DEBUG] %s agent=%s, _current_agent_task=%s",
+        logger.debug("[CANCEL] %s agent=%s, _current_agent_task=%s",
                     _elapsed(), agent is not None,
                     self._current_agent_task is not None and not self._current_agent_task.done()
                     if self._current_agent_task else None)
 
         if agent is not None:
+            # Cancel any active sub-agent branches FIRST — they hold
+            # independent loops and executors that won't be reached by
+            # the main loop's interrupt().
+            subagent_tracker = getattr(agent, "_active_subagent_tracker", None)
+            if subagent_tracker is not None:
+                try:
+                    subagent_tracker.cancel_all()
+                    logger.debug("[CANCEL] %s subagent tracker.cancel_all() done", _elapsed())
+                except Exception as e:
+                    logger.warning("[CANCEL] subagent tracker.cancel_all failed: %s", e)
+
             # Signal the agent loop to stop at the next iteration.
             current_loop = getattr(agent, "_current_loop", None)
-            logger.info("[CANCEL-DEBUG] %s current_loop=%s, _interrupted_before=%s",
+            logger.debug("[CANCEL] %s current_loop=%s, _interrupted_before=%s",
                         _elapsed(), current_loop is not None,
                         getattr(current_loop, "_interrupted", "N/A") if current_loop else "N/A")
             if current_loop is not None and hasattr(current_loop, "interrupt"):
                 try:
                     current_loop.interrupt()
-                    logger.info("[CANCEL-DEBUG] %s loop.interrupt() done, _interrupted=%s",
+                    logger.debug("[CANCEL] %s loop.interrupt() done, _interrupted=%s",
                                 _elapsed(), current_loop._interrupted)
                 except Exception as e:
                     logger.warning("[CANCEL-DEBUG] %s loop.interrupt failed: %s", _elapsed(), e)
 
             executor = getattr(agent, "current_executor", None)
-            logger.info("[CANCEL-DEBUG] %s executor=%s, proc=%s",
+            logger.debug("[CANCEL] %s executor=%s, proc=%s",
                         _elapsed(), executor is not None,
                         getattr(getattr(executor, "_proc", None), "pid", None) if executor else None)
             if executor is not None:
                 try:
                     executor.interrupt()
-                    logger.info("[CANCEL-DEBUG] %s executor.interrupt() done", _elapsed())
+                    logger.debug("[CANCEL] %s executor.interrupt() done", _elapsed())
                 except Exception as e:
                     logger.warning("[CANCEL-DEBUG] %s executor.interrupt failed: %s", _elapsed(), e)
                 try:
                     executor.cleanup()
-                    logger.info("[CANCEL-DEBUG] %s executor.cleanup() done", _elapsed())
+                    logger.debug("[CANCEL] %s executor.cleanup() done", _elapsed())
                 except Exception as e:
                     logger.warning("[CANCEL-DEBUG] %s executor.cleanup failed: %s", _elapsed(), e)
                 agent.current_executor = None
 
             current_runner = getattr(agent, "_current_runner", None)
-            logger.info("[CANCEL-DEBUG] %s current_runner=%s, worker_thread_id=%s",
+            logger.debug("[CANCEL] %s current_runner=%s, worker_thread_id=%s",
                         _elapsed(), current_runner is not None,
                         getattr(current_runner, "_worker_thread_id", None) if current_runner else None)
             if current_runner is not None:
                 try:
                     result = current_runner.interrupt_worker_thread()
-                    logger.info("[CANCEL-DEBUG] %s interrupt_worker_thread() returned %s", _elapsed(), result)
+                    logger.debug("[CANCEL] %s interrupt_worker_thread() returned %s", _elapsed(), result)
                 except Exception as e:
                     logger.warning("[CANCEL-DEBUG] %s thread interrupt failed: %s", _elapsed(), e)
 
         if self._current_agent_task and not self._current_agent_task.done():
             self._current_agent_task.cancel()
             cancelled = True
-            logger.info("[CANCEL-DEBUG] %s asyncio task cancelled, waiting...", _elapsed())
+            logger.debug("[CANCEL] %s asyncio task cancelled, waiting...", _elapsed())
             try:
                 await asyncio.wait_for(
                     asyncio.shield(self._current_agent_task),
                     timeout=TITLE_GEN_TIMEOUT,
                 )
-                logger.info("[CANCEL-DEBUG] %s task finished gracefully", _elapsed())
+                logger.debug("[CANCEL] %s task finished gracefully", _elapsed())
             except (TimeoutError, asyncio.CancelledError, Exception) as e:
-                logger.info("[CANCEL-DEBUG] %s task wait ended with: %s(%s)", _elapsed(), type(e).__name__, e)
+                logger.debug("[CANCEL] %s task wait ended with: %s(%s)", _elapsed(), type(e).__name__, e)
             self._current_agent_task = None
         else:
-            logger.info("[CANCEL-DEBUG] %s NO active agent task to cancel!", _elapsed())
+            logger.debug("[CANCEL] %s NO active agent task to cancel!", _elapsed())
 
         if self._workspace_locks:
             released = list(self._workspace_locks.keys())
             self._workspace_locks.clear()
-            logger.info("[CANCEL-DEBUG] %s force-released locks: %s", _elapsed(), released)
+            logger.debug("[CANCEL] %s force-released locks: %s", _elapsed(), released)
 
-        logger.info("[CANCEL-DEBUG] %s _handle_agent_cancel DONE, returning status=%s",
+        logger.debug("[CANCEL] %s _handle_agent_cancel DONE, returning status=%s",
                     _elapsed(), "cancelled" if cancelled else "idle")
         return {"status": "cancelled" if cancelled else "idle"}
+
+    # ─── Debug: log level control ──────────────────────────────────────
+
+    async def _handle_set_log_level(self, params: dict) -> Any:
+        """Change the backend log level at runtime.
+
+        Params: {"level": "DEBUG" | "INFO" | "WARNING" | "ERROR"}
+        """
+        import logging as _logging
+        from opengis_backend.logging_setup import set_level
+
+        level_name = (params.get("level") or "INFO").upper()
+        level = getattr(_logging, level_name, None)
+        if level is None:
+            return {"status": "error", "message": f"Unknown level: {level_name}"}
+
+        set_level(level)
+        return {"status": "ok", "level": level_name}
+
+    async def _handle_get_log_level(self, params: dict) -> Any:
+        """Return the current log level."""
+        from opengis_backend.logging_setup import get_level
+        return {"status": "ok", "level": get_level()}
+
+    # ─── Workspace: install built-in templates ───────────────────────
+
+    async def _handle_install_templates(self, params: dict) -> Any:
+        """Install built-in workflow templates to workspace.
+
+        Params: {"workspace_path": str}
+        Idempotent — only copies files that don't already exist.
+        """
+        from pathlib import Path
+
+        workspace = params.get("workspace_path")
+        if not workspace:
+            return {"status": "error", "message": "Missing workspace_path"}
+
+        try:
+            from opengis_backend.workspace.manager import WorkspaceManager
+            wm = WorkspaceManager()
+            ws = Path(workspace)
+            if not ws.is_dir():
+                return {"status": "error", "message": f"Not a directory: {workspace}"}
+            wm._ensure_builtin_templates(ws)
+            return {"status": "ok", "workspace": workspace}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     # ─── A4: workspace revert ──────────────────────────────────────────
 

@@ -163,6 +163,7 @@ class StepRecorder:
                     "output": step.output or "",
                     "error": step.error,
                     "run_id": self.archive.run_id,
+                    "duration_ms": step.duration_ms,
                 },
             ),
         )

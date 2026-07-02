@@ -171,6 +171,7 @@ class WorkspaceManager:
             # Respect the user's existing repo. Only make sure our
             # ignore rules are present — never touch their history.
             updated = self._ensure_gitignore_block(ws)
+            self._ensure_builtin_templates(ws)
             logger.info(
                 "workspace already a git repo, gitignore_updated=%s: %s",
                 updated,
@@ -216,6 +217,38 @@ class WorkspaceManager:
         )
 
     # ─────────────────────────────────────────────────────────────────────
+    # Built-in workflow templates
+    # ─────────────────────────────────────────────────────────────────────
+
+    _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+    def _ensure_builtin_templates(self, ws: Path) -> None:
+        """Copy built-in workflow templates to workspace/workflows/ if missing.
+
+        Only copies files that don't already exist — never overwrites
+        user-modified templates. Idempotent and safe to call on every init.
+        """
+        if not self._TEMPLATES_DIR.is_dir():
+            return
+
+        wf_dir = ws / "workflows"
+        try:
+            wf_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("Cannot create workflows dir: %s", e)
+            return
+
+        for tpl in self._TEMPLATES_DIR.glob("*.flow.json"):
+            dest = wf_dir / tpl.name
+            if dest.exists():
+                continue  # user already has this file
+            try:
+                import shutil
+                shutil.copy2(str(tpl), str(dest))
+                logger.info("Installed built-in workflow template: %s", tpl.name)
+            except OSError as e:
+                logger.warning("Failed to copy template %s: %s", tpl.name, e)
+
     # .gitignore helpers
     # ─────────────────────────────────────────────────────────────────────
 
