@@ -45,19 +45,13 @@ export interface CodeExecutionResult {
   execution_time_ms: number
 }
 
-export type SplitDirection = 'horizontal' | 'vertical'
-
 export interface ViewState {
   // 主内容区域中打开的选项卡
   tabs: ViewTab[]
   // 当前活动选项卡 ID
   activeTabId: string
-  // 主内容区域的分割方向
-  splitDirection: SplitDirection
   // 是否可见代码面板
   showCodePanel: boolean
-  // 是否并排显示地图 + 代码
-  showSplitView: boolean
 
   // 操作方法
   openTab: (tab: Omit<ViewTab, 'id'>) => string
@@ -67,8 +61,6 @@ export interface ViewState {
   updateTabExecutionResult: (tabId: string, result: CodeExecutionResult) => void
   setTabExecuting: (tabId: string, executing: boolean) => void
   closeAllTabs: () => void
-  toggleSplitView: () => void
-  setSplitDirection: (direction: SplitDirection) => void
   setShowCodePanel: (show: boolean) => void
   openFileAsTab: (filePath: string, fileName: string, content: string, language?: string) => string
 }
@@ -85,9 +77,7 @@ function nextTabId(): string {
 export const useViewStore = create<ViewState>((set, get) => ({
   tabs: [],
   activeTabId: 'map',
-  splitDirection: 'horizontal',
   showCodePanel: false,
-  showSplitView: false,
 
   openTab: (tab) => {
     const id = nextTabId()
@@ -153,11 +143,6 @@ export const useViewStore = create<ViewState>((set, get) => ({
       activeTabId: 'map',
       showCodePanel: false,
     }),
-
-  toggleSplitView: () =>
-    set((state) => ({ showSplitView: !state.showSplitView })),
-
-  setSplitDirection: (direction) => set({ splitDirection: direction }),
 
   setShowCodePanel: (show) => set({ showCodePanel: show }),
 

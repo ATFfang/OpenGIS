@@ -6,7 +6,7 @@ directories:
 
 files:
   - "out/**/*"
-  - "resources/**/*"
+  - "resources/icons/**/*"
 
 extraResources:
   - from: "python-backend/"
@@ -15,7 +15,10 @@ extraResources:
       - "**/*"
       - "!**/__pycache__/**"
       - "!**/tests/**"
+      - "!**/.venv"
       - "!**/.venv/**"
+      - "!**/.egg-info"
+      - "!**/.egg-info/**"
   - from: "resources/icons/"
     to: "icons/"
     filter:
@@ -37,13 +40,26 @@ mac:
   target:
     - dmg
     - zip
-  # 复用 1024×1024 PNG，electron-builder 会在打包阶段自动转成 .icns。
-  # 如需更精细的多尺寸图标，可在 resources/icons/ 放 app-icon.icns 并改回此处。
+  # 1254×1254 PNG，electron-builder 会在打包阶段自动转成 .icns。
   icon: resources/icons/app-icon.png
   category: public.app-category.developer-tools
   artifactName: "${productName}-${version}-mac-${arch}.${ext}"
   # 暂未配置代码签名 / 公证：未签名 .dmg 在 macOS 12+ 首次打开
   # 需用户右键→打开。正式发版前需补 identity + notarize。
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
+  iconSize: 80
+  iconTextSize: 12
 
 linux:
   target:

@@ -60,6 +60,8 @@ export const graduatedRenderer: LayerRenderer = {
     // 存入缓存，供 legend 组件读取（不再直接修改 def.style）
     graduateCache.set(def.id, { breaks, palette })
 
+    const hoverExpr = (orig: any) => ['case', ['boolean', ['feature-state', 'hover'], false], '#6366f1', orig]
+
     if (geomRenderType === 'fill') {
       ctx.addRenderLayer({
         id: mainLayerId,
@@ -67,8 +69,13 @@ export const graduatedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'fill-color': colorExpr,
-          'fill-opacity': def.style.fillOpacity ?? def.style.opacity,
+          'fill-color': hoverExpr(colorExpr),
+          'fill-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            Math.min((def.style.fillOpacity ?? def.style.opacity) + 0.25, 0.85),
+            def.style.fillOpacity ?? def.style.opacity,
+          ] as any,
         },
       })
       ctx.registerRenderLayerId(def.id, mainLayerId)
@@ -80,8 +87,18 @@ export const graduatedRenderer: LayerRenderer = {
           source: sourceId,
           layout: { visibility },
           paint: {
-            'line-color': def.style.strokeColor || '#555',
-            'line-width': def.style.strokeWidth,
+            'line-color': [
+              'case',
+              ['boolean', ['feature-state', 'hover'], false],
+              '#818cf8',
+              def.style.strokeColor || '#555',
+            ] as any,
+            'line-width': [
+              'case',
+              ['boolean', ['feature-state', 'hover'], false],
+              (def.style.strokeWidth ?? 1) + 2,
+              def.style.strokeWidth,
+            ] as any,
             'line-opacity': def.style.opacity,
           },
         })
@@ -94,11 +111,26 @@ export const graduatedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'circle-color': colorExpr,
-          'circle-radius': def.style.radius ?? 5,
+          'circle-color': hoverExpr(colorExpr),
+          'circle-radius': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            (def.style.radius ?? 5) + 3,
+            def.style.radius ?? 5,
+          ] as any,
           'circle-opacity': def.style.opacity,
-          'circle-stroke-color': def.style.strokeColor,
-          'circle-stroke-width': def.style.strokeWidth,
+          'circle-stroke-color': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            '#818cf8',
+            def.style.strokeColor,
+          ] as any,
+          'circle-stroke-width': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            (def.style.strokeWidth ?? 0) + 2,
+            def.style.strokeWidth,
+          ] as any,
         },
       })
       ctx.registerRenderLayerId(def.id, mainLayerId)
@@ -109,8 +141,13 @@ export const graduatedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'line-color': colorExpr,
-          'line-width': def.style.strokeWidth,
+          'line-color': hoverExpr(colorExpr),
+          'line-width': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            (def.style.strokeWidth ?? 1) + 3,
+            def.style.strokeWidth,
+          ] as any,
           'line-opacity': def.style.opacity,
         },
       })
@@ -132,34 +169,39 @@ export const graduatedRenderer: LayerRenderer = {
     if (!ctx.map.getLayer(mainLayerId)) return
 
     const { colorExpr, breaks, palette } = buildGraduated(def)
-    // 存入缓存，不再直接修改 def.style
     graduateCache.set(def.id, { breaks, palette })
 
-    // Update color expression
+    const hoverExpr = (orig: any) => ['case', ['boolean', ['feature-state', 'hover'], false], '#6366f1', orig]
+
+    // Update color expression with hover wrapper
     const colorProp =
       geomRenderType === 'fill'
         ? 'fill-color'
         : geomRenderType === 'circle'
           ? 'circle-color'
           : 'line-color'
-    ctx.map.setPaintProperty(mainLayerId, colorProp, colorExpr)
+    ctx.map.setPaintProperty(mainLayerId, colorProp, hoverExpr(colorExpr))
 
-    // Sync common paint properties (strokeWidth, radius, opacity)
+    // Sync common paint properties with hover support
     if (geomRenderType === 'fill') {
-      ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', def.style.fillOpacity ?? def.style.opacity)
+      ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', [
+        'case', ['boolean', ['feature-state', 'hover'], false],
+        Math.min((def.style.fillOpacity ?? def.style.opacity) + 0.25, 0.85),
+        def.style.fillOpacity ?? def.style.opacity,
+      ] as any)
       const strokeId = renderLayerId(def.id, 'stroke')
       if (ctx.map.getLayer(strokeId)) {
-        ctx.map.setPaintProperty(strokeId, 'line-color', def.style.strokeColor || '#555')
-        ctx.map.setPaintProperty(strokeId, 'line-width', def.style.strokeWidth)
+        ctx.map.setPaintProperty(strokeId, 'line-color', ['case', ['boolean', ['feature-state', 'hover'], false], '#818cf8', def.style.strokeColor || '#555'] as any)
+        ctx.map.setPaintProperty(strokeId, 'line-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 1) + 2, def.style.strokeWidth] as any)
         ctx.map.setPaintProperty(strokeId, 'line-opacity', def.style.opacity)
       }
     } else if (geomRenderType === 'circle') {
-      ctx.map.setPaintProperty(mainLayerId, 'circle-radius', def.style.radius ?? 5)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-radius', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.radius ?? 5) + 3, def.style.radius ?? 5] as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-opacity', def.style.opacity)
-      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', def.style.strokeColor)
-      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-width', def.style.strokeWidth)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', ['case', ['boolean', ['feature-state', 'hover'], false], '#818cf8', def.style.strokeColor] as any)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 0) + 2, def.style.strokeWidth] as any)
     } else {
-      ctx.map.setPaintProperty(mainLayerId, 'line-width', def.style.strokeWidth)
+      ctx.map.setPaintProperty(mainLayerId, 'line-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 1) + 3, def.style.strokeWidth] as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-opacity', def.style.opacity)
     }
   },

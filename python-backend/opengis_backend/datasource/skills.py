@@ -52,14 +52,16 @@ def _build_catalog_description() -> str:
 
 # Build command reference at import time
 DATASOURCE_COMMANDS = {
-    "list": "List all available data sources in the catalog. No params needed.",
+    "list": "List all available data sources. No params needed.",
     "get": (
-        "Get the URL and metadata of a data source by name.\n"
-        "Params: name (str) — exact or partial name match."
+        "Get URL and metadata of a data source.\n"
+        "Params: {\"name\": \"数据源名称\"}\n"
+        "Example: datasource_call(command='get', params='{\"name\": \"上海市\"}')"
     ),
     "fetch": (
-        "Fetch GeoJSON data from a data source by name and return it.\n"
-        "Params: name (str) — exact or partial name match."
+        "Download GeoJSON data and return it directly.\n"
+        "Params: {\"name\": \"数据源名称\"}\n"
+        "Example: datasource_call(command='fetch', params='{\"name\": \"上海市\"}')"
     ),
 }
 
@@ -84,25 +86,36 @@ def _find_source(name: str) -> dict[str, str] | None:
     name="datasource_call",
     display_name="Datasource Call",
     description=(
-        "Access curated GeoJSON data sources from a predefined catalog. "
-        "Use 'list' to see all sources, 'get' to retrieve URL/metadata, "
-        "'fetch' to download GeoJSON directly.\n"
-        f"Available commands:\n{_COMMAND_LIST_STR}\n\n"
+        "Access curated GeoJSON data sources from a predefined catalog.\n\n"
+        "Commands:\n"
+        "  list — list all sources (no params needed)\n"
+        '  get — get metadata: datasource_call(command=\'get\', params=\'{"name": "上海市"}\')\n'
+        '  fetch — download GeoJSON: datasource_call(command=\'fetch\', params=\'{"name": "上海市"}\')\n\n'
+        "IMPORTANT: params must be a JSON string, e.g. '{\"name\": \"上海市\"}'.\n\n"
         f"Available data sources:\n{_build_catalog_description()}"
     ),
     category="data",
     group="datasource",
     params=[
         {"name": "command", "type": "string",
-         "description": "Command name: 'list', 'get', 'fetch'"},
+         "description": "Command: 'list', 'get', or 'fetch'."},
         {"name": "params", "type": "string", "required": False, "default": "{}",
-         "description": "JSON string of command parameters"},
+         "description": 'JSON string with command params. Example: \'{"name": "上海市"}\'. For "list" command, omit this.'},
     ],
     returns="dict — catalog listing, source metadata, or GeoJSON FeatureCollection",
     tags=["datasource", "geojson", "catalog", "data"],
     needs_context=False,
 )
 def datasource_call(command: str, params: str = "{}") -> dict[str, Any]:
+    """Execute a datasource command.
+
+    Args:
+        command: 'list', 'get', or 'fetch'
+        params: JSON string, e.g. '{"name": "上海市"}'
+
+    Returns:
+        dict with source metadata or GeoJSON FeatureCollection
+    """
     if command not in DATASOURCE_COMMANDS:
         raise ValueError(
             f"Unknown datasource command: '{command}'. "

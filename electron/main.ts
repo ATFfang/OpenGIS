@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain, nativeImage, nativeTheme } from 'el
 import { join } from 'path'
 import { readFileSync, existsSync } from 'fs'
 import { PythonManager } from './ipc/pythonManager'
+import { ensurePythonEnv } from './ipc/pythonSetup'
 import { registerFileHandlers } from './ipc/fileHandlers'
 import { registerSettingsHandlers, loadProjects } from './ipc/settingsHandlers'
 import { createMenu } from './menu'
@@ -162,14 +163,8 @@ function createWindow(): void {
   })
 }
 
-async function initializePythonBackend(): Promise<void> {
-  pythonManager = new PythonManager()
-  // Wire the renderer window so PythonManager can forward status / token
-  // events. Without this, any stdout match in PythonManager would hit a
-  // ReferenceError on a non-existent `mainWindow` global.
-  pythonManager.setMainWindow(mainWindow)
-
-  // Listen for Python status requests from renderer
+function registerPythonIpcHandlers(): void {
+  // Register early so the renderer can call them during setup.
   ipcMain.handle('python:status', () => {
     return pythonManager?.getStatus() ?? { status: 'stopped' }
   })
@@ -183,16 +178,18 @@ async function initializePythonBackend(): Promise<void> {
     return pythonManager?.getPort() ?? null
   })
 
-  // WebSocket auth token handler
   ipcMain.handle('python:get-ws-token', () => {
     return pythonManager?.getWsToken() ?? null
   })
+}
+
+async function initializePythonBackend(): Promise<void> {
+  pythonManager = new PythonManager()
+  pythonManager.setMainWindow(mainWindow)
 
   try {
     await pythonManager.start()
-    // Notify loading window that Python is ready (step 3 done)
     updateLoadingProgress(3, 'Python backend connected!')
-    // Notify renderer that Python backend is ready
     mainWindow?.webContents.send('python:status-changed', pythonManager.getStatus())
   } catch (error) {
     console.error('Failed to start Python backend:', error)
@@ -251,11 +248,11 @@ app.whenReady().then(async () => {
     }
     // Don't close loading yet — wait for project selection
     if ((global as any).__projectSelected) {
-      if (loadingWindow && !loadingWindow.isDestroyed()) {
-        loadingWindow.close()
-      }
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         mainWindow.show()
+      }
+      if (loadingWindow && !loadingWindow.isDestroyed()) {
+        loadingWindow.close()
       }
     }
   })
@@ -276,13 +273,14 @@ app.whenReady().then(async () => {
     ;(global as any).__selectedProject = project
     // Send workspace path to the main window renderer
     mainWindow?.webContents.send('project:selected', project)
-    // If renderer already ready, close loading and show main
+    // If renderer already ready, show main BEFORE closing loading
+    // to avoid a brief "no windows" state that triggers window-all-closed
     if ((global as any).__rendererIsReady) {
-      if (loadingWindow && !loadingWindow.isDestroyed()) {
-        loadingWindow.close()
-      }
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         mainWindow.show()
+      }
+      if (loadingWindow && !loadingWindow.isDestroyed()) {
+        loadingWindow.close()
       }
     }
   })
@@ -384,8 +382,72 @@ app.whenReady().then(async () => {
   createMenu(mainWindow!)
 
   console.log('[loading] Step 3: start Python');
-  // ── Step 3: start Python backend ────────────────────────
+  // ── Step 3: ensure Python env then start backend ───────────────
   updateLoadingProgress(2, 'Starting Python backend…')
+
+  // Register IPC handlers early so the renderer can call them during setup
+  registerPythonIpcHandlers()
+
+  // Always run ensurePythonEnv — it checks version and upgrades deps if needed
+  const tempManager = new PythonManager()
+  const needsSetup = !tempManager.hasVenv()
+
+  if (needsSetup) {
+    console.log('[loading] No .venv found — running first-launch setup')
+    loadingWindow?.webContents.send('loading:install-start', {})
+  } else {
+    console.log('[loading] .venv exists — checking version')
+  }
+
+  {
+    const runSetup = async (): Promise<void> => {
+      const backendPath = tempManager.getBackendPath()
+      const venvPath = tempManager.getVenvPath()
+      await ensurePythonEnv(backendPath, venvPath, (progress) => {
+        if (needsSetup) {
+          loadingWindow?.webContents.send('loading:install-progress', progress)
+        }
+      }, app.getVersion())
+    }
+
+    try {
+      await runSetup()
+      if (needsSetup) {
+        loadingWindow?.webContents.send('loading:install-done', {})
+      }
+      console.log('[loading] Python env ready')
+    } catch (err) {
+      console.error('[loading] Python env setup failed:', err)
+      // Show install UI on error even if it wasn't shown before (version upgrade case)
+      if (!needsSetup) {
+        loadingWindow?.webContents.send('loading:install-start', {})
+      }
+      loadingWindow?.webContents.send('loading:install-error', { error: String(err) })
+
+      // Wait for user to retry — also resolves if loading window is closed
+      await new Promise<void>((resolve) => {
+        const onRetry = async () => {
+          loadingWindow?.webContents.send('loading:install-start', {})
+          try {
+            await runSetup()
+            loadingWindow?.webContents.send('loading:install-done', {})
+            ipcMain.removeListener('loading:install-retry', onRetry)
+            resolve()
+          } catch (retryErr) {
+            loadingWindow?.webContents.send('loading:install-error', { error: String(retryErr) })
+          }
+        }
+        ipcMain.on('loading:install-retry', onRetry)
+        // Resolve on window close so app startup continues (avoids zombie)
+        const onClosed = () => {
+          ipcMain.removeListener('loading:install-retry', onRetry)
+          resolve()
+        }
+        loadingWindow?.on('closed', onClosed)
+      })
+    }
+  }
+
   await initializePythonBackend()
 
   console.log('[loading] Step 4: done');
@@ -401,13 +463,35 @@ app.whenReady().then(async () => {
   // The loading window will send 'loading:project-selected' when user picks a project.
   // Then renderer:ready + project-selected together trigger the transition.
   if ((global as any).__projectSelected && (global as any).__rendererIsReady && loadingWindow && !loadingWindow.isDestroyed()) {
-    loadingWindow.close()
     mainWindow?.show()
+    loadingWindow.close()
   }
   // Otherwise, ipcMain.on('renderer:ready') will close loading + show main.
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+  app.on('activate', async () => {
+    // Check for any existing window (visible or minimized)
+    const existingWindow = BrowserWindow.getAllWindows().find(w => !w.isDestroyed())
+    if (existingWindow) {
+      // Restore minimized window or bring hidden window to front
+      if (existingWindow.isMinimized()) existingWindow.restore()
+      existingWindow.show()
+      existingWindow.focus()
+    } else {
       createWindow()
+      // Re-inject the new main window into PythonManager
+      if (pythonManager) {
+        pythonManager.setMainWindow(mainWindow)
+        // Restart Python if it was stopped (e.g. by window-all-closed on non-macOS,
+        // or if it crashed while the app was in the background)
+        const status = pythonManager.getStatus()
+        if (status.status === 'stopped' || status.status === 'error') {
+          try {
+            await pythonManager.start()
+            mainWindow?.webContents.send('python:status-changed', pythonManager.getStatus())
+          } catch (err) {
+            console.error('[main] Failed to restart Python on activate:', err)
+          }
+        }
+      }
     }
   })
 }).catch((err) => {
@@ -416,10 +500,11 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  // Shutdown Python backend
-  pythonManager?.stop()
-
+  // On macOS, closing all windows doesn't quit the app (stays in dock).
+  // Keep Python backend alive so it's ready when the user re-opens.
+  // The backend is stopped in 'before-quit' when the app truly exits.
   if (process.platform !== 'darwin') {
+    pythonManager?.stop()
     app.quit()
   }
 })

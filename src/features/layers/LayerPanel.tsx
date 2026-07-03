@@ -49,6 +49,7 @@ export function LayerPanel() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   // id of the layer currently being dragged for reordering; null when idle.
   // We distinguish this from file-system drag by guarding `onDragStart` on
   // the inner handle/row vs the panel-level `onDragOver` for files.
@@ -145,38 +146,52 @@ export function LayerPanel() {
       onDragLeave={handleFileDragLeave}
     >
       {/* Header */}
-      <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-2">
-        <span className="text-xs font-semibold text-text-secondary flex-1">{t.layers.title}</span>
+      <div className="border-b border-border shrink-0">
+        <div className="h-9 flex items-center px-3 gap-2">
+          <span className="text-xs font-semibold text-text-secondary flex-1">{t.layers.title}</span>
 
-        {/* Add data button */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
-          title={t.layers.addData}
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-
-        {/* Clear all */}
-        {layers.length > 0 && (
+          {/* Add data button */}
           <button
-            onClick={clearLayers}
-            className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 transition-colors"
-            title={t.layers.removeAll}
+            onClick={() => fileInputRef.current?.click()}
+            className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-primary hover:bg-accent-primary/10 transition-colors"
+            title={t.layers.addData}
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5" />
           </button>
-        )}
 
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept=".geojson,.json,.csv,.tsv,.shp,.dbf,.shx,.prj,.cpg,.kml,.gpkg,.tif,.tiff"
-          onChange={handleFileInputChange}
-          className="hidden"
-        />
+          {/* Clear all */}
+          {layers.length > 0 && (
+            <button
+              onClick={clearLayers}
+              className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 transition-colors"
+              title={t.layers.removeAll}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".geojson,.json,.csv,.tsv,.shp,.dbf,.shx,.prj,.cpg,.kml,.gpkg,.tif,.tiff"
+            onChange={handleFileInputChange}
+            className="hidden"
+          />
+        </div>
+        {/* Search input */}
+        {layers.length > 3 && (
+          <div className="px-2 pb-1.5">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t.layers.searchLayers || 'Search layers...'}
+              className="w-full h-7 text-xs bg-bg-tertiary border border-border rounded px-2 outline-none focus:border-accent-primary/40 placeholder:text-text-muted/50"
+            />
+          </div>
+        )}
       </div>
 
       {/* Layer list */}
@@ -186,13 +201,18 @@ export function LayerPanel() {
         ) : (
           <div className="py-1">
             {/* Render in reverse order (top layer first, like GIS convention) */}
-            {[...layers].reverse().map((layer) => (
+            {[...layers].reverse().filter((layer) => {
+              if (!searchQuery.trim()) return true
+              const q = searchQuery.toLowerCase()
+              return layer.name.toLowerCase().includes(q)
+            }).map((layer) => (
               <LayerItem
                 key={layer.id}
                 layer={layer}
                 isActive={layer.id === activeLayerId}
                 isDragging={dragLayerId === layer.id}
                 isDragOver={dragOverLayerId === layer.id && dragLayerId !== layer.id}
+                searchQuery={searchQuery}
                 onSelect={() => setActiveLayer(layer.id)}
                 onToggleVisibility={() => setLayerVisibility(layer.id, !layer.visible)}
                 onRemove={() => removeLayer(layer.id)}
@@ -202,7 +222,7 @@ export function LayerPanel() {
                     mapEngine.fitBounds([bbox.minX, bbox.minY, bbox.maxX, bbox.maxY])
                   }
                 }}
-                onDragStart={() => setDragLayerId(layer.id)}
+                onDragStart={searchQuery ? undefined : () => setDragLayerId(layer.id)}
                 onDragEnd={() => {
                   setDragLayerId(null)
                   setDragOverLayerId(null)
@@ -249,6 +269,7 @@ interface LayerItemProps {
   isActive: boolean
   isDragging: boolean
   isDragOver: boolean
+  searchQuery: string
   onSelect: () => void
   onToggleVisibility: () => void
   onRemove: () => void
@@ -264,6 +285,7 @@ function LayerItem({
   isActive,
   isDragging,
   isDragOver,
+  searchQuery,
   onSelect,
   onToggleVisibility,
   onRemove,
@@ -278,6 +300,10 @@ function LayerItem({
   const [showClassification, setShowClassification] = useState(false)
   const setLayerOpacity = useMapStore((s) => s.setLayerOpacity)
   const updateLayerStyle = useMapStore((s) => s.updateLayerStyle)
+  const renameLayer = useMapStore((s) => s.renameLayer)
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   const featureCount = layer.data.kind === 'vector' ? layer.data.featureCount : 0
   const geometryType = layer.data.kind === 'vector' ? layer.data.geometryType : 'Raster'
@@ -347,12 +373,16 @@ function LayerItem({
         className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer"
         onClick={onSelect}
       >
-        {/* Drag handle — only this element is draggable */}
+        {/* Drag handle — only this element is draggable, hidden during search */}
         <div
-          draggable
+          draggable={!searchQuery}
           onDragStart={handleRowDragStart}
-          className="w-3 h-4 flex items-center justify-center text-text-muted/40 hover:text-text-secondary cursor-grab active:cursor-grabbing shrink-0"
-          title={t.layers.dragToReorder}
+          className={`w-3 h-4 flex items-center justify-center shrink-0 ${
+            searchQuery
+              ? 'text-transparent'
+              : 'text-text-muted/40 hover:text-text-secondary cursor-grab active:cursor-grabbing'
+          }`}
+          title={searchQuery ? '' : t.layers.dragToReorder}
         >
           <GripVertical className="w-3 h-3" />
         </div>
@@ -397,15 +427,48 @@ function LayerItem({
           className="shrink-0"
         />
 
-        {/* Layer name */}
-        <span
-          className={`text-xs truncate flex-1 ${
-            isActive ? 'text-text-primary font-medium' : 'text-text-secondary'
-          } ${!layer.visible ? 'opacity-50' : ''}`}
-          title={layer.name}
-        >
-          {layer.name}
-        </span>
+        {/* Layer name (or rename input) */}
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={() => {
+              const trimmed = renameValue.trim()
+              if (trimmed && trimmed !== layer.name) {
+                renameLayer(layer.id, trimmed)
+              }
+              setIsRenaming(false)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const trimmed = renameValue.trim()
+                if (trimmed && trimmed !== layer.name) {
+                  renameLayer(layer.id, trimmed)
+                }
+                setIsRenaming(false)
+              }
+              if (e.key === 'Escape') setIsRenaming(false)
+            }}
+            onClick={(e) => e.stopPropagation()}
+            autoFocus
+            className="flex-1 min-w-0 text-xs bg-bg-primary border border-accent-primary rounded px-1.5 py-0.5 outline-none text-text-primary"
+          />
+        ) : (
+          <span
+            className={`text-xs truncate flex-1 cursor-text ${
+              isActive ? 'text-text-primary font-medium' : 'text-text-secondary'
+            } ${!layer.visible ? 'opacity-50' : ''}`}
+            title={`${layer.name} (double-click to rename)`}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              setRenameValue(layer.name)
+              setIsRenaming(true)
+            }}
+          >
+            {layer.name}
+          </span>
+        )}
 
         {/* Action buttons (visible on hover) */}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

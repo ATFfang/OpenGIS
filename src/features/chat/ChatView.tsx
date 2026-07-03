@@ -838,14 +838,14 @@ function MessageGroup({
   const groupText = extractGroupText(items)
   return (
     <div className="px-5 py-2 animate-fade-in group/msg">
-      <div className="flex items-start gap-3">
-        <div className="flex flex-col items-center shrink-0">
-          <div className="w-7 h-7 rounded-lg overflow-hidden mt-0.5 ring-1 ring-accent-primary/10">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-lg overflow-hidden ring-1 ring-accent-primary/10">
             <img src={machineAvatar} alt="Bot" className="w-full h-full object-cover" />
           </div>
           {runId && <RevertRunButton runId={runId} />}
         </div>
-        <div className="flex-1 min-w-0 space-y-2.5">
+        <div className="min-w-0 space-y-2.5">
           {children}
           {groupText && (
             <div className="flex gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">

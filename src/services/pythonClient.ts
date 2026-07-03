@@ -201,20 +201,28 @@ export class PythonClient {
       const isChat = method === 'chat.user_message'
       const isSkill = method.startsWith('rpc.skill.')
       const isScriptRun = method === 'rpc.code.run_script'
+      // chat.user_message drives the agent loop which may run for 10+ minutes
+      // (especially in workflow mode). No client-side timeout — the backend's
+      // exec_timeout (default 600s) handles runaway runs.
       const effectiveTimeout =
         timeoutMs ??
-        (isChat || isScriptRun
+        (isChat
+          ? 0 // no timeout — controlled by backend
+          : isScriptRun
           ? 10 * 60 * 1000 // 10 min
           : isSkill
           ? 5 * 60 * 1000 // 5 min
           : 60 * 1000) // 60 sec
 
-      timeoutId = setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          cleanup()
-          reject(new Error(`Request timeout: ${method}`))
-        }
-      }, effectiveTimeout)
+      // Only set a timeout if effectiveTimeout > 0
+      if (effectiveTimeout > 0) {
+        timeoutId = setTimeout(() => {
+          if (this.pendingRequests.has(id)) {
+            cleanup()
+            reject(new Error(`Request timeout: ${method}`))
+          }
+        }, effectiveTimeout)
+      }
     })
   }
 

@@ -213,6 +213,70 @@
     }
     .status-text { font-size: 12px; color: var(--text-sub); min-height: 18px; }
 
+    /* ─── Install phase ─── */
+    #install-phase { transition: opacity 0.3s ease; text-align: center; }
+    #install-phase.hidden { opacity: 0; pointer-events: none; position: absolute; }
+    .install-title {
+      font-size: 15px; font-weight: 600; color: var(--text);
+      margin-bottom: 20px;
+    }
+    .install-icon-row {
+      display: flex; justify-content: center; margin-bottom: 20px;
+    }
+    .install-spinner {
+      width: 32px; height: 32px; color: var(--accent);
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .install-progress-bar {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+    }
+    .install-progress-track {
+      flex: 1; height: 4px; background: var(--track);
+      border-radius: 2px; overflow: hidden;
+    }
+    .install-progress-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #3b82f6, #6366f1);
+      border-radius: 2px;
+      transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .install-progress-pct {
+      font-size: 11px; color: var(--text-dim); min-width: 30px;
+      text-align: right; font-variant-numeric: tabular-nums;
+    }
+    .install-status {
+      font-size: 13px; color: var(--text); font-weight: 500;
+      margin-bottom: 4px; min-height: 20px;
+    }
+    .install-detail {
+      font-size: 11px; color: var(--text-sub);
+      min-height: 16px; margin-bottom: 10px;
+    }
+    .install-log-toggle {
+      margin-bottom: 14px;
+    }
+    .install-log-summary {
+      font-size: 11px; color: var(--text-dim); cursor: pointer;
+      user-select: none; padding: 4px 0;
+    }
+    .install-log-summary:hover { color: var(--text-sub); }
+    .install-log {
+      max-height: 160px; overflow-y: auto; margin-top: 8px;
+      padding: 8px 10px; border-radius: 6px;
+      background: var(--step-bg); border: 1px solid var(--border);
+      font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+      font-size: 10px; line-height: 1.5; color: var(--text-dim);
+      white-space: pre-wrap; word-break: break-all;
+    }
+    .install-log::-webkit-scrollbar { width: 3px; }
+    .install-log::-webkit-scrollbar-thumb {
+      background: var(--text-dim); border-radius: 2px;
+    }
+    .install-log .log-line { display: block; padding: 1px 0; }
+    .install-actions { margin-top: 16px; display: flex; justify-content: center; }
+    .install-actions .btn { min-width: 100px; }
+
     /* ─── Project selector phase ─── */
     #project-phase {
       display: none;
@@ -428,6 +492,31 @@
       <div class="status-text" id="statusText"></div>
     </div>
 
+    <!-- Install Phase (first-launch only) -->
+    <div id="install-phase" style="display:none">
+      <div class="install-title" id="installTitle">正在准备 Python 环境</div>
+      <div class="install-icon-row">
+        <svg class="install-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+      </div>
+      <div class="install-progress-bar">
+        <div class="install-progress-track">
+          <div class="install-progress-fill" id="installProgressFill"></div>
+        </div>
+        <span class="install-progress-pct" id="installProgressPct">0%</span>
+      </div>
+      <div class="install-status" id="installStatus"></div>
+      <div class="install-detail" id="installDetail"></div>
+      <details class="install-log-toggle" id="installLogToggle">
+        <summary class="install-log-summary" id="installLogSummary">查看详情</summary>
+        <div class="install-log" id="installLog"></div>
+      </details>
+      <div class="install-actions" id="installActions" style="display:none">
+        <button class="btn btn-primary" id="btnRetryInstall">重试</button>
+      </div>
+    </div>
+
     <!-- Project Selector Phase -->
     <div id="project-phase">
       <div class="section-title">Select a Project</div>
@@ -523,6 +612,15 @@
         startPython: '启动 Python 后端',
         ready: '就绪',
         initializing: '正在初始化...',
+        installTitle: '正在准备 Python 环境',
+        installChecking: '检查 Python 环境...',
+        installDownloading: '正在下载 Python',
+        installCreatingVenv: '正在创建虚拟环境...',
+        installInstalling: '正在安装依赖...',
+        installDone: '环境准备完成',
+        installError: '安装失败',
+        installRetry: '重试',
+        installDetail: '查看详情',
         selectProject: '选择工程',
         noProjects: '暂无工程，请新建一个工程开始使用。',
         openFolder: '打开文件夹',
@@ -550,6 +648,15 @@
         startPython: 'Starting Python backend',
         ready: 'Ready',
         initializing: 'Initializing...',
+        installTitle: 'Preparing Python Environment',
+        installChecking: 'Checking Python environment...',
+        installDownloading: 'Downloading Python',
+        installCreatingVenv: 'Creating virtual environment...',
+        installInstalling: 'Installing dependencies...',
+        installDone: 'Environment ready',
+        installError: 'Installation failed',
+        installRetry: 'Retry',
+        installDetail: 'View details',
         selectProject: 'Select a Project',
         noProjects: 'No projects yet. Create one to get started.',
         openFolder: 'Open Folder',
@@ -646,6 +753,108 @@
     })
 
     updateStep(0, true, t.initializing)
+
+    // ─── Install phase (first-launch) ───
+    const installPhase = document.getElementById('install-phase')
+    const installTitle = document.getElementById('installTitle')
+    const installProgressFill = document.getElementById('installProgressFill')
+    const installProgressPct = document.getElementById('installProgressPct')
+    const installStatus = document.getElementById('installStatus')
+    const installDetail = document.getElementById('installDetail')
+    const installLogToggle = document.getElementById('installLogToggle')
+    const installLogSummary = document.getElementById('installLogSummary')
+    const installLog = document.getElementById('installLog')
+    const installActions = document.getElementById('installActions')
+    const btnRetry = document.getElementById('btnRetryInstall')
+
+    btnRetry.textContent = t.installRetry
+
+    let logLineCount = 0
+    const MAX_LOG_LINES = 200
+
+    function appendLogLine(line) {
+      if (!line) return
+      logLineCount++
+      const el = document.createElement('span')
+      el.className = 'log-line'
+      el.textContent = line
+      installLog.appendChild(el)
+      // Trim old lines
+      while (installLog.children.length > MAX_LOG_LINES) {
+        installLog.removeChild(installLog.firstChild)
+      }
+      // Auto-scroll to bottom
+      installLog.scrollTop = installLog.scrollHeight
+      installLogSummary.textContent = `${t.installDetail} (${logLineCount})`
+    }
+
+    function showInstallPhase() {
+      loadingPhase.style.display = 'none'
+      installPhase.style.display = 'block'
+      installActions.style.display = 'none'
+      installLogToggle.open = false
+      installLog.innerHTML = ''
+      logLineCount = 0
+      installLogSummary.textContent = t.installDetail
+      installTitle.textContent = t.installTitle
+      installStatus.textContent = t.installChecking
+      installDetail.textContent = ''
+      installDetail.style.color = ''
+      installProgressFill.style.width = '0%'
+      installProgressPct.textContent = '0%'
+    }
+
+    function hideInstallPhase() {
+      installPhase.style.display = 'none'
+      loadingPhase.style.display = 'block'
+    }
+
+    ipcRenderer.on('loading:install-start', () => {
+      showInstallPhase()
+    })
+
+    ipcRenderer.on('loading:install-progress', (event, data) => {
+      const phaseLabels = {
+        'checking': t.installChecking,
+        'downloading': t.installDownloading,
+        'creating-venv': t.installCreatingVenv,
+        'installing': t.installInstalling,
+        'done': t.installDone,
+      }
+      installStatus.textContent = phaseLabels[data.phase] || data.phase
+      if (data.percent !== undefined) {
+        installProgressFill.style.width = data.percent + '%'
+        installProgressPct.textContent = data.percent + '%'
+      }
+      if (data.detail) {
+        installDetail.textContent = data.detail
+      }
+      if (data.logLine) {
+        appendLogLine(data.logLine)
+      }
+    })
+
+    ipcRenderer.on('loading:install-done', () => {
+      installStatus.textContent = t.installDone
+      installDetail.textContent = ''
+      installProgressFill.style.width = '100%'
+      installProgressPct.textContent = '100%'
+      setTimeout(() => hideInstallPhase(), 600)
+    })
+
+    ipcRenderer.on('loading:install-error', (event, data) => {
+      installStatus.textContent = t.installError
+      installDetail.textContent = data.error || 'Unknown error'
+      installDetail.style.color = 'var(--danger)'
+      installActions.style.display = 'flex'
+      // Auto-expand log on error
+      installLogToggle.open = true
+    })
+
+    btnRetry.addEventListener('click', () => {
+      showInstallPhase()
+      ipcRenderer.send('loading:install-retry')
+    })
 
     // ─── Project selector ───
     let projects = []

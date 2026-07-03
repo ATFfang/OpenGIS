@@ -1,7 +1,7 @@
 import { ChildProcess, spawn, execFile } from 'child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import net from 'net'
 import { WriteStream } from 'fs'
 import { openLogFile, getLogDir } from '../logger'
@@ -42,6 +42,11 @@ export class PythonManager {
   private stdoutMirror: WriteStream | null = null
   private wsToken: string = ''  // WebSocket authentication token
   private killTimeout: ReturnType<typeof setTimeout> | null = null
+  // Auto-restart tracking
+  private restartCount: number = 0
+  private maxRestarts: number = 3
+  private restartDelayMs: number = 2000
+  private isRestarting: boolean = false
   // Renderer target for status / token broadcasts. Injected from main.ts
   // via setMainWindow() — the previous implementation referenced a
   // free-floating `mainWindow` symbol that never existed in this module,
@@ -82,6 +87,25 @@ export class PythonManager {
   }
 
   /**
+   * Get the writable path for the Python virtual environment.
+   * Stored in user data directory (not inside the app bundle).
+   */
+  getVenvPath(): string {
+    return join(app.getPath('userData'), 'venv')
+  }
+
+  /**
+   * Check if the venv exists in the user data directory.
+   * Used by main.ts to decide whether to run the setup flow.
+   */
+  hasVenv(): boolean {
+    const venvPython = this.isWindows
+      ? join(this.getVenvPath(), 'Scripts', 'python.exe')
+      : join(this.getVenvPath(), 'bin', 'python')
+    return existsSync(venvPython)
+  }
+
+  /**
    * Start the Python backend server.
    */
   async start(): Promise<void> {
@@ -89,10 +113,16 @@ export class PythonManager {
       return
     }
 
+    // Clear any pending SIGKILL from a previous stop() to avoid killing the new process
+    if (this.killTimeout) {
+      clearTimeout(this.killTimeout)
+      this.killTimeout = null
+    }
+
     this.status = { status: 'starting' }
 
     try {
-      // 1. Detect Python — use project-local .venv
+      // 1. Detect Python — use venv from user data directory
       this.pythonPath = await this.detectPython()
       this.status.pythonPath = this.pythonPath
 
@@ -196,17 +226,55 @@ export class PythonManager {
         }
       })
 
-      // Handle process exit
+      // Handle process exit — auto-restart on unexpected exits
       this.process.on('exit', (code) => {
         const msg = `Python process exited with code ${code}`
         console.log(`[Python] ${msg}`)
         this.stdoutMirror?.write(`${ts()} [INFO ] ${msg}\n`)
         this.stdoutMirror?.end()
         this.stdoutMirror = null
-        if (this.status.status !== 'stopped') {
-          this.status = { status: 'error', error: msg }
-        }
         this.process = null
+
+        // Intentional stop — don't restart
+        if (this.status.status === 'stopped') return
+
+        // User cancelled — don't restart
+        if (code === null || code === 0) {
+          this.status = { status: 'stopped' }
+          return
+        }
+
+        // Unexpected exit — attempt auto-restart
+        if (this.restartCount < this.maxRestarts && !this.isRestarting) {
+          this.restartCount++
+          this.isRestarting = true
+          console.log(`[Python] Auto-restarting (${this.restartCount}/${this.maxRestarts}) in ${this.restartDelayMs}ms...`)
+          this.status = { status: 'starting' }
+          this.sendToRenderer('python:status-changed', this.getStatus())
+
+          setTimeout(async () => {
+            try {
+              await this.start()
+              this.restartCount = 0  // Reset on successful restart
+              this.isRestarting = false
+              console.log(`[Python] Auto-restart succeeded`)
+            } catch (err) {
+              this.isRestarting = false
+              console.error(`[Python] Auto-restart failed:`, err)
+              // If we've exhausted retries, show error dialog
+              if (this.restartCount >= this.maxRestarts) {
+                this.showFatalError(msg)
+              }
+            }
+          }, this.restartDelayMs)
+        } else {
+          // Exhausted retries
+          this.status = { status: 'error', error: msg }
+          this.sendToRenderer('python:status-changed', this.getStatus())
+          if (this.restartCount >= this.maxRestarts) {
+            this.showFatalError(msg)
+          }
+        }
       })
 
       this.process.on('error', (err) => {
@@ -234,6 +302,8 @@ export class PythonManager {
    * Stop the Python backend server.
    */
   stop(): void {
+    this.restartCount = 0  // Reset on intentional stop
+    this.isRestarting = false
     // Clear any pending force-kill timeout from a previous stop/restart.
     if (this.killTimeout) {
       clearTimeout(this.killTimeout)
@@ -259,6 +329,33 @@ export class PythonManager {
   }
 
   /**
+   * Show a fatal error dialog when Python crashes repeatedly.
+   */
+  private showFatalError(detail: string): void {
+    const win = this.mainWindow
+    const options: Electron.MessageBoxOptions = {
+      type: 'error',
+      title: 'Python Backend Crash',
+      message: 'Python backend has crashed repeatedly and cannot recover.',
+      detail: `${detail}\n\nPlease check the logs for more information.`,
+      buttons: ['View Logs', 'Restart App', 'OK'],
+      defaultId: 0,
+    }
+
+    dialog.showMessageBox(win, options).then(({ response }) => {
+      if (response === 0) {
+        // Open log directory
+        const logDir = app.getPath('userData') + '/logs'
+        shell.openPath(logDir)
+      } else if (response === 1) {
+        // Restart app
+        app.relaunch()
+        app.quit()
+      }
+    })
+  }
+
+  /**
    * Restart the Python backend server.
    */
   async restart(): Promise<void> {
@@ -269,14 +366,12 @@ export class PythonManager {
   }
 
   /**
-   * Detect project-local Python interpreter from .venv.
-   * The app always uses python-backend/.venv — no system scanning.
+   * Detect Python interpreter from the venv in user data directory.
    */
   private async detectPython(): Promise<string> {
-    const backendPath = this.getBackendPath()
     const venvPython = this.isWindows
-      ? join(backendPath, '.venv', 'Scripts', 'python.exe')
-      : join(backendPath, '.venv', 'bin', 'python')
+      ? join(this.getVenvPath(), 'Scripts', 'python.exe')
+      : join(this.getVenvPath(), 'bin', 'python')
 
     if (existsSync(venvPython)) {
       try {
@@ -350,7 +445,7 @@ export class PythonManager {
   /**
    * Get the path to the Python backend directory.
    */
-  private getBackendPath(): string {
+  getBackendPath(): string {
     if (app.isPackaged) {
       return join(process.resourcesPath, 'python-backend')
     }
