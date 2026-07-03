@@ -226,7 +226,7 @@ def _summarize(steps: list[dict]) -> str:
         "exactly ONE step 'in_progress' at a time. Do NOT use it for simple "
         "one-step tasks, greetings, or pure questions."
     ),
-    category="planning",
+    category="orchestration",
     params=[
         {
             "name": "steps",

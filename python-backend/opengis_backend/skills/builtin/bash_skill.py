@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 import subprocess
 from typing import Any
 
@@ -51,12 +50,11 @@ def _bash_sync(
 
     cwd = workdir or os.getcwd()
     try:
-        # 使用 shlex.split 解析命令，避免使用 shell=True 防止命令注入
-        args = shlex.split(command)
-        
+        # Use shell=True to support pipes, redirects, globbing, and chaining.
+        # The _is_dangerous() check above blocks the worst injection vectors.
         result = subprocess.run(
-            args,
-            shell=False,
+            command,
+            shell=True,
             capture_output=True,
             text=True,
             timeout=timeout / 1000,   # ms → s

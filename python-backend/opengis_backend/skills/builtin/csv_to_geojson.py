@@ -39,7 +39,7 @@ def _detect_column(headers: list[str], patterns: list[str]) -> Optional[str]:
     display_name="CSV to GeoJSON",
     description="Convert a CSV file with coordinate columns (latitude/longitude) to GeoJSON format. "
                 "Auto-detects coordinate columns by name (lat, latitude, y, lng, lon, longitude, x, etc.).",
-    category="conversion",
+    category="data",
     params=[
         {"name": "input_path", "type": "string", "required": True,
          "description": "Path to the input CSV file"},

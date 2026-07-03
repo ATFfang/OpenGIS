@@ -28,9 +28,17 @@ Reply with plain text — no code block — when the user is:
 about previous work and you have no conversation history about it,
 say so directly — do NOT write code to explore the filesystem.
 
-## Mode 2: Code Execution
-ONLY when the task requires actual computation, data processing, or
-map rendering, write Python code inside a markdown code fence:
+## Mode 2: Code Execution — PREFER SKILLS OVER CODE
+
+**IMPORTANT: Always prefer calling a skill over writing raw code.**
+Skills are pre-built, tested, and reliable. Only write Python code when
+NO existing skill matches the task.
+
+Priority order:
+1. **Call a skill** — e.g. `bash("mkdir -p /path")`, `read_file(path)`, `add_layer(...)`
+2. **Write minimal code** — only when no skill fits, and keep it to one logical step
+
+When you DO need to write code, use a markdown code fence:
 
 ```python
 # your code here
@@ -51,7 +59,7 @@ standard scientific libraries (numpy, pandas, geopandas, shapely, rasterio, matp
    - OR reply with plain text (no code block) — this immediately ends
      the loop. Only do this when you are **certain** the task is done.
 
-## Available GIS skills (call them like normal Python functions)
+## Available skills (call them like normal Python functions)
 
 {skill_signatures}
 
@@ -61,10 +69,6 @@ standard scientific libraries (numpy, pandas, geopandas, shapely, rasterio, matp
   `add_layer(geojson_path=...)`, `bash("ls")`, etc.
 - **NEVER `import` them** — `from read_file import read_file` will fail
   with `ModuleNotFoundError`. They are not modules, they are builtins.
-- Pay attention to parameter defaults shown in the signatures above.
-  In particular, `read_file(file_path, offset=1, limit=2000)` uses a
-  **1-indexed** `offset` (line 1 = first line); passing `offset=0` is
-  treated as "start from line 0" which is invalid.
 - Skills returning a `dict` (like `add_layer`) include keys you should
   ``print()`` or capture into a variable so subsequent steps can refer
   back to them (e.g. `info = add_layer(...); zoom_to_layer(info["layer_id"])`).
@@ -72,6 +76,24 @@ standard scientific libraries (numpy, pandas, geopandas, shapely, rasterio, matp
   work for `bash` / `read_file` / `gpd.read_file` because the sandbox
   cwd is the workspace, but to stay safe just pass absolute paths once
   you know them (use `os.path.abspath(p)` if needed).
+
+**File operation skills** — use these INSTEAD of writing Python code:
+- `create_directory(path)` — create directories (replaces `os.makedirs()`)
+- `delete_file(path, recursive=False)` — delete files/dirs (replaces `os.remove()`)
+- `move_file(src, dst)` — move/rename (replaces `shutil.move()`)
+- `copy_file(src, dst)` — copy files/dirs (replaces `shutil.copy()`)
+- `file_exists(path)` — check existence + metadata (replaces `os.path.exists()`)
+- `list_directory(path, pattern=None)` — list contents (replaces `os.listdir()`)
+- `read_file(path)` — read file contents
+- `write_file(path, content)` — create/overwrite files
+- `edit_file(path, old_string, new_string)` — precise text replacement
+- `glob(pattern, path=None)` — find files by pattern
+- `grep(pattern, path=None, include=None)` — search file contents
+
+**Shell operations** — use `bash()` for:
+- `mkdir -p`, `cp`, `mv`, `rm`, `ls`, `find`, `cat`, `wc`
+- `git` commands, `pip install`, system tools
+- Pipes (`|`), redirects (`>`), chaining (`&&`, `;`) all work
 
 ## Rendering to the map
 
@@ -179,10 +201,32 @@ zoom_to_layer(info["layer_id"])
 print(f"**Loaded {{info['feature_count']}} features** from `{{result['output_path']}}`")
 ```
 
+## Example 4 — using skills instead of code for file operations
+
+User: "Create a report directory and check what data files we have"
+
+I'll set up the directory and list the data files.
+
+```python
+create_directory("/workspace/report")
+result = list_directory("/workspace/data", pattern="*.geojson")
+print(f"Found {{result['count']}} GeoJSON files:")
+for f in result['entries']:
+    print(f"  - {{f['name']}} ({{f['size']}} bytes)")
+```
+
 ## Rules
 
-- ALWAYS use existing skills when they fit. Fall back to raw geopandas /
-  shapely code only when no skill matches.
+- **ALWAYS prefer skills over code.** For file operations (mkdir, cp, mv,
+  rm, ls, read, write), map operations (add_layer, zoom, style), and
+  common GIS tasks (buffer, csv_to_geojson) — use the corresponding
+  skill. Only write Python code when NO skill matches the task.
+- **ALWAYS check skill return values.** Skills return dicts with a
+  `success` field. After calling `write_file`, `edit_file`, `delete_file`,
+  etc., check `result["success"]` before reporting success to the user.
+  If `success` is False, report the error — do NOT claim the operation
+  succeeded.
+- Fall back to raw geopandas / shapely code only when no skill matches.
 - **NEVER call `open()`, `read_text()`, or similar file-I/O builtins on
   GeoJSON files — they are blocked in the sandbox.** If you need
   geometry metadata (bbox, feature count), read it from the dict that
@@ -406,27 +450,72 @@ Now solve the user's request.
 """
 
 
+_CATEGORY_LABELS = {
+    "system": "File & System Operations",
+    "visualization": "Map Visualization & Styling",
+    "data": "Data Conversion & Inspection",
+    "report": "Report Generation",
+    "writing": "Academic Writing",
+    "orchestration": "Agent Orchestration",
+}
+
+
+def _format_skill_sig(rs) -> str:
+    """Format a single skill as a Python-style signature line."""
+    s = rs.schema
+    params = []
+    for p in s.params:
+        t = p.type.value if hasattr(p.type, "value") else str(p.type)
+        py_type = {
+            "file_path": "str",
+            "string": "str",
+            "number": "float",
+            "boolean": "bool",
+            "enum": "str",
+            "any": "any",
+        }.get(t, "str")
+        if p.required:
+            params.append(f"{p.name}: {py_type}")
+        else:
+            default = "None" if p.default is None else repr(p.default)
+            params.append(f"{p.name}: {py_type} = {default}")
+    sig = f"  - {s.name}({', '.join(params)})"
+    if s.returns:
+        sig += f"  # {s.returns}"
+    return sig
+
+
 def build_skill_signatures(registered_skills) -> str:
-    """Format registered skills as Python-style signature lines for the prompt."""
-    lines = []
+    """Format registered skills grouped by category for the prompt."""
+    # Group skills by category
+    groups: dict[str, list] = {}
     for rs in registered_skills:
-        s = rs.schema
-        params = []
-        for p in s.params:
-            t = p.type.value if hasattr(p.type, "value") else str(p.type)
-            py_type = {
-                "file_path": "str",
-                "string": "str",
-                "number": "float",
-                "boolean": "bool",
-                "enum": "str",
-            }.get(t, "str")
-            if p.required:
-                params.append(f"{p.name}: {py_type}")
-            else:
-                default = "None" if p.default is None else repr(p.default)
-                params.append(f"{p.name}: {py_type} = {default}")
-        sig = f"- {s.name}({', '.join(params)}) -> {s.returns}"
-        lines.append(sig)
-        lines.append(f"    {s.description}")
+        cat = rs.schema.category or "other"
+        groups.setdefault(cat, []).append(rs)
+
+    lines = []
+    # Output in a logical order
+    order = ["system", "data", "visualization", "report", "writing", "orchestration"]
+    for cat in order:
+        skills = groups.get(cat, [])
+        if not skills:
+            continue
+        label = _CATEGORY_LABELS.get(cat, cat.title())
+        lines.append(f"### {label}")
+        for rs in skills:
+            lines.append(_format_skill_sig(rs))
+            lines.append(f"      {rs.schema.description}")
+        lines.append("")
+
+    # Any remaining categories not in the order list
+    for cat, skills in sorted(groups.items()):
+        if cat in order:
+            continue
+        label = _CATEGORY_LABELS.get(cat, cat.title())
+        lines.append(f"### {label}")
+        for rs in skills:
+            lines.append(_format_skill_sig(rs))
+            lines.append(f"      {rs.schema.description}")
+        lines.append("")
+
     return "\n".join(lines)

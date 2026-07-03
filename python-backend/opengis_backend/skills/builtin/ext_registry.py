@@ -27,7 +27,7 @@ EXTENSIONS: list[dict] = []
         "Use this to discover enhanced visualization options beyond the base "
         "layer rendering (e.g. chart overlays, trajectory animation, elevation profiles)."
     ),
-    category="system",
+    category="data",
     group="core",
     params=[],
     returns="dict with 'extensions' list, each containing name, display_name, description, params",

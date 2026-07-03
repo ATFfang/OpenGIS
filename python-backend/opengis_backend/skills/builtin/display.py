@@ -301,7 +301,7 @@ def remove_layer(ctx: SkillContext, layer_id: str) -> bool:
         {"name": "duration", "type": "number", "required": False,
          "description": "Animation duration in ms. Default 1500."},
     ],
-    returns="True when the command was sent.",
+    returns="dict with keys: success (bool), target (str)",
     examples=["Fly to Beijing", "Zoom to the buffered features"],
     tags=["map", "camera", "navigation"],
     needs_context=True,
@@ -313,7 +313,7 @@ def fly_to(
     zoom: Optional[float] = None,
     bbox: Optional[Union[str, list, tuple]] = None,
     duration: Optional[float] = None,
-) -> bool:
+) -> dict:
     payload: dict = {}
     if bbox is not None:
         arr: Any = bbox
@@ -346,9 +346,10 @@ def fly_to(
     # Route to the right canonical method based on payload shape.
     if "bbox" in payload:
         _notify_map(ctx, "rpc.ui.map.zoom_to_bbox", payload)
+        return {"success": True, "target": f"bbox={payload['bbox']}"}
     else:
         _notify_map(ctx, "rpc.ui.map.fly_to", payload)
-    return True
+        return {"success": True, "target": f"center=[{lng}, {lat}]"}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -372,7 +373,7 @@ def fly_to(
         {"name": "padding", "type": "number", "required": False,
          "description": "Extra padding in pixels around the bbox when fitting. Default 40."},
     ],
-    returns="True when the command was sent.",
+    returns="dict with keys: success (bool), layer_id (str)",
     examples=["Zoom to the points layer I just added"],
     tags=["map", "camera", "layer", "navigation"],
     needs_context=True,
@@ -382,17 +383,14 @@ def zoom_to_layer(
     layer_id: str,
     duration: Optional[float] = None,
     padding: Optional[float] = None,
-) -> bool:
-    # 单一数据源：bbox 由前端从 mapStore 实时查得，Python 不再维护
-    # 影子记账 _LAYER_INDEX。这样既消除了双源不一致（用户/拖拽/agent
-    # 任一路径造的层都能被命中），也避免了过期 bbox 飞错位置。
+) -> dict:
     payload: dict = {"layer_id": layer_id}
     if duration is not None:
         payload["duration"] = float(duration)
     if padding is not None:
         payload["padding"] = float(padding)
     _notify_map(ctx, "rpc.ui.map.zoom_to_layer", payload)
-    return True
+    return {"success": True, "layer_id": layer_id}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -407,17 +405,14 @@ def zoom_to_layer(
         {"name": "basemap_id", "type": "string", "required": True,
          "description": "Basemap identifier."},
     ],
-    returns="True when the command was sent.",
+    returns="dict with keys: success (bool), basemap_id (str)",
     examples=["Switch to satellite basemap"],
     tags=["map", "basemap"],
     needs_context=True,
 )
-def set_basemap(ctx: SkillContext, basemap_id: str) -> bool:
-    # 只发 canonical 通道。之前同时发 legacy `map.setBasemap` 会让前端
-    # 触发两次 setStyle —— 而 setStyle 会清空所有图层再靠 style reload
-    # 重挂，重复触发放大了 basemap 切换 + 并发 add_layer 的竞态风险。
+def set_basemap(ctx: SkillContext, basemap_id: str) -> dict:
     run_async_from_sync(ctx.notify("rpc.ui.map.set_basemap", {"basemap": basemap_id}))
-    return True
+    return {"success": True, "basemap_id": basemap_id}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -438,7 +433,7 @@ def set_basemap(ctx: SkillContext, basemap_id: str) -> bool:
         {"name": "visible", "type": "boolean", "required": False,
          "description": "Show / hide the layer."},
     ],
-    returns="True when the command was sent.",
+    returns="dict with keys: success (bool), layer_id (str)",
     examples=["Make the buffer layer red", "Hide the points layer"],
     tags=["map", "style", "layer"],
     needs_context=True,
@@ -449,7 +444,7 @@ def update_layer_style(
     color: Optional[str] = None,
     opacity: Optional[float] = None,
     visible: Optional[bool] = None,
-) -> bool:
+) -> dict:
     payload: dict = {"layer_id": layer_id}
     if color is not None:
         payload["color"] = color
@@ -476,7 +471,7 @@ def update_layer_style(
             ctx.notify("rpc.ui.map.set_layer_visibility",
                        {"layer_id": layer_id, "visible": bool(visible)})
         )
-    return True
+    return {"success": True, "layer_id": layer_id}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -510,7 +505,7 @@ _COLOR_RAMPS = [
         {"name": "palette", "type": "string", "required": False, "default": "viridis",
          "description": f"Color ramp name. Options: {', '.join(_COLOR_RAMPS)}."},
     ],
-    returns="True when the style was applied.",
+    returns="dict with keys: success (bool), layer_id (str), field (str), method (str), classes (int)",
     examples=["Style districts layer by population with 5 quantile classes", "Choropleth the provinces layer by GDP using blues palette"],
     tags=["map", "style", "choropleth", "graduated"],
     needs_context=True,
@@ -522,7 +517,7 @@ def set_graduated_style(
     method: str = "quantile",
     classes: int = 5,
     palette: str = "viridis",
-) -> bool:
+) -> dict:
     # Normalise method: Python callers often use underscores (e.g.
     # "equal_interval") but the frontend Zod schema expects hyphens
     # ("equal-interval").
@@ -541,7 +536,7 @@ def set_graduated_style(
             },
         },
     ))
-    return True
+    return {"success": True, "layer_id": layer_id, "field": field, "method": method, "classes": int(classes)}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -566,7 +561,7 @@ def set_graduated_style(
         {"name": "other_color", "type": "string", "required": False, "default": "#cccccc",
          "description": "Color for values beyond max_categories."},
     ],
-    returns="True when the style was applied.",
+    returns="dict with keys: success (bool), layer_id (str), field (str)",
     examples=["Color land_use layer by type", "Categorize roads layer by road_class"],
     tags=["map", "style", "categorized"],
     needs_context=True,
@@ -577,7 +572,7 @@ def set_categorized_style(
     field: str,
     max_categories: int = 10,
     other_color: str = "#cccccc",
-) -> bool:
+) -> dict:
     run_async_from_sync(ctx.notify(
         "rpc.ui.map.set_layer_renderer",
         {
@@ -590,7 +585,7 @@ def set_categorized_style(
             },
         },
     ))
-    return True
+    return {"success": True, "layer_id": layer_id, "field": field}
 
 
 # ──────────────────────────────────────────────────────────────────────

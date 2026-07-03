@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
-import { ChevronDown, ChevronRight, Zap, Layers, Search, Code, FileText, Map, HelpCircle, Terminal, ArrowRightLeft, Wrench } from 'lucide-react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { ChevronDown, ChevronRight, Zap, Layers, Search, Code, FileText, Map, HelpCircle, Terminal, ArrowRightLeft, Wrench, BookOpen, Bot, BarChart3 } from 'lucide-react'
 import { pythonClient } from '@/services/pythonClient'
 import { useT } from '@/i18n'
 
@@ -28,27 +28,39 @@ interface SkillSchemaDict {
 type CategoryInfo = {
   label: string
   icon: typeof Zap
-  color: string // tailwind text-/bg- class
-  bgColor: string // background color class for category badge
+  color: string
+  bgColor: string
+  order: number
 }
 
-const CATEGORY_MAP: Record<string, CategoryInfo> = {
-  visualization: { label: 'Visualization', icon: Map,          color: 'text-blue-400',   bgColor: 'bg-blue-500/10' },
-  analysis:      { label: 'Analysis',      icon: Zap,          color: 'text-amber-400',  bgColor: 'bg-amber-500/10' },
-  data:          { label: 'Data',          icon: FileText,     color: 'text-emerald-400',bgColor: 'bg-emerald-500/10' },
-  utility:       { label: 'Utility',       icon: Code,         color: 'text-purple-400', bgColor: 'bg-purple-500/10' },
-  gis:           { label: 'GIS',           icon: Layers,       color: 'text-cyan-400',   bgColor: 'bg-cyan-500/10' },
-  system:        { label: 'System',        icon: Terminal,     color: 'text-green-400',  bgColor: 'bg-green-500/10' },
-  vector:        { label: 'Vector',        icon: Layers,       color: 'text-teal-400',   bgColor: 'bg-teal-500/10' },
-  conversion:    { label: 'Conversion',    icon: ArrowRightLeft,color: 'text-orange-400',bgColor: 'bg-orange-500/10' },
-  'qgis-system': { label: 'QGIS',          icon: Wrench,       color: 'text-amber-400',  bgColor: 'bg-amber-500/10' },
+// ─── Category style registry (auto-discovers new categories) ───
+// New backend categories get a default style automatically.
+// To customize a category's icon/color, add it here.
+const CATEGORY_STYLES: Record<string, Partial<CategoryInfo>> = {
+  system:        { icon: Terminal,     color: 'text-green-400',   bgColor: 'bg-green-500/10',   label: 'File & System',   order: 0 },
+  data:          { icon: FileText,     color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', label: 'Data & Inspection', order: 1 },
+  visualization: { icon: Map,          color: 'text-blue-400',    bgColor: 'bg-blue-500/10',    label: 'Map & Visualization', order: 2 },
+  report:        { icon: BarChart3,    color: 'text-orange-400',  bgColor: 'bg-orange-500/10',  label: 'Report Generation', order: 3 },
+  writing:       { icon: BookOpen,     color: 'text-purple-400',  bgColor: 'bg-purple-500/10',  label: 'Academic Writing',  order: 4 },
+  orchestration: { icon: Bot,          color: 'text-amber-400',   bgColor: 'bg-amber-500/10',   label: 'Agent Orchestration', order: 5 },
 }
 
-const FALLBACK_CATEGORY: CategoryInfo = {
-  label: 'Other',
+const DEFAULT_CATEGORY_STYLE: Omit<CategoryInfo, 'label'> = {
   icon: HelpCircle,
   color: 'text-text-muted',
   bgColor: 'bg-bg-tertiary/50',
+  order: 99,
+}
+
+function getCategoryInfo(cat: string, skillCount: number): CategoryInfo {
+  const style = CATEGORY_STYLES[cat]
+  return {
+    label: style?.label ?? cat.charAt(0).toUpperCase() + cat.slice(1),
+    icon: style?.icon ?? DEFAULT_CATEGORY_STYLE.icon,
+    color: style?.color ?? DEFAULT_CATEGORY_STYLE.color,
+    bgColor: style?.bgColor ?? DEFAULT_CATEGORY_STYLE.bgColor,
+    order: style?.order ?? DEFAULT_CATEGORY_STYLE.order,
+  }
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -92,11 +104,24 @@ export function SkillsPanel() {
       )
     : skills
 
-  const grouped: Record<string, SkillSchemaDict[]> = {}
-  for (const s of filtered) {
-    const cat = s.category || 'other'
-    ;(grouped[cat] ??= []).push(s)
-  }
+  // Auto-discover categories from skill data, sort by defined order
+  const grouped = useMemo(() => {
+    const map: Record<string, SkillSchemaDict[]> = {}
+    for (const s of filtered) {
+      const cat = s.category || 'other'
+      ;(map[cat] ??= []).push(s)
+    }
+    // Sort categories by order defined in CATEGORY_STYLES
+    const sorted: Record<string, SkillSchemaDict[]> = {}
+    for (const cat of Object.keys(map).sort((a, b) => {
+      const oa = getCategoryInfo(a, 0).order
+      const ob = getCategoryInfo(b, 0).order
+      return oa - ob
+    })) {
+      sorted[cat] = map[cat]
+    }
+    return sorted
+  }, [filtered])
 
   // ── Loading state ──────────────────────────────────────────────────
   if (loading) {
@@ -159,7 +184,7 @@ export function SkillsPanel() {
       {/* Skill list */}
       <div className="flex-1 overflow-y-auto">
         {Object.entries(grouped).map(([cat, items]) => {
-          const info = CATEGORY_MAP[cat] ?? FALLBACK_CATEGORY
+          const info = getCategoryInfo(cat, items.length)
           const Icon = info.icon
           const isOpen = expandedCategory === cat
           const categoryLabel = t.skills.categories[cat as keyof typeof t.skills.categories] ?? info.label

@@ -995,7 +995,8 @@ class RpcHandler:
                     content = content[:max_file_chars] + "\n... [truncated]"
 
                 label = "Workflow" if att_type == "workflow" else "File"
-                entry = f"\n\n---\n📎 **Attached {label}: `{name}`**\n```\n{content}\n```"
+                trunc_note = f"\n*(Truncated — full file at: `{path}`)*" if truncated else ""
+                entry = f"\n\n---\n📎 **Attached {label}: `{name}`**\nPath: `{path}`\n```\n{content}\n```{trunc_note}"
                 # Check total limit (allow this entry even if it exceeds, but warn)
                 if total_chars + len(entry) > max_total_chars:
                     # Truncate the entry to fit

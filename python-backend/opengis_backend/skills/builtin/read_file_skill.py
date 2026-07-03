@@ -132,6 +132,7 @@ def _read_lines_sync(
         "Read the contents of a file. "
         "Supports line-level pagination via offset/limit. "
         "Automatically detects binary files. "
+        "If given a directory path, lists its contents (up to 100 entries). "
         "Prefer reading larger files in chunks rather than all at once."
     ),
     category="system",

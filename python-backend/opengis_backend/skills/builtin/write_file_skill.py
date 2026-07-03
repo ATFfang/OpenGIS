@@ -38,10 +38,11 @@ def _detect_bom(data: bytes) -> tuple[str, bytes]:
 def _write_sync(
     file_path: str,
     content: str,
+    workspace_path: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous file writer (runs in executor)."""
     path = Path(file_path).resolve()
-    
+
     # 安全检查：必须是绝对路径，且必须在允许的工作区内
     if not path.is_absolute():
         return {
@@ -49,10 +50,11 @@ def _write_sync(
             "error": f"Path must be absolute: {file_path}",
             "path": file_path,
         }
-    
+
     # 防止路径遍历：检查解析后的路径是否在工作区内
-    # 默认工作区为当前工作目录，可通过环境变量 WORKSPACE_PATH 覆盖
-    workspace = Path(os.environ.get("WORKSPACE_PATH", os.getcwd())).resolve()
+    # 优先使用传入的 workspace_path，否则 fallback 到 cwd
+    ws_raw = workspace_path or os.environ.get("WORKSPACE_PATH") or os.getcwd()
+    workspace = Path(ws_raw).resolve()
     if not str(path).startswith(str(workspace)):
         return {
             "success": False,
@@ -131,11 +133,13 @@ def _write_sync(
         {"name": "content", "type": "string", "description": "The full content to write to the file."},
     ],
     returns="dict with keys: success (bool), path (str), error (str|null), diagnostics (list)",
+    needs_context=True,
     examples=[
         "write_file('/workspace/main.py', 'def hello():\\n    print(\"hello\")')",
     ],
 )
 def write_file(
+    ctx,
     file_path: str,
     content: str,
 ) -> dict[str, Any]:
@@ -143,4 +147,7 @@ def write_file(
 
     NOTE: Synchronous — invoked from the agent's worker thread.
     """
-    return _write_sync(file_path, content)
+    workspace_path = None
+    if ctx is not None:
+        workspace_path = (getattr(ctx, "meta", None) or {}).get("workspace_path")
+    return _write_sync(file_path, content, workspace_path=workspace_path)

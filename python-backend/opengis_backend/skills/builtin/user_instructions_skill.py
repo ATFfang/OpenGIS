@@ -25,7 +25,7 @@ from opengis_backend.user_prefs.store import append_agent_entry
         "Do NOT use this for conversation-specific context — only for "
         "preferences that should persist across ALL future conversations."
     ),
-    category="system",
+    category="orchestration",
     group="core",
     params=[
         {
