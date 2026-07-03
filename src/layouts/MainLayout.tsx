@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { Map, Code2, SplitSquareHorizontal, SplitSquareVertical, X } from 'lucide-react'
+import { Map, Code2, X } from 'lucide-react'
 import { useT } from '@/i18n'
 import { Sidebar } from './Sidebar'
 import { MapView } from '@/features/map/MapView'
@@ -65,11 +65,9 @@ export function MainLayout() {
         onToggleChat={() => setShowChat(!showChat)}
       />
 
-      {/* Sidebar Content Panel (Layer Panel, Files, Skills) */}
+      {/* Sidebar Content Panel (Layer Panel, Files, Skills) — resizable */}
       {showSidebarContent && (
-        <div className="w-[200px] h-full border-r border-border shrink-0 relative">
-          <SidebarContent activeTab={activeSidebarTab} />
-        </div>
+        <ResizableSidebarPanel activeTab={activeSidebarTab} />
       )}
 
       {/* Main content area */}
@@ -120,6 +118,55 @@ export function MainLayout() {
           onToggleBottomPanel={() => setShowBottomPanel(!showBottomPanel)}
         />
       </div>
+    </div>
+  )
+}
+
+/**
+ * Resizable sidebar content panel with drag handle.
+ * Min width: 150px, max width: 400px, default: 200px.
+ */
+function ResizableSidebarPanel({ activeTab }: { activeTab: string }) {
+  const [width, setWidth] = useState(200)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStartX = useRef(0)
+  const dragStartWidth = useRef(0)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+    dragStartX.current = e.clientX
+    dragStartWidth.current = width
+  }, [width])
+
+  useEffect(() => {
+    if (!isDragging) return
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - dragStartX.current
+      const newWidth = Math.max(150, Math.min(400, dragStartWidth.current + delta))
+      setWidth(newWidth)
+    }
+    const handleMouseUp = () => setIsDragging(false)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging])
+
+  return (
+    <div className="h-full border-r border-border shrink-0 relative flex" style={{ width }}>
+      <div className="flex-1 overflow-hidden">
+        <SidebarContent activeTab={activeTab} />
+      </div>
+      {/* Drag handle */}
+      <div
+        onMouseDown={handleMouseDown}
+        className={`w-[3px] shrink-0 cursor-col-resize transition-colors ${
+          isDragging ? 'bg-accent-primary' : 'bg-border hover:bg-accent-primary'
+        }`}
+      />
     </div>
   )
 }
@@ -219,39 +266,13 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
   const activeTabId = useViewStore((s) => s.activeTabId)
   const setActiveTab = useViewStore((s) => s.setActiveTab)
   const closeTab = useViewStore((s) => s.closeTab)
-  const showSplitView = useViewStore((s) => s.showSplitView)
-  const toggleSplitView = useViewStore((s) => s.toggleSplitView)
-  const splitDirection = useViewStore((s) => s.splitDirection)
-  const setSplitDirection = useViewStore((s) => s.setSplitDirection)
 
   const codeTabs = tabs.filter((t) => t.type === 'code' || t.type === 'text')
   const activeCodeTab = tabs.find((t) => t.id === activeTabId)
-  const isViewingCode = activeCodeTab && activeTabId !== 'map'
 
   // No code tabs — just show the map
   if (codeTabs.length === 0) {
     return <MapView onToggleFullscreen={onToggleFullscreen} />
-  }
-
-  // Split view: map + code side by side or top/bottom
-  if (showSplitView && isViewingCode) {
-    return (
-      <PanelGroup direction={splitDirection} className="h-full">
-        <Panel defaultSize={50} minSize={20}>
-          <MapView onToggleFullscreen={onToggleFullscreen} />
-        </Panel>
-        <PanelResizeHandle
-          className={
-            splitDirection === 'horizontal'
-              ? 'w-[3px] bg-border hover:bg-accent-primary transition-colors duration-150 cursor-col-resize'
-              : 'h-[3px] bg-border hover:bg-accent-primary transition-colors duration-150 cursor-row-resize'
-          }
-        />
-        <Panel defaultSize={50} minSize={20}>
-          {activeCodeTab && <CodeTabContent tab={activeCodeTab} />}
-        </Panel>
-      </PanelGroup>
-    )
   }
 
   // Tab view: switch between map and code
@@ -281,42 +302,6 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
           onTabClick={setActiveTab}
           onTabClose={closeTab}
         />
-
-        <div className="flex-1" />
-
-        {/* Split view controls */}
-        {isViewingCode && (
-          <div className="flex items-center gap-0.5 px-2">
-            <button
-              onClick={() => {
-                setSplitDirection('horizontal')
-                if (!showSplitView) toggleSplitView()
-              }}
-              className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
-                showSplitView && splitDirection === 'horizontal'
-                  ? 'text-accent-primary bg-accent-primary/10'
-                  : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
-              }`}
-              title={t.layout.splitLeftRight}
-            >
-              <SplitSquareHorizontal className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => {
-                setSplitDirection('vertical')
-                if (!showSplitView) toggleSplitView()
-              }}
-              className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
-                showSplitView && splitDirection === 'vertical'
-                  ? 'text-accent-primary bg-accent-primary/10'
-                  : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
-              }`}
-              title={t.layout.splitTopBottom}
-            >
-              <SplitSquareVertical className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Content area */}

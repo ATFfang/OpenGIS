@@ -61,6 +61,39 @@ def _normalise_workspace(path: str | None) -> str:
         return str(path).replace("\\", "/")
 
 
+_TITLED_FILE = ".opengis/titled_conversations.json"
+
+
+def _load_titled_set(workspace: str) -> set[str]:
+    """Load the set of conversation IDs that already have auto-generated titles."""
+    from pathlib import Path
+
+    try:
+        path = Path(workspace) / _TITLED_FILE
+        if not path.exists():
+            return set()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return set(data)
+        return set()
+    except Exception as e:
+        logger.warning("Failed to load titled conversations from %s: %s", workspace, e)
+        return set()
+
+
+def _save_titled_set(workspace: str, titled: set[str]) -> None:
+    """Persist the set of titled conversation IDs to disk."""
+    from pathlib import Path
+
+    try:
+        path = Path(workspace) / _TITLED_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(list(titled), ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.debug("Titled conversations saved: %d entries", len(titled))
+    except Exception as e:
+        logger.warning("Failed to save titled conversations to %s: %s", workspace, e)
+
+
 # Binary file extensions that should NOT be injected as text context.
 _BINARY_EXTENSIONS = frozenset(
     {
@@ -143,7 +176,7 @@ class RpcHandler:
         # than queue a second Send on the same workspace to keep the
         # state model simple — mirrors the decision in MEMORY ADR-009.
         self._workspace_locks: dict[str, str] = {}  # workspace -> owner run_id
-        self._titled_conversations: set[str] = set()  # conversation_ids that already have a title
+        self._titled_conversations: set[str] | None = None  # lazy-loaded from disk on first use
         # Last LLM config hash — used to avoid unnecessary agent rebuilds.
         self._last_llm_config_hash: str | None = None
         # Workspace manager — shared across runs, stateless.
@@ -522,7 +555,7 @@ class RpcHandler:
                 # in the background (non-blocking) to avoid delaying
                 # the stream_end event.
                 asyncio.create_task(
-                    self._generate_title_if_needed(message, params.get("conversation_id"))
+                    self._generate_title_if_needed(message, params.get("conversation_id"), workspace_path)
                 )
             except asyncio.CancelledError:
                 await self._send_notification("chat.cancelled", {})
@@ -798,12 +831,27 @@ class RpcHandler:
         return self._agent
 
     async def _generate_title_if_needed(
-        self, user_message: str, conversation_id: str | None
+        self,
+        user_message: str,
+        conversation_id: str | None,
+        workspace_path: str | None = None,
     ) -> None:
         """Generate a short conversation title using the LLM after the first message."""
         if not conversation_id:
             logger.debug("Title generation skipped: no conversation_id")
             return
+
+        # Lazy-load persisted titled set on first call (survives backend restart).
+        if self._titled_conversations is None:
+            if workspace_path:
+                self._titled_conversations = _load_titled_set(workspace_path)
+                logger.debug(
+                    "Loaded titled conversations from disk: %d entries",
+                    len(self._titled_conversations),
+                )
+            else:
+                self._titled_conversations = set()
+
         if conversation_id in self._titled_conversations:
             logger.debug("Title generation skipped: already titled for %s", conversation_id)
             return
@@ -853,6 +901,9 @@ class RpcHandler:
                         "title": title,
                     },
                 )
+                # Persist so the title survives backend restarts.
+                if workspace_path and self._titled_conversations is not None:
+                    _save_titled_set(workspace_path, self._titled_conversations)
             else:
                 logger.warning("Title rejected: empty or too long (%d chars)", len(title))
         except Exception as e:

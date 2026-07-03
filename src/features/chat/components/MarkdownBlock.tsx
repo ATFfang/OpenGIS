@@ -1,9 +1,12 @@
 import { memo, useState, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { Copy, Check } from 'lucide-react'
 import { useChatCodeTheme } from './useChatCodeTheme'
+import 'katex/dist/katex.min.css'
 
 interface MarkdownBlockProps {
   markdown?: string
@@ -66,7 +69,8 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
     <div className="w-full min-w-0 overflow-hidden break-words">
       <div className={`[&>p:first-child]:mt-0 ${showCursor ? 'inline-cursor-container' : ''}`}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
           components={{
             img({ src, alt, ...props }) {
               // If resolveImageSrc is provided and src is not an absolute URL,
@@ -205,7 +209,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }, [code])
 
   return (
-    <div className="relative group my-3 rounded-xl overflow-hidden border border-border/60">
+    <div className="relative group my-3 rounded-lg overflow-hidden border border-border/60">
       {/* Language badge + copy button */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-bg-tertiary/80 border-b border-border/40">
         <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">{language}</span>

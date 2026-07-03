@@ -196,7 +196,7 @@ ChatRowContent.displayName = 'ChatRowContent'
 function UserMessageRow({ message }: { message: UIMessage }) {
   return (
     <div
-      className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-[13px] shadow-sm bg-accent-success/8 border border-accent-success/15"
+      className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-[13px] shadow-sm bg-accent-primary/15 border border-accent-primary/25"
       style={{
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',

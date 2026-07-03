@@ -63,8 +63,6 @@ export const zh = {
     features: '要素',
     layers: '图层',
     pythonStatus: 'Python: {status}',
-    splitLeftRight: '左右分栏',
-    splitTopBottom: '上下分栏',
   },
 
   // ─── Chat ──────────────────────────────────────────────────────
@@ -427,6 +425,7 @@ export const zh = {
     title: '图层',
     addData: '添加数据',
     removeAll: '移除所有图层',
+    searchLayers: '搜索图层...',
     loadingLayers: '加载图层中…',
     dropFiles: '拖放文件以添加图层',
     hideLayer: '隐藏图层',

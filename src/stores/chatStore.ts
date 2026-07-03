@@ -38,7 +38,6 @@ interface ChatStore {
   conversations: Conversation[]
   activeConversationId: string | null
   isStreaming: boolean
-  isWaitingForUser: boolean
   _persistenceReady: boolean
   /** True when a workflow plan is active — suppresses detailed events. */
   workflowPlanActive: boolean
@@ -154,7 +153,8 @@ function installNotificationBridge(
           }
         }
         get().setStreaming(false)
-        set({ workflowPlanActive: false })
+        // Don't reset workflowPlanActive here — keep filtering intermediate
+        // messages after workflow completes. It resets on conversation change.
         break
       }
       case 'chat.code_block': {
@@ -520,7 +520,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
     conversations: [],
     activeConversationId: null,
     isStreaming: false,
-    isWaitingForUser: false,
     workflowPlanActive: false,
     _persistenceReady: false,
 
@@ -541,6 +540,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       set((state) => ({
         conversations: [conversation, ...state.conversations],
         activeConversationId: id,
+        workflowPlanActive: false,
       }))
       return id
     },
@@ -553,17 +553,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
       })
       set((state) => {
         const conversations = state.conversations.filter((c) => c.id !== id)
+        const newActiveId = state.activeConversationId === id
+          ? conversations[0]?.id ?? null
+          : state.activeConversationId
+        // Check if the new active conversation has an active workflow plan
+        const newActiveConv = conversations.find((c) => c.id === newActiveId)
+        const hasWorkflowPlan = newActiveConv?.messages.some(
+          (m) => m.say === 'plan' && m.planData?.steps?.some((s: any) => s.status === 'in_progress')
+        ) ?? false
         return {
           conversations,
-          activeConversationId:
-            state.activeConversationId === id
-              ? conversations[0]?.id ?? null
-              : state.activeConversationId,
+          activeConversationId: newActiveId,
+          workflowPlanActive: hasWorkflowPlan,
         }
       })
     },
 
-    setActiveConversation: (id) => set({ activeConversationId: id }),
+    setActiveConversation: (id) => {
+      // Check if the target conversation has an active workflow plan
+      const conv = get().conversations.find((c) => c.id === id)
+      const hasWorkflowPlan = conv?.messages.some(
+        (m) => m.say === 'plan' && m.planData?.steps?.some((s: any) => s.status === 'in_progress')
+      ) ?? false
+      set({ activeConversationId: id, workflowPlanActive: hasWorkflowPlan })
+    },
     setStreaming: (isStreaming) => set({ isStreaming }),
 
     renameConversation: (id, title) => {
@@ -595,7 +608,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               : c
           ),
           isStreaming: false,
-          isWaitingForUser: false,
+          workflowPlanActive: false,
         }))
         get()._persistActive()
       }
@@ -724,7 +737,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           say: 'error',
           text: friendlyMsg,
         })
-        set({ isStreaming: false })
+        set({ isStreaming: false, workflowPlanActive: false })
       }
     },
 

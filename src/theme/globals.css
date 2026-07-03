@@ -7,14 +7,14 @@
    ============================================ */
 
 :root {
-  /* Dark theme (default) */
-  --bg-primary: #0a0c10;
-  --bg-secondary: #12151c;
-  --bg-tertiary: #1a1e2a;
-  --bg-hover: #222838;
+  /* Dark theme (default) — inspired by VS Code / GitHub Dark */
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #1c2128;
+  --bg-hover: #252c35;
 
-  --text-primary: #e8eaed;
-  --text-secondary: #9aa0ad;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
   --text-muted: #5f6573;
 
   --accent-primary: #3b82f6;
@@ -23,7 +23,7 @@
   --accent-danger: #ef4444;
   --accent-geo: #06b6d4;
 
-  --border-color: #1e2330;
+  --border-color: #2a2f3d;
 
   --sidebar-width: 52px;
   --sidebar-expanded-width: 240px;

@@ -63,8 +63,6 @@ export const en = {
     features: 'features',
     layers: 'layers',
     pythonStatus: 'Python: {status}',
-    splitLeftRight: 'Split left/right',
-    splitTopBottom: 'Split top/bottom',
   },
 
   // ─── Chat ──────────────────────────────────────────────────────
@@ -428,6 +426,7 @@ export const en = {
     title: 'Layers',
     addData: 'Add data',
     removeAll: 'Remove all layers',
+    searchLayers: 'Search layers...',
     loadingLayers: 'Loading layers…',
     dropFiles: 'Drop files to add layers',
     hideLayer: 'Hide layer',

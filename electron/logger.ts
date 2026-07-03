@@ -16,12 +16,48 @@
  */
 
 import { app } from 'electron'
-import { createWriteStream, mkdirSync, WriteStream } from 'fs'
+import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync, WriteStream } from 'fs'
 import { join } from 'path'
+
+const MAX_LOG_DIR_BYTES = 20 * 1024 * 1024  // 20 MB
 
 let stream: WriteStream | null = null
 let logDir: string | null = null
 let installed = false
+
+/**
+ * Remove oldest log files when the directory exceeds MAX_LOG_DIR_BYTES.
+ * Keeps the current day's log untouched.
+ */
+function pruneOldLogs(dir: string): void {
+  try {
+    const todayPrefix = `electron-main-${today()}`
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.log') && !f.startsWith(todayPrefix))
+      .map((f) => ({
+        name: f,
+        path: join(dir, f),
+        mtime: statSync(join(dir, f)).mtimeMs,
+        size: statSync(join(dir, f)).size,
+      }))
+      .sort((a, b) => a.mtime - b.mtime)  // oldest first
+
+    let totalSize = files.reduce((sum, f) => sum + f.size, 0)
+    // Also count today's file
+    try {
+      totalSize += statSync(join(dir, `${todayPrefix}.log`)).size
+    } catch { /* not created yet */ }
+
+    for (const f of files) {
+      if (totalSize <= MAX_LOG_DIR_BYTES) break
+      try {
+        unlinkSync(f.path)
+        totalSize -= f.size
+        console.log(`[logger] Pruned old log: ${f.name} (${(f.size / 1024).toFixed(0)} KB)`)
+      } catch { /* best effort */ }
+    }
+  } catch { /* best effort */ }
+}
 
 function today(): string {
   const d = new Date()
@@ -54,6 +90,9 @@ export function initLogger(): string {
   } catch {
     // best effort
   }
+
+  // Prune old logs on startup
+  pruneOldLogs(logDir)
 
   const file = join(logDir, `electron-main-${today()}.log`)
   stream = createWriteStream(file, { flags: 'a', encoding: 'utf-8' })
