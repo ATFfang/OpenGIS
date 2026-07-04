@@ -38,6 +38,7 @@ interface ChatStore {
   conversations: Conversation[]
   activeConversationId: string | null
   isStreaming: boolean
+  isCancelling: boolean
   _persistenceReady: boolean
   /** True when a workflow plan is active — suppresses detailed events. */
   workflowPlanActive: boolean
@@ -59,16 +60,99 @@ interface ChatStore {
   flushToDisk: (targetWorkspacePath?: string | null) => Promise<void>
 
   sendMessage: (text: string, images?: string[], attachments?: ChatAttachment[]) => Promise<void>
-  abortTask: () => Promise<void>
+  abortTask: (workspacePathOverride?: string | null) => Promise<void>
 
   _addMessage: (message: UIMessage) => void
   _updateMessage: (ts: number, updates: Partial<UIMessage>) => void
   _persistActive: () => void
 }
 
+const STREAM_TEXT_FLUSH_MS = 48
+let pendingTextAppends = new Map<number, string>()
+let pendingTextFlushTimer: number | null = null
+
+function queueTextAppend(
+  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
+  get: () => ChatStore,
+  ts: number,
+  piece: string,
+): void {
+  if (!piece) return
+  pendingTextAppends.set(ts, (pendingTextAppends.get(ts) || '') + piece)
+  if (pendingTextFlushTimer != null) return
+  pendingTextFlushTimer = window.setTimeout(() => {
+    flushPendingTextAppends(set, get)
+  }, STREAM_TEXT_FLUSH_MS)
+}
+
+function flushPendingTextAppends(
+  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
+  get: () => ChatStore,
+): void {
+  if (pendingTextFlushTimer != null) {
+    window.clearTimeout(pendingTextFlushTimer)
+    pendingTextFlushTimer = null
+  }
+  if (pendingTextAppends.size === 0) return
+  const appends = pendingTextAppends
+  pendingTextAppends = new Map()
+  set((state) => ({
+    conversations: state.conversations.map((c) => {
+      if (c.id !== state.activeConversationId) return c
+      let changed = false
+      const messages = c.messages.map((m) => {
+        const append = appends.get(m.ts)
+        if (!append) return m
+        changed = true
+        return { ...m, text: (m.text || '') + append }
+      })
+      return changed ? { ...c, messages, updatedAt: Date.now() } : c
+    }),
+  }))
+  void get
+}
+
 // ─── 辅助函数：推送当前 LLM 设置到 Python 后端 ──────────────────────
 // 仅当配置自上次调用后实际更改时才发送。
 let _lastConfigHash: string | null = null
+
+function settleRunningStatusCards(
+  conv: Conversation | null,
+  updateMessage: (ts: number, updates: Partial<UIMessage>) => void,
+  mode: 'completed' | 'failed' | 'cancelled',
+): void {
+  if (!conv) return
+  for (const msg of conv.messages) {
+    if (msg.say === 'plan' && msg.planData?.steps?.some((s: any) => s.status === 'in_progress')) {
+      updateMessage(msg.ts, {
+        planData: {
+          ...msg.planData,
+          steps: msg.planData.steps.map((s: any) =>
+            s.status === 'in_progress'
+              ? { ...s, status: mode === 'completed' ? 'done' : 'failed' }
+              : s
+          ),
+          updatedAt: Date.now(),
+        },
+      })
+    }
+
+    if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
+      updateMessage(msg.ts, {
+        subagentData: {
+          ...msg.subagentData,
+          status: mode === 'completed' ? 'done' : mode,
+          tasks: msg.subagentData.tasks.map((task: any) =>
+            task.status === 'running'
+              ? { ...task, status: mode === 'completed' ? 'done' : mode }
+              : task
+          ),
+          updatedAt: Date.now(),
+        },
+      })
+    }
+  }
+}
 
 async function configureBackendAgent(): Promise<void> {
   const { useSettingsStore } = await import('./settingsStore')
@@ -119,7 +203,7 @@ function installNotificationBridge(
         const last = conv?.messages[conv.messages.length - 1]
         const content = (params?.content as string) ?? ''
         if (last && last.type === 'say' && last.say === 'text' && last.partial) {
-          state._updateMessage(last.ts, { text: (last.text || '') + content })
+          queueTextAppend(set, get, last.ts, content)
         } else {
           // 添加文本前清除所有残留的 thinking 消息
           if (last && last.say === 'thinking' && last.partial) {
@@ -136,6 +220,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.stream_end': {
+        flushPendingTextAppends(set, get)
         const conv = state.activeConversation()
         if (conv) {
           // 移除所有残留的 progress / thinking 消息
@@ -151,13 +236,14 @@ function installNotificationBridge(
           if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
             state._updateMessage(last.ts, { partial: false })
           }
+          settleRunningStatusCards(conv, state._updateMessage, 'completed')
         }
         get().setStreaming(false)
-        // Don't reset workflowPlanActive here — keep filtering intermediate
-        // messages after workflow completes. It resets on conversation change.
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.code_block': {
+        flushPendingTextAppends(set, get)
         // 参数: { step, code, script_path, script_abs_path, run_id }
         // 如果已经在此步骤的代码流中，只需完成
         // 现有部分代码消息即可（保留时间戳以便
@@ -258,7 +344,7 @@ function installNotificationBridge(
         for (let i = convCd.messages.length - 1; i >= 0; i--) {
           const m = convCd.messages[i]
           if (m.say === 'code' && m.stepNumber === stepNumD && m.partial) {
-            state._updateMessage(m.ts, { text: (m.text || '') + piece })
+            queueTextAppend(set, get, m.ts, piece)
             break
           }
           if (m.say === 'code' && (m.stepNumber ?? 0) < stepNumD) break
@@ -266,6 +352,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.code_block_end': {
+        flushPendingTextAppends(set, get)
         // 参数: { step, run_id }
         // LLM 完成了围栏写入。标记部分消息完成
         // — 前端将在短暂延迟后动画折叠它。
@@ -302,7 +389,7 @@ function installNotificationBridge(
         const refreshed = state.activeConversation()
         const lastReason = refreshed?.messages[(refreshed?.messages.length ?? 0) - 1]
         if (!wantsOpen && lastReason && lastReason.say === 'reasoning' && lastReason.partial) {
-          if (piece) state._updateMessage(lastReason.ts, { text: (lastReason.text || '') + piece })
+          if (piece) queueTextAppend(set, get, lastReason.ts, piece)
         } else {
           state._addMessage({
             ts: Date.now(),
@@ -316,6 +403,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.reasoning_end': {
+        flushPendingTextAppends(set, get)
         // 参数: { round, run_id }
         // 关闭当前部分 reasoning 气泡 — UI 将
         // 动画折叠它。
@@ -332,6 +420,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.reasoning_promote': {
+        flushPendingTextAppends(set, get)
         // 参数: { round, run_id }
         // 轮次结束但没有代码 — 我们作为 "reasoning" 流式传输的内容
         // 实际上是最终答案。就地转换气泡。
@@ -367,29 +456,82 @@ function installNotificationBridge(
           type: 'say',
           say: 'tool',
           toolName: params?.name as string,
+          toolCallId: params?.call_id as string | undefined,
           toolArgs: params?.args as Record<string, unknown>,
           toolStatus: 'running',
         })
         break
       }
-      case 'chat.tool_result': {
+      case 'chat.tool_output_delta': {
         const conv = state.activeConversation()
+        const callId = params?.call_id as string | undefined
+        const piece = (params?.delta as string) ?? ''
+        if (!conv || !callId || !piece) break
+        for (let i = conv.messages.length - 1; i >= 0; i--) {
+          const m = conv.messages[i]
+          if (m.say === 'tool' && m.toolCallId === callId) {
+            queueTextAppend(set, get, m.ts, piece)
+            break
+          }
+        }
+        break
+      }
+      case 'chat.tool_result': {
+        flushPendingTextAppends(set, get)
+        const conv = state.activeConversation()
+        const metadata = (params?.metadata || {}) as Record<string, unknown>
+        const codeStep = metadata.code_step as number | undefined
+        const scriptPath = metadata.script_path as string | undefined
+        const scriptAbsPath = metadata.script_abs_path as string | undefined
+        const callId = params?.call_id as string | undefined
         // 找到最近的运行中工具消息并标记为完成
         if (conv) {
+          let updated = false
+          if (callId) {
+            for (let i = conv.messages.length - 1; i >= 0; i--) {
+              const m = conv.messages[i]
+              if (m.say === 'tool' && m.toolCallId === callId) {
+                state._updateMessage(m.ts, {
+                  toolStatus: params?.error ? 'failed' : 'completed',
+                  text: params?.output as string,
+                  durationMs: params?.duration_ms as number | undefined,
+                })
+                updated = true
+                break
+              }
+            }
+          }
           for (let i = conv.messages.length - 1; i >= 0; i--) {
             const m = conv.messages[i]
-            if (m.say === 'tool' && m.toolStatus === 'running') {
+            if (!updated && m.say === 'tool' && m.toolStatus === 'running') {
               state._updateMessage(m.ts, {
                 toolStatus: params?.error ? 'failed' : 'completed',
                 text: params?.output as string,
+                durationMs: params?.duration_ms as number | undefined,
               })
               break
+            }
+          }
+          if (codeStep != null && (scriptPath || scriptAbsPath)) {
+            for (let i = conv.messages.length - 1; i >= 0; i--) {
+              const m = conv.messages[i]
+              if (m.say === 'code' && m.stepNumber === codeStep) {
+                state._updateMessage(m.ts, {
+                  scriptPath,
+                  scriptAbsPath,
+                  runId: params?.run_id as string | undefined,
+                })
+                break
+              }
+              if (m.say === 'code' && (m.stepNumber ?? 0) < codeStep) break
             }
           }
         }
         break
       }
       case 'chat.error': {
+        flushPendingTextAppends(set, get)
+        settleRunningStatusCards(state.activeConversation(), state._updateMessage, 'failed')
         state._addMessage({
           ts: Date.now(),
           type: 'say',
@@ -397,6 +539,7 @@ function installNotificationBridge(
           text: (params?.error as string) || 'Unknown error',
         })
         get().setStreaming(false)
+        set({ workflowPlanActive: false })
         break
       }
       case 'chat.max_steps_reached': {
@@ -419,6 +562,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.cancelled': {
+        flushPendingTextAppends(set, get)
         // Clean up all partial UI state — same as stream_end.
         // Without this, thinking bubbles, progress bars, and subagent
         // cards stay stuck in their "running" state after cancel.
@@ -429,29 +573,8 @@ function installNotificationBridge(
             if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
               state._updateMessage(msg.ts, { partial: false })
             }
-            // Mark running subagent cards as cancelled
-            if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
-              state._updateMessage(msg.ts, {
-                subagentData: {
-                  ...msg.subagentData,
-                  status: 'cancelled',
-                  updatedAt: Date.now(),
-                },
-              })
-            }
-            // Mark in_progress plan steps as cancelled
-            if (msg.say === 'plan' && msg.planData?.steps?.some((s: any) => s.status === 'in_progress')) {
-              state._updateMessage(msg.ts, {
-                planData: {
-                  ...msg.planData,
-                  steps: msg.planData.steps.map((s: any) =>
-                    s.status === 'in_progress' ? { ...s, status: 'failed' } : s
-                  ),
-                  updatedAt: Date.now(),
-                },
-              })
-            }
           }
+          settleRunningStatusCards(cancelConv, state._updateMessage, 'cancelled')
           // Close any partial assistant text
           const last = cancelConv.messages[cancelConv.messages.length - 1]
           if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
@@ -520,6 +643,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     conversations: [],
     activeConversationId: null,
     isStreaming: false,
+    isCancelling: false,
     workflowPlanActive: false,
     _persistenceReady: false,
 
@@ -577,7 +701,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       ) ?? false
       set({ activeConversationId: id, workflowPlanActive: hasWorkflowPlan })
     },
-    setStreaming: (isStreaming) => set({ isStreaming }),
+    setStreaming: (isStreaming) => set({ isStreaming, isCancelling: false }),
 
     renameConversation: (id, title) => {
       set((state) => ({
@@ -600,7 +724,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     resetConversation: () => {
       const state = get()
       if (state.activeConversationId) {
-        pythonClient.send('rpc.agent.interrupt', {}).catch(() => {})
+        import('./assetStore').then(({ useAssetStore }) => {
+          const workspacePath = useAssetStore.getState().workspacePath
+          pythonClient.send('rpc.agent.interrupt', {
+            workspace_path: workspacePath || undefined,
+          }).catch(() => {})
+        })
         set((s) => ({
           conversations: s.conversations.map((c) =>
             c.id === s.activeConversationId
@@ -608,6 +737,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               : c
           ),
           isStreaming: false,
+          isCancelling: false,
           workflowPlanActive: false,
         }))
         get()._persistActive()
@@ -654,6 +784,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     sendMessage: async (text, images, attachments) => {
       const state = get()
+      if (state.isStreaming || state.isCancelling) {
+        console.warn('[chatStore] sendMessage ignored while agent is busy/cancelling')
+        return
+      }
       let conversationId = state.activeConversationId
       if (!conversationId) {
         conversationId = get().createConversation()
@@ -661,7 +795,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // 根据第一条消息自动生成标题
       const conv = get().conversations.find((c) => c.id === conversationId)
-      if (conv && conv.messages.length === 0) {
+      const isFirstUserMessage = !conv || !conv.messages.some((m) => m.say === 'user_feedback')
+      if (conv && isFirstUserMessage) {
         set((s) => ({
           conversations: s.conversations.map((c) =>
             c.id === conversationId
@@ -681,7 +816,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         files: attachments?.map((a) => a.name),
       })
 
-      set({ isStreaming: true })
+      set({ isStreaming: true, isCancelling: false })
 
       try {
         // 确保后端在聊天前拥有最新的 LLM 配置
@@ -700,7 +835,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             say: 'error',
             text: '⚠️ 请先打开一个工作目录。Agent 需要工作目录来存储脚本和分析结果。',
           })
-          set({ isStreaming: false })
+          set({ isStreaming: false, isCancelling: false })
           return
         }
 
@@ -711,6 +846,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           message: text,
           conversation_id: conversationId,
           workspace_path: workspacePath || undefined,
+          generate_title: isFirstUserMessage,
           attachments: attachments?.map((a) => ({
             name: a.name,
             path: a.path,
@@ -737,16 +873,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
           say: 'error',
           text: friendlyMsg,
         })
-        set({ isStreaming: false, workflowPlanActive: false })
+        set({ isStreaming: false, isCancelling: false, workflowPlanActive: false })
       }
     },
 
-    abortTask: async () => {
+    abortTask: async (workspacePathOverride?: string | null) => {
       const t0 = performance.now()
       console.log(`[ABORT-DEBUG][${new Date().toISOString()}] abortTask called, isStreaming=${get().isStreaming}`)
       // 立即设置 streaming 为 false 以提高 UI 响应速度
-      set({ isStreaming: false })
-      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms set isStreaming=false`)
+      set({ isStreaming: false, isCancelling: true })
+      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms set isStreaming=false,isCancelling=true`)
       // 添加用户可见的取消消息
       get()._addMessage({
         ts: Date.now(),
@@ -759,10 +895,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // 我们等待此操作，以便后端有时间清理，
       // 然后再让用户发送下一条消息
       try {
-        const result = await pythonClient.send('rpc.agent.interrupt', {})
+        const { useAssetStore } = await import('./assetStore')
+        const workspacePath = workspacePathOverride !== undefined
+          ? workspacePathOverride
+          : useAssetStore.getState().workspacePath
+        const result = await pythonClient.send('rpc.agent.interrupt', {
+          workspace_path: workspacePath || undefined,
+        })
         console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt returned:`, result)
       } catch (e) {
         console.warn(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt FAILED:`, e)
+      } finally {
+        set({ isCancelling: false, workflowPlanActive: false })
       }
       console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms abortTask finished`)
     },
@@ -827,14 +971,28 @@ useAssetStore.subscribe((state, prev) => {
     const doLoad = () => {
       // 清除内存中的对话，以便过期数据永远不会被待处理的防抖写入
       // 写入新工作区
-      useChatStore.setState({ conversations: [], activeConversationId: null, _persistenceReady: false })
+      useChatStore.setState({
+        conversations: [],
+        activeConversationId: null,
+        isStreaming: false,
+        isCancelling: false,
+        workflowPlanActive: false,
+        _persistenceReady: false,
+      })
       useChatStore.getState().loadFromDisk()
     }
-    if (prev.workspacePath) {
-      store.flushToDisk(prev.workspacePath).then(doLoad)
-    } else {
+    const settleCurrentRun = store.isStreaming || store.isCancelling
+      ? store.abortTask(prev.workspacePath).catch((e) => {
+          console.warn('[chatStore] failed to abort active run before workspace switch:', e)
+        })
+      : Promise.resolve()
+    const flushOldWorkspace = prev.workspacePath
+      ? settleCurrentRun.then(() => store.flushToDisk(prev.workspacePath))
+      : settleCurrentRun
+    flushOldWorkspace.then(doLoad).catch((e) => {
+      console.error('[chatStore] failed to switch workspace conversations:', e)
       doLoad()
-    }
+    })
   }
 })
 

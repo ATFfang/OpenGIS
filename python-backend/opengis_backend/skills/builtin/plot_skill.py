@@ -112,6 +112,9 @@ def save_plot(
     payload: dict = {"path": abs_path}
     if caption:
         payload["caption"] = caption
+    run_id = (ctx.meta or {}).get("run_id")
+    if run_id:
+        payload["run_id"] = run_id
     run_async_from_sync(ctx.notify("rpc.ui.chat.show_image", payload))
 
     # Free the figure so subsequent calls don't pile up memory.

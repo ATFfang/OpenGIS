@@ -15,6 +15,9 @@ class ParamType(str, Enum):
     GEOMETRY = "geometry"
     CRS = "crs"
     LAYER_REF = "layer_ref"
+    ARRAY = "array"
+    OBJECT = "object"
+    ANY = "any"
 
 
 @dataclass
@@ -58,6 +61,9 @@ class SkillParam:
             ParamType.GEOMETRY: "string",
             ParamType.CRS: "string",
             ParamType.LAYER_REF: "string",
+            ParamType.ARRAY: "array",
+            ParamType.OBJECT: "object",
+            ParamType.ANY: None,
         }
         # Also support string keys for type_map lookup
         str_type_map = {
@@ -69,15 +75,24 @@ class SkillParam:
             "geometry": "string",
             "crs": "string",
             "layer_ref": "string",
+            "array": "array",
+            "object": "object",
+            "any": None,
         }
         if isinstance(self.type, ParamType):
             json_type = type_map.get(self.type, "string")
         else:
             json_type = str_type_map.get(str(self.type), "string")
-        schema: dict[str, Any] = {
-            "type": json_type,
-            "description": self.description,
-        }
+        schema: dict[str, Any] = {"description": self.description}
+        if json_type is not None:
+            schema["type"] = json_type
+        if json_type == "array":
+            schema["items"] = self._array_items_schema()
+            if self.name == "bbox":
+                schema["minItems"] = 4
+                schema["maxItems"] = 4
+        if json_type == "object":
+            schema["additionalProperties"] = True
         if self.options:
             schema["enum"] = self.options
         if self.min_value is not None:
@@ -87,6 +102,16 @@ class SkillParam:
         if self.default is not None:
             schema["default"] = self.default
         return schema
+
+    def _array_items_schema(self) -> dict:
+        """Infer a useful item schema for common array parameters."""
+        if self.name in {"tasks", "skill_groups"}:
+            return {"type": "string"}
+        if self.name in {"steps", "nodes", "edges"}:
+            return {"type": "object", "additionalProperties": True}
+        if self.name == "bbox":
+            return {"type": "number"}
+        return {}
 
 
 @dataclass

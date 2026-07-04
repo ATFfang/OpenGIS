@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import {
   Send,
@@ -23,6 +23,8 @@ import {
   Database,
   Copy,
   Check,
+  Search,
+  ArrowUp,
 } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
 import { useAssetStore } from '@/stores/assetStore'
@@ -30,11 +32,10 @@ import { useRunsStore } from '@/stores/runsStore'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import { useDialog } from '@/components/Dialog'
 import { useT } from '@/i18n'
-import logoImg from '@/assets/logo.png'
-import thinkingGif from '@/assets/thinking.gif'
-import machineAvatar from '@/assets/machine.png'
+import appIconImg from '../../../resources/icons/app-icon.png'
 import ChatRow from './components/ChatRow'
 import OrbLogo from './components/OrbLogo'
+import { ApprovalInline } from '@/features/approval/ApprovalGate'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
 import type { UIMessage } from '@/types/chat'
 import { groupMessages, type MessageRole } from './groupMessages'
@@ -68,7 +69,11 @@ export function ChatView() {
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editingTitle, setEditingTitle] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchIndex, setSearchIndex] = useState(0)
   const headerTitleInputRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textAreaRef = useRef<HTMLTextAreaElement>(null)
@@ -80,6 +85,7 @@ export function ChatView() {
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const conversations = useChatStore((s) => s.conversations)
   const isStreaming = useChatStore((s) => s.isStreaming)
+  const isCancelling = useChatStore((s) => s.isCancelling)
   const workflowPlanActive = useChatStore((s) => s.workflowPlanActive)
   const sendMessage = useChatStore((s) => s.sendMessage)
   const abortTask = useChatStore((s) => s.abortTask)
@@ -91,6 +97,7 @@ export function ChatView() {
     [conversations, activeConversationId],
   )
   const messages: UIMessage[] = conversation?.messages ?? EMPTY_MESSAGES
+  const isBusy = isStreaming || isCancelling
 
   // 把消息按 "一轮 assistant 回答" 分组：两次 user_feedback 之间的所有 assistant
   // 消息（text / reasoning / code / code_result / tool / completion_result / ...）
@@ -105,6 +112,16 @@ export function ChatView() {
     return map
   }, [messages])
 
+  const compactWorkflowRunIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const msg of messages) {
+      if (msg.say === 'plan' && msg.planData?.workflow && msg.planData.runId) {
+        ids.add(msg.planData.runId)
+      }
+    }
+    return ids
+  }, [messages])
+
   // 用户已发送消息的历史栈（最新在前），用于 ↑/↓ 在输入框中回放。
   // 说明：ChatRow 里一条 user_feedback 的 text 就是用户当时敲的文本。
   const userHistory = useMemo<string[]>(() => {
@@ -116,6 +133,53 @@ export function ChatView() {
     return acc
   }, [messages])
 
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return []
+    return messageGroups
+      .map((group, groupIndex) => ({
+        groupIndex,
+        groupKey: group.items[0]?.ts ?? groupIndex,
+        text: extractSearchText(group.items).toLowerCase(),
+      }))
+      .filter((item) => item.text.includes(query))
+  }, [messageGroups, searchQuery])
+
+  const currentSearchMatch = searchMatches.length > 0
+    ? searchMatches[Math.min(searchIndex, searchMatches.length - 1)]
+    : null
+
+  const focusSearch = useCallback(() => {
+    setSearchOpen(true)
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    })
+  }, [])
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchIndex(0)
+    textAreaRef.current?.focus()
+  }, [])
+
+  const jumpToSearchMatch = useCallback((index: number, behavior: 'auto' | 'smooth' = 'smooth') => {
+    const match = searchMatches[index]
+    if (!match) return
+    setSearchIndex(index)
+    virtuosoRef.current?.scrollToIndex({
+      index: match.groupIndex,
+      align: 'center',
+      behavior,
+    })
+  }, [searchMatches])
+
+  const stepSearch = useCallback((delta: 1 | -1) => {
+    if (searchMatches.length === 0) return
+    const next = (searchIndex + delta + searchMatches.length) % searchMatches.length
+    jumpToSearchMatch(next)
+  }, [jumpToSearchMatch, searchIndex, searchMatches.length])
 
   // --- Auto-resize textarea ---
   const adjustTimerRef = useRef<number | null>(null)
@@ -138,6 +202,13 @@ export function ChatView() {
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
     virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior })
   }, [])
+
+  const scheduleScrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+    requestAnimationFrame(() => {
+      scrollToBottom(behavior)
+      requestAnimationFrame(() => scrollToBottom(behavior))
+    })
+  }, [scrollToBottom])
 
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
     setShowScrollToBottom((prev) => (prev !== !atBottom ? !atBottom : prev))
@@ -164,7 +235,34 @@ export function ChatView() {
     textAreaRef.current?.focus()
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = ''
+    setSearchQuery('')
+    setSearchIndex(0)
   }, [activeConversationId])
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        focusSearch()
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [focusSearch])
+
+  useEffect(() => {
+    if (!searchOpen || !searchQuery.trim()) return
+    if (searchMatches.length === 0) {
+      if (searchIndex !== 0) setSearchIndex(0)
+      return
+    }
+    const nextIndex = Math.min(searchIndex, searchMatches.length - 1)
+    if (nextIndex !== searchIndex) {
+      setSearchIndex(nextIndex)
+      return
+    }
+    jumpToSearchMatch(nextIndex, 'auto')
+  }, [jumpToSearchMatch, searchIndex, searchMatches.length, searchOpen, searchQuery])
 
   const toggleRowExpansion = useCallback((ts: number) => {
     setExpandedRows((prev) => {
@@ -182,7 +280,7 @@ export function ChatView() {
   const handleSend = useCallback(async () => {
     const trimmed = inputValue.trim()
     if (!trimmed && attachments.length === 0) return
-    if (isStreaming) return
+    if (isStreaming || isCancelling) return
 
     const currentAttachments = attachments.length > 0 ? [...attachments] : undefined
     setInputValue('')
@@ -193,13 +291,15 @@ export function ChatView() {
     if (textAreaRef.current) {
       textAreaRef.current.style.height = 'auto'
     }
+    scheduleScrollToBottom('auto')
 
     try {
       await sendMessage(trimmed || '(see attached files)', undefined, currentAttachments)
+      scheduleScrollToBottom('smooth')
     } catch (error: any) {
       console.error('[ChatView] Failed to send message:', error)
     }
-  }, [inputValue, isStreaming, sendMessage, attachments])
+  }, [inputValue, isStreaming, isCancelling, sendMessage, attachments, scheduleScrollToBottom])
 
   const handleAttachFile = useCallback(() => {
     setShowFileBrowser(true)
@@ -312,13 +412,13 @@ export function ChatView() {
   }, [inputValue, adjustTextareaHeight])
 
   const handleSuggestionClick = useCallback(async (text: string) => {
-    if (isStreaming) return
+    if (isBusy) return
     try {
       await sendMessage(text)
     } catch (error: any) {
       console.error('[ChatView] Failed to send suggestion:', error)
     }
-  }, [isStreaming, sendMessage])
+  }, [isBusy, sendMessage])
 
   const applyHistoryValue = useCallback((value: string) => {
     setInputValue(value)
@@ -386,26 +486,53 @@ export function ChatView() {
     abortTask()
   }, [abortTask])
 
-  // Determine if we're waiting for a response — show thinking indicator
-  // whenever the agent is running and the user might think it's stuck.
-  const isWaitingForResponse = useMemo(() => {
-    if (!isStreaming) return false
+  const activeWorkState = useMemo(() => {
+    if (isCancelling) return { label: t.chat.cancelling, tone: 'working' as const }
+    if (!isStreaming) return null
     const lastMsg = messages[messages.length - 1]
-    if (!lastMsg) return true
-    // Just sent a message — waiting for first response
-    if (lastMsg.say === 'user_feedback') return true
-    if (lastMsg.say === 'api_req_started') return true
-    // Active progress / thinking indicator is already visible — no need for thinking
-    if (lastMsg.say === 'progress' && lastMsg.partial) return false
-    if (lastMsg.say === 'thinking' && lastMsg.partial) return false
-    // After a code_result, the LLM is thinking about the next step
-    if (lastMsg.say === 'code_result') return true
-    // After a completed (non-partial) text message, LLM may be self-evaluating
-    if (lastMsg.say === 'text' && !lastMsg.partial) return true
-    return false
-  }, [isStreaming, messages])
+    if (!lastMsg) return { label: t.chat.thinking, tone: 'thinking' as const }
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.say === 'tool' && msg.toolStatus === 'running') {
+        return { label: getRunningToolLabel(msg, t), tone: 'working' as const }
+      }
+      if (msg.say === 'code' && msg.partial) {
+        return { label: t.chat.progress.generating, tone: 'code' as const }
+      }
+      if (msg.say === 'progress' && msg.partial) {
+        return {
+          label: msg.progressDetail || progressLabelForStage(msg.progressStage, t),
+          tone: 'working' as const,
+        }
+      }
+      if (msg.say === 'plan' && msg.planData?.steps?.some((s) => s.status === 'in_progress')) {
+        return { label: t.chat.progressProcessing, tone: 'working' as const }
+      }
+      if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
+        return { label: t.chat.progressProcessing, tone: 'working' as const }
+      }
+      if (msg.partial && (msg.say === 'text' || msg.say === 'reasoning')) {
+        return { label: t.chat.thinking, tone: 'thinking' as const }
+      }
+      if (msg.say === 'user_feedback') break
+    }
+
+    if (lastMsg.say === 'code_result' || lastMsg.say === 'text' || lastMsg.say === 'api_req_started') {
+      return { label: t.chat.thinking, tone: 'thinking' as const }
+    }
+    return { label: t.chat.progressProcessing, tone: 'working' as const }
+  }, [isStreaming, isCancelling, messages, t])
 
   const hasTask = messages.length > 0
+
+  useEffect(() => {
+    if (!hasTask) return
+    const last = messages[messages.length - 1]
+    if (isStreaming || last?.say === 'user_feedback') {
+      scheduleScrollToBottom(last?.say === 'user_feedback' ? 'auto' : 'smooth')
+    }
+  }, [hasTask, isStreaming, messages.length, scheduleScrollToBottom])
 
   // Count tokens from last API request
   const lastApiReq = useMemo(() => {
@@ -427,7 +554,7 @@ export function ChatView() {
           <div className="flex items-center gap-2.5">
             <div className="relative">
               <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center">
-                <img src={logoImg} alt="OpenGIS" className="w-7 h-7 object-contain" />
+                <img src={appIconImg} alt="OpenGIS" className="w-7 h-7 object-contain" />
               </div>
               {isStreaming && (
                 <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-accent-success ring-2 ring-bg-primary animate-pulse" />
@@ -520,6 +647,19 @@ export function ChatView() {
                 )}
               </div>
             )}
+            {hasTask && (
+              <button
+                onClick={focusSearch}
+                className={`p-1.5 rounded-lg transition-all duration-150 ${
+                  searchOpen
+                    ? 'text-accent-primary bg-accent-primary/10'
+                    : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
+                }`}
+                title="搜索对话"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+            )}
             {/* New conversation button */}
             <button
               onClick={() => createConversation()}
@@ -532,6 +672,22 @@ export function ChatView() {
         </div>
       </header>
 
+      {searchOpen && (
+        <ChatSearchCapsule
+          query={searchQuery}
+          inputRef={searchInputRef}
+          current={searchMatches.length > 0 ? searchIndex + 1 : 0}
+          total={searchMatches.length}
+          onQueryChange={(value) => {
+            setSearchQuery(value)
+            setSearchIndex(0)
+          }}
+          onPrevious={() => stepSearch(-1)}
+          onNext={() => stepSearch(1)}
+          onClose={closeSearch}
+        />
+      )}
+
       {/* === Messages Area (virtualized) === */}
       {hasTask ? (
         <Virtuoso
@@ -540,35 +696,40 @@ export function ChatView() {
           data={messageGroups}
           className="flex-1 min-h-0"
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--text-muted) transparent' }}
-          followOutput={(atBottom) => (atBottom ? 'smooth' : false)}
+          followOutput={(atBottom) => (isStreaming || atBottom ? 'smooth' : false)}
           atBottomThreshold={100}
           atBottomStateChange={handleAtBottomChange}
           increaseViewportBy={{ top: 600, bottom: 600 }}
           initialTopMostItemIndex={Math.max(0, messageGroups.length - 1)}
           computeItemKey={(index, group) => `g-${group.items[0]?.ts ?? index}`}
           components={{ Header: ListSpacer, Footer: TypingFooter }}
-          context={{ waiting: isWaitingForResponse, thinkingLabel: t.chat.thinking }}
+          context={activeWorkState}
           itemContent={(_index, group) => {
             // Find the first item in this group that carries a run_id.
             // Only assistant groups will have code/code_result/max_steps
             // messages with this field populated — user / system groups
             // will produce `undefined` and therefore hide the revert button.
             const runId = group.items.find((m) => m.runId)?.runId
+            const groupKey = group.items[0]?.ts ?? _index
             return (
               <MessageGroup
                 role={group.role}
                 runId={runId}
                 items={group.items}
                 onEditUser={handleEditUserMessage}
+                highlighted={currentSearchMatch?.groupKey === groupKey}
               >
                 {group.items
                   .filter((msg) => {
-                    // In workflow mode, suppress detailed events — only show
-                    // plan, text replies, and errors.
-                    if (!workflowPlanActive) return true
+                    // Workflow runs are shown in compact mode: keep the plan
+                    // and final text visible, hide noisy code/tool internals
+                    // for that workflow run only. Later normal agent runs in
+                    // the same conversation must still show their details.
+                    const compactWorkflowRun = msg.runId && compactWorkflowRunIds.has(msg.runId)
+                    if (!workflowPlanActive && !compactWorkflowRun) return true
                     const say = msg.say
                     if (say === 'plan' || say === 'text' || say === 'error' || say === 'user_feedback') return true
-                    return false
+                    return !compactWorkflowRun
                   })
                   .map((msg, index) => {
                   const globalIndex = messageIndexMap.get(msg) ?? 0
@@ -593,6 +754,7 @@ export function ChatView() {
       )}
 
       {/* === Footer === */}
+      <ApprovalInline />
       <footer className="shrink-0 border-t border-border bg-bg-primary">
         {/* Scroll to bottom */}
         {showScrollToBottom && hasTask && (
@@ -679,10 +841,11 @@ export function ChatView() {
                 <Paperclip className="w-4 h-4" />
               </button>
 
-              {isStreaming ? (
+              {isBusy ? (
                 <button
                   onClick={handleStop}
-                  className="p-2 bg-accent-danger/10 text-accent-danger hover:bg-accent-danger/20 rounded-lg transition-all duration-150 ring-1 ring-accent-danger/20"
+                  disabled={isCancelling}
+                  className="p-2 bg-accent-danger/10 text-accent-danger hover:bg-accent-danger/20 disabled:opacity-50 disabled:cursor-wait rounded-lg transition-all duration-150 ring-1 ring-accent-danger/20"
                   title={t.chat.stopGeneration}
                 >
                   <Square className="w-3.5 h-3.5" />
@@ -690,7 +853,7 @@ export function ChatView() {
               ) : (
                 <button
                   onClick={handleSend}
-                  disabled={!inputValue.trim() && attachments.length === 0}
+                  disabled={isBusy || (!inputValue.trim() && attachments.length === 0)}
                   className="p-2 bg-accent-primary text-white hover:bg-accent-primary/90 disabled:bg-bg-tertiary disabled:text-text-muted/30 disabled:cursor-not-allowed rounded-lg transition-all duration-150 shadow-sm disabled:shadow-none"
                   title={t.chat.send}
                 >
@@ -719,10 +882,10 @@ export function ChatView() {
               <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> {t.chat.newLineHint}
             </span>
             <span className="text-[10px] text-text-muted/40 flex items-center gap-1">
-              {isStreaming ? (
+              {isBusy ? (
                 <>
                   <Zap className="w-2.5 h-2.5 text-accent-primary" />
-                  <span className="text-accent-primary">{t.chat.streaming}</span>
+                  <span className="text-accent-primary">{isCancelling ? t.chat.cancelling : t.chat.streaming}</span>
                 </>
               ) : (
                 <>
@@ -754,21 +917,156 @@ function ListSpacer() {
   return <div className="h-3" aria-hidden />
 }
 
-function TypingFooter({ context }: { context?: { waiting: boolean; thinkingLabel: string } }) {
-  if (!context?.waiting) return <div className="h-3" aria-hidden />
+type ActiveWorkState = { label: string; tone: 'thinking' | 'code' | 'working' } | null
+
+function TypingFooter({ context }: { context?: ActiveWorkState }) {
+  if (!context) return <div className="h-3" aria-hidden />
   return (
     <div className="px-5 py-3">
       <div className="flex items-start gap-3">
-        <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 ring-1 ring-accent-primary/10">
-          <img src={machineAvatar} alt="Bot" className="w-full h-full object-cover" />
+        <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0">
+          <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
         </div>
-        <div className="flex items-center gap-2 pt-1">
-          <img src={thinkingGif} alt="Thinking" className="w-5 h-5" />
-          <span className="text-xs text-text-muted">{context.thinkingLabel}...</span>
-        </div>
+        <ActiveWorkIndicator label={context.label} tone={context.tone} />
       </div>
     </div>
   )
+}
+
+function ChatSearchCapsule({
+  query,
+  inputRef,
+  current,
+  total,
+  onQueryChange,
+  onPrevious,
+  onNext,
+  onClose,
+}: {
+  query: string
+  inputRef: RefObject<HTMLInputElement>
+  current: number
+  total: number
+  onQueryChange: (value: string) => void
+  onPrevious: () => void
+  onNext: () => void
+  onClose: () => void
+}) {
+  const hasQuery = query.trim().length > 0
+  const hasResults = total > 0
+
+  return (
+    <div className="shrink-0 bg-bg-primary px-3 py-1.5">
+      <div className="mx-auto flex w-full max-w-[520px] items-center gap-1.5 rounded-full bg-bg-secondary/85 px-2 py-1 shadow-[0_1px_10px_rgba(0,0,0,0.08)] ring-1 ring-black/5 dark:ring-white/5">
+        <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              onClose()
+              return
+            }
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              if (e.shiftKey) onPrevious()
+              else onNext()
+            }
+          }}
+          placeholder="搜索对话"
+          className="min-w-0 flex-1 bg-transparent px-1 text-xs text-text-primary outline-none placeholder:text-text-muted/50"
+        />
+        <span className={`min-w-[42px] text-center text-[10px] tabular-nums ${hasQuery && !hasResults ? 'text-accent-danger' : 'text-text-muted'}`}>
+          {hasQuery ? (hasResults ? `${current}/${total}` : '无结果') : 'Ctrl F'}
+        </span>
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={!hasResults}
+          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+          title="上一个"
+        >
+          <ArrowUp className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!hasResults}
+          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
+          title="下一个"
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
+          title="关闭"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ActiveWorkIndicator({ label, tone }: { label: string; tone: 'thinking' | 'code' | 'working' }) {
+  const dotClass =
+    tone === 'code'
+      ? 'bg-accent-warning'
+      : tone === 'working'
+        ? 'bg-accent-geo'
+        : 'bg-accent-primary'
+  return (
+    <div className="flex items-center gap-2 pt-1 min-w-0">
+      <span className="relative flex w-2 h-2 shrink-0" aria-hidden>
+        <span className={`absolute inline-flex h-full w-full rounded-full ${dotClass} opacity-35 animate-ping`} />
+        <span className={`relative inline-flex rounded-full w-2 h-2 ${dotClass}`} />
+      </span>
+      <span className="chat-thinking-text text-xs font-medium truncate">
+        {label.endsWith('...') || label.endsWith('…') ? label : `${label}...`}
+      </span>
+    </div>
+  )
+}
+
+function getRunningToolLabel(message: UIMessage, t: ReturnType<typeof useT>): string {
+  const name = message.toolName || ''
+  if (name === 'execute_code' || name === 'gis_execute_python') return t.chat.progressExecuting
+  if (name === 'add_layer' || name === 'add_raster' || name.includes('map')) return t.chat.progressRendering
+  if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return t.chat.progressProcessing
+  return name ? `${t.chat.progressProcessing} · ${name}` : t.chat.progressProcessing
+}
+
+function progressLabelForStage(
+  stage: string | undefined,
+  t: ReturnType<typeof useT>,
+): string {
+  switch (stage) {
+    case 'installing_packages':
+      return t.chat.progressInstalling
+    case 'loading_geodata':
+      return t.chat.progressLoadingGeodata
+    case 'loading_raster':
+      return t.chat.progressLoadingRaster
+    case 'loading_data':
+      return t.chat.progressLoadingData
+    case 'spatial_analysis':
+      return t.chat.progressSpatialAnalysis
+    case 'generating_visualization':
+      return t.chat.progressVisualization
+    case 'rendering_map':
+      return t.chat.progressRendering
+    case 'saving_results':
+      return t.chat.progressSaving
+    case 'executing_code':
+      return t.chat.progressExecuting
+    case 'processing':
+    default:
+      return t.chat.progressProcessing
+  }
 }
 
 /** Concatenate a group's user-visible text so it can be copied as one block. */
@@ -787,6 +1085,43 @@ function extractGroupText(items: UIMessage[]): string {
   return parts.join('\n\n')
 }
 
+/** Concatenate searchable message content. Kept text-only so virtualized rows stay cheap. */
+function extractSearchText(items: UIMessage[]): string {
+  const parts: string[] = []
+  for (const m of items) {
+    if (m.text) parts.push(m.text)
+    if (m.toolName) parts.push(m.toolName)
+    if (m.progressDetail) parts.push(m.progressDetail)
+    if (m.scriptPath) parts.push(m.scriptPath)
+    if (m.scriptAbsPath) parts.push(m.scriptAbsPath)
+    if (m.files?.length) parts.push(...m.files)
+    if (m.images?.length) parts.push(...m.images)
+    if (m.toolArgs) parts.push(safeJsonForSearch(m.toolArgs))
+    if (m.planData) {
+      if (m.planData.title) parts.push(m.planData.title)
+      for (const step of m.planData.steps) {
+        parts.push(step.title)
+        if (step.note) parts.push(step.note)
+      }
+    }
+    if (m.subagentData) {
+      for (const task of m.subagentData.tasks) parts.push(task.title)
+    }
+    if (m.screenshotData) {
+      parts.push(m.screenshotData.prompt, m.screenshotData.savePath)
+    }
+  }
+  return parts.filter(Boolean).join('\n')
+}
+
+function safeJsonForSearch(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
 // --- Message group wrapper with a single avatar per group ---
 
 function MessageGroup({
@@ -794,24 +1129,26 @@ function MessageGroup({
   runId,
   items,
   onEditUser,
+  highlighted = false,
   children,
 }: {
   role: MessageRole
   runId?: string
   items: UIMessage[]
   onEditUser?: (text: string) => void
+  highlighted?: boolean
   children: ReactNode
 }) {
   const t = useT()
   if (role === 'system') {
     // 细条系统消息（token/cost 指示）不占头像位。
-    return <div className="px-5">{children}</div>
+    return <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 transition-colors`}>{children}</div>
   }
 
   if (role === 'user') {
     const userText = items.find((m) => m.say === 'user_feedback')?.text ?? ''
     return (
-      <div className="px-5 py-2 animate-fade-in group/msg">
+      <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
         <div className="flex justify-end">
           <div className="max-w-[85%] min-w-0">
             {children}
@@ -837,11 +1174,11 @@ function MessageGroup({
   // 一键把 workspace reset 到这次 run 开始前的 git SHA。
   const groupText = extractGroupText(items)
   return (
-    <div className="px-5 py-2 animate-fade-in group/msg">
+    <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg overflow-hidden ring-1 ring-accent-primary/10">
-            <img src={machineAvatar} alt="Bot" className="w-full h-full object-cover" />
+          <div className="w-6 h-6 rounded-lg overflow-hidden">
+            <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
           </div>
           {runId && <RevertRunButton runId={runId} />}
         </div>

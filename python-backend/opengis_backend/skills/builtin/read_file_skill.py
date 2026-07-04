@@ -6,21 +6,33 @@ and optional truncation for large files.
 
 from __future__ import annotations
 
+import base64
+import difflib
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
+from opengis_backend.skills.context import SkillContext
 from opengis_backend.skills.registry import skill
+from opengis_backend.skills.builtin._file_state import mark_file_read
 
 logger = logging.getLogger(__name__)
 
 _MAX_LINE_LEN = 2000
 _MAX_BYTES = 50 * 1024   # 50 KB per read
+_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+_IMAGE_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 _BINARY_EXTS = {
     ".zip", ".exe", ".dll", ".so", ".dylib", ".bin", ".class",
     ".jar", ".war", ".ear", ".pyc", ".pyo", ".o", ".a",
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns", ".webp",
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".mp3", ".mp4", ".avi", ".mov", ".wmv", ".flv",
     ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
@@ -35,19 +47,71 @@ def _is_binary_content(sample: bytes) -> bool:
     return non_printable / len(sample) > 0.3
 
 
+def _suggest_paths(path: Path) -> list[str]:
+    parent = path.parent if str(path.parent) else Path(".")
+    try:
+        candidates = [p.name for p in parent.iterdir()]
+    except Exception:
+        return []
+    names = difflib.get_close_matches(path.name, candidates, n=5, cutoff=0.45)
+    return [str((parent / name).resolve()) for name in names]
+
+
+def _attachment_response(path: Path, mime: str, kind: str) -> dict[str, Any]:
+    size = path.stat().st_size
+    if size > _MAX_ATTACHMENT_BYTES:
+        return {
+            "output": (
+                f"<path>{path}</path>\n<type>{kind}</type>\n"
+                f"<note>File is {size} bytes, above attachment limit "
+                f"{_MAX_ATTACHMENT_BYTES} bytes. Use a smaller file or extract text first.</note>"
+            ),
+            "error": "attachment_too_large",
+            "truncated": False,
+            "type": kind,
+            "path": str(path),
+            "mime": mime,
+            "size": size,
+        }
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "output": f"<path>{path}</path>\n<type>{kind}</type>\n<mime>{mime}</mime>\n<attachment>base64</attachment>",
+        "error": None,
+        "truncated": False,
+        "type": kind,
+        "path": str(path),
+        "mime": mime,
+        "encoding": "base64",
+        "content": data,
+        "size": size,
+        "file": {
+            "name": path.name,
+            "mime": mime,
+            "encoding": "base64",
+            "data": data,
+        },
+    }
+
+
 def _read_lines_sync(
     file_path: str,
     offset: int = 1,
     limit: int = 2000,
+    ctx: SkillContext | None = None,
 ) -> dict[str, Any]:
     """Synchronous file reader (runs in executor)."""
     path = Path(file_path)
 
     if not path.exists():
+        suggestions = _suggest_paths(path)
+        suggestion_text = ""
+        if suggestions:
+            suggestion_text = "\nDid you mean:\n" + "\n".join(f"- {item}" for item in suggestions)
         return {
-            "output": f"File not found: {file_path}",
+            "output": f"File not found: {file_path}{suggestion_text}",
             "error": "file_not_found",
             "truncated": False,
+            "suggestions": suggestions,
         }
 
     if not path.is_file():
@@ -67,6 +131,13 @@ def _read_lines_sync(
 
     # Binary detection
     ext = path.suffix.lower()
+    if ext in _IMAGE_MIME_BY_EXT:
+        mark_file_read(ctx, path)
+        return _attachment_response(path, _IMAGE_MIME_BY_EXT[ext], "image")
+    if ext == ".pdf":
+        mark_file_read(ctx, path)
+        return _attachment_response(path, "application/pdf", "pdf")
+
     is_bin = ext in _BINARY_EXTS
     if not is_bin:
         try:
@@ -77,7 +148,6 @@ def _read_lines_sync(
             pass
 
     if is_bin:
-        # Return a placeholder — OpenCode returns base64 for images
         return {
             "output": f"<path>{file_path}</path>\n<type>binary</type>\n<note>Binary file ({ext}), not shown.</note>",
             "error": None,
@@ -108,8 +178,10 @@ def _read_lines_sync(
                     break
 
         content = "".join(lines)
-        total_lines = sum(1 for _ in open(path, encoding="utf-8", errors="replace"))
+        with open(path, encoding="utf-8", errors="replace") as count_f:
+            total_lines = sum(1 for _ in count_f)
         preview = content[:200] + ("..." if len(content) > 200 else "")
+        mark_file_read(ctx, path)
 
         output = f"<path>{file_path}</path>\n<type>file</type>\n<content>\n{content}</content>"
         return {
@@ -136,6 +208,7 @@ def _read_lines_sync(
         "Prefer reading larger files in chunks rather than all at once."
     ),
     category="system",
+    needs_context=True,
     params=[
         {"name": "file_path", "type": "string", "description": "Absolute path to the file to read."},
         {"name": "offset", "type": "number", "description": "1-indexed line number to start from (default 1)."},
@@ -148,6 +221,7 @@ def _read_lines_sync(
     ],
 )
 def read_file(
+    ctx: SkillContext,
     file_path: str,
     offset: int = 1,
     limit: int = 2000,
@@ -158,4 +232,4 @@ def read_file(
     (no event loop bound), so it MUST stay synchronous. Do NOT wrap with
     asyncio.run_in_executor — see docs/ARCHITECTURE.md §Skill Invocation.
     """
-    return _read_lines_sync(file_path, offset, limit)
+    return _read_lines_sync(file_path, offset, limit, ctx=ctx)

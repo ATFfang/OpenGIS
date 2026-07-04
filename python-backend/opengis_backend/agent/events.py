@@ -47,6 +47,7 @@ class AgentEventType(str, Enum):
     CODE_BLOCK_END = "code_block_end"  # Streaming code block finished writing
     CODE_RESULT = "code_result"        # Code block executed; observation
     TOOL_START = "tool_start"          # Skill execution started
+    TOOL_OUTPUT_DELTA = "tool_output_delta"  # Live stdout from a running tool
     TOOL_RESULT = "tool_result"        # Skill execution finished
     PROGRESS = "progress"              # Execution progress indicator
     THINKING = "thinking"              # LLM is being called (pre-response indicator)
@@ -137,6 +138,7 @@ class EventTranslator:
         AgentEventType.CODE_BLOCK_END:     "code_block_end",
         AgentEventType.CODE_RESULT:        "code_result",
         AgentEventType.TOOL_START:         "tool_start",
+        AgentEventType.TOOL_OUTPUT_DELTA:  "tool_output_delta",
         AgentEventType.TOOL_RESULT:        "tool_result",
         AgentEventType.PROGRESS:           "progress",
         AgentEventType.THINKING:           "thinking",

@@ -23,7 +23,6 @@ import maplibregl from 'maplibre-gl'
 import type { MapLayerDefinition, BasemapSource, ParsedVectorData } from '@/services/geo'
 import {
   getRenderer,
-  type LayerRenderer,
   type RendererContext,
   sourceIdFor,
 } from '../renderers'
@@ -110,10 +109,7 @@ export class MapEngine {
     // 添加控件
     this.map.addControl(new maplibregl.NavigationControl(), 'top-right')
     this.map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
-    this.map.addControl(
-      new maplibregl.AttributionControl({ compact: true }),
-      'bottom-right'
-    )
+    // AttributionControl removed — copyright info is in the basemap source config
 
     // 在地图移动结束时同步视图状态回调
     this.moveEndHandler = () => {
@@ -623,6 +619,20 @@ export class MapEngine {
   flyTo(center: [number, number], zoom?: number): void {
     if (!this.map) return
     this.map.flyTo({ center, zoom: zoom ?? this.map.getZoom() })
+  }
+
+  /**
+   * Immediately set the camera without animation. Used when restoring a
+   * persisted workspace viewport so startup does not visibly fly from default.
+   */
+  jumpTo(view: { center: [number, number]; zoom: number; bearing: number; pitch: number }): void {
+    if (!this.map) return
+    this.map.jumpTo({
+      center: view.center,
+      zoom: view.zoom,
+      bearing: view.bearing,
+      pitch: view.pitch,
+    })
   }
 
   /**

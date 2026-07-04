@@ -12,6 +12,7 @@ import { useT } from '@/i18n'
 
 interface SidebarProps {
   activeTab: string
+  isContentVisible?: boolean
   onTabChange: (tab: string) => void
   showChat: boolean
   onToggleChat: () => void
@@ -21,7 +22,7 @@ interface SidebarProps {
  * Left sidebar with icon-based navigation tabs.
  * Compact mode: 52px wide, icon only.
  */
-export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: SidebarProps) {
+export function Sidebar({ activeTab, isContentVisible = true, onTabChange, showChat, onToggleChat }: SidebarProps) {
   const t = useT()
 
   const sidebarTabs = [
@@ -34,11 +35,11 @@ export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: Side
   ]
 
   return (
-    <div className="w-[52px] h-full bg-bg-secondary border-r border-border flex flex-col items-center py-2 select-none">
+    <div className="w-[52px] h-full bg-bg-sidebar border-r border-border flex flex-col items-center py-2 select-none">
       {/* Navigation tabs */}
       <div className="flex flex-col gap-1 flex-1">
         {sidebarTabs.map((tab) => {
-          const isActive = activeTab === tab.id
+          const isActive = activeTab === tab.id && (tab.id === 'settings' || isContentVisible)
           return (
             <button
               key={tab.id}

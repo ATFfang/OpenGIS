@@ -224,6 +224,7 @@ export interface LayerStyle {
   opacity: number
   strokeColor: string
   strokeWidth: number
+  strokeOpacity?: number
   radius?: number
   /** For fill layers */
   fillOpacity?: number

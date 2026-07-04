@@ -139,6 +139,8 @@ class RunArchive:
         archive._flush_meta()
         # Touch the steps file so downstream readers don't have to handle "missing".
         (run_dir / "steps.jsonl").touch()
+        (run_dir / "tool_calls.jsonl").touch()
+        (run_dir / "artifacts.jsonl").touch()
         logger.info("RunArchive opened at %s", run_dir)
         return archive
 
@@ -192,6 +194,60 @@ class RunArchive:
         except Exception:
             logger.exception("record_risky_op failed for run=%s", self.run_id)
 
+    def record_tool_call(
+        self,
+        *,
+        call_id: str,
+        name: str,
+        arguments: Optional[dict[str, Any]] = None,
+        output: str = "",
+        error: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        status: str | None = None,
+    ) -> None:
+        """Append one normalized tool-call record to ``tool_calls.jsonl``."""
+        entry = {
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments or {},
+            "output": output,
+            "error": error,
+            "duration_ms": duration_ms,
+            "status": status or ("error" if error else "completed"),
+            "metadata": metadata or {},
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        }
+        try:
+            with (self.run_dir / "tool_calls.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            if entry["status"] in {"completed", "error"}:
+                self._meta["tool_call_count"] = int(self._meta.get("tool_call_count", 0)) + 1
+            self._flush_meta()
+        except Exception:
+            logger.exception("record_tool_call failed for run=%s call=%s", self.run_id, call_id)
+
+    def record_artifact(self, artifact: dict[str, Any]) -> None:
+        """Append one artifact reference to this run archive."""
+        try:
+            entry = dict(artifact)
+            entry.setdefault("run_id", self.run_id)
+            entry.setdefault("ts", datetime.now().isoformat(timespec="seconds"))
+            with (self.run_dir / "artifacts.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            self._meta["artifact_count"] = int(self._meta.get("artifact_count", 0)) + 1
+            self._flush_meta()
+        except Exception:
+            logger.exception("record_artifact failed for run=%s", self.run_id)
+
+    def record_session(self, session: dict[str, Any]) -> None:
+        """Store the final session snapshot into ``meta.json``."""
+        try:
+            self._meta["session"] = session
+            self._flush_meta()
+        except Exception:
+            logger.exception("record_session failed for run=%s", self.run_id)
+
     def append_stdout(self, text: str) -> None:
         """Mirror subprocess stdout into stdout.log. Never raises."""
         if not text:
@@ -233,7 +289,35 @@ class RunArchive:
 
     def read_steps(self) -> list[dict]:
         """Return the list of step records. Empty on I/O errors."""
-        path = self.run_dir / "steps.jsonl"
+        return self._read_jsonl("steps.jsonl")
+
+    def read_tool_calls(self) -> list[dict]:
+        """Return normalized tool-call records. Empty on I/O errors."""
+        latest: dict[str, dict] = {}
+        for entry in self._read_jsonl("tool_calls.jsonl"):
+            call_id = str(entry.get("call_id") or "")
+            if not call_id:
+                continue
+            previous = latest.get(call_id, {})
+            merged = dict(previous)
+            for key, value in entry.items():
+                if value not in (None, "", {}, []):
+                    merged[key] = value
+            if "status" not in merged:
+                merged["status"] = "error" if merged.get("error") else "completed"
+            latest[call_id] = merged
+        return list(latest.values())
+
+    def read_tool_call_events(self) -> list[dict]:
+        """Return raw append-only tool-call lifecycle events."""
+        return self._read_jsonl("tool_calls.jsonl")
+
+    def read_artifacts(self) -> list[dict]:
+        """Return run-scoped artifact records. Empty on I/O errors."""
+        return self._read_jsonl("artifacts.jsonl")
+
+    def _read_jsonl(self, filename: str) -> list[dict]:
+        path = self.run_dir / filename
         if not path.exists():
             return []
         out: list[dict] = []
@@ -245,9 +329,9 @@ class RunArchive:
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
-                    logger.warning("malformed steps.jsonl line in run=%s", self.run_id)
+                    logger.warning("malformed %s line in run=%s", filename, self.run_id)
         except Exception:
-            logger.exception("read_steps failed for run=%s", self.run_id)
+            logger.exception("read %s failed for run=%s", filename, self.run_id)
         return out
 
     # -- Static helpers for the listing RPC ----------------------------

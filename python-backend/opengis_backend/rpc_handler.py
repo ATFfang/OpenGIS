@@ -4,14 +4,22 @@ import asyncio
 import json
 import logging
 import traceback
+import uuid
 from typing import Any
 
 import numpy as np
 from fastapi import WebSocket
 
+from opengis_backend.agent.artifacts import ArtifactIndex
 from opengis_backend.agent.engine import GISAgent
 from opengis_backend.agent.events import AgentEvent, EventTranslator
+from opengis_backend.agent.permission import PermissionAction, PermissionDecision
+from opengis_backend.agent.permission_store import PermissionRequestStore, PermissionRuleStore
+from opengis_backend.agent.profile import AgentProfileStore
+from opengis_backend.agent.queue import AgentQueue, AgentQueueItem, AgentQueueStatus
+from opengis_backend.agent.session import AgentInboxItem, InboxStatus, SessionStore
 from opengis_backend.agent.workflow_loop import WorkflowDocument
+from opengis_backend.agent.workflow_store import WorkflowDocumentStore
 from opengis_backend.config import settings
 from opengis_backend.constants import (  # noqa: E402 module-level import
     CLEANUP_FUTURE_TIMEOUT,
@@ -171,11 +179,13 @@ class RpcHandler:
         # Reusable agent instance — built lazily once we know the LLM config.
         self._agent: GISAgent | None = None
         self._current_agent_task: asyncio.Task | None = None
+        self._current_agent_lock_key: str | None = None
         # D2: per-workspace serial lock. Key is the normalised workspace
         # path (or "<no-workspace>" for orphan runs). We reject rather
         # than queue a second Send on the same workspace to keep the
         # state model simple — mirrors the decision in MEMORY ADR-009.
         self._workspace_locks: dict[str, str] = {}  # workspace -> owner run_id
+        self._workspace_lock_guard = asyncio.Lock()
         self._titled_conversations: set[str] | None = None  # lazy-loaded from disk on first use
         # Last LLM config hash — used to avoid unnecessary agent rebuilds.
         self._last_llm_config_hash: str | None = None
@@ -189,6 +199,11 @@ class RpcHandler:
         # Capture the event loop the websocket lives on; sandbox-thread
         # callbacks need it to schedule notifications.
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._pending_client_requests: dict[str, asyncio.Future] = {}
+        self._permission_requests = PermissionRequestStore()
+        self._agent_queue = AgentQueue()
+        self._queue_processors: dict[str, asyncio.Task] = {}
+        self._closed = False
         self._method_handlers = {
             # Canonical v3.0 three-channel method names (Stage 3.6 — sole wire).
             # rpc.* channel: synchronous command / query
@@ -209,6 +224,23 @@ class RpcHandler:
             "rpc.runs.list": self._handle_runs_list,
             "rpc.runs.get": self._handle_runs_get,
             "rpc.runs.replay": self._handle_runs_replay,
+            "rpc.agent.profiles.list": self._handle_agent_profiles_list,
+            "rpc.agent.profiles.install_defaults": self._handle_agent_profiles_install_defaults,
+            "rpc.agent.sessions.list": self._handle_agent_sessions_list,
+            "rpc.agent.inbox.list": self._handle_agent_inbox_list,
+            "rpc.agent.queue.submit": self._handle_agent_queue_submit,
+            "rpc.agent.queue.run": self._handle_agent_queue_run,
+            "rpc.agent.queue.get": self._handle_agent_queue_get,
+            "rpc.agent.queue.resume": self._handle_agent_queue_resume,
+            "rpc.agent.queue.retry": self._handle_agent_queue_retry,
+            "rpc.agent.queue.cancel": self._handle_agent_queue_cancel,
+            "rpc.agent.queue.process": self._handle_agent_queue_process,
+            "rpc.agent.queue.list": self._handle_agent_queue_list,
+            "rpc.agent.artifacts.list": self._handle_agent_artifacts_list,
+            "rpc.agent.permissions.list": self._handle_agent_permissions_list,
+            "rpc.agent.permissions.rules.list": self._handle_agent_permission_rules_list,
+            "rpc.agent.permissions.rules.add": self._handle_agent_permission_rules_add,
+            "rpc.agent.permissions.rules.remove": self._handle_agent_permission_rules_remove,
             # chat.* channel: long-running conversation turn (streams via notifications)
             "chat.user_message": self._handle_agent_chat,
             # debug channel: runtime log level control
@@ -217,6 +249,27 @@ class RpcHandler:
             # workspace channel: template management
             "rpc.workspace.install_templates": self._handle_install_templates,
         }
+
+    def mark_closed(self) -> None:
+        """Mark this websocket handler as closed and unblock pending UI requests."""
+        self._closed = True
+        for fut in list(self._pending_client_requests.values()):
+            if not fut.done():
+                fut.cancel()
+        self._pending_client_requests.clear()
+
+    async def shutdown(self) -> None:
+        """Best-effort cleanup for websocket disconnect/app shutdown."""
+        self.mark_closed()
+        try:
+            await self._handle_agent_cancel({"reason": "websocket_disconnect"})
+        except Exception:
+            logger.debug("agent shutdown interrupt failed", exc_info=True)
+        try:
+            if self._script_runner is not None:
+                self._script_runner.cancel()
+        except Exception:
+            logger.debug("script runner shutdown cancel failed", exc_info=True)
 
     async def handle_message(self, raw: str) -> None:
         """Parse and route a JSON-RPC message."""
@@ -236,6 +289,15 @@ class RpcHandler:
         method = data.get("method")
         params = data.get("params", {})
         request_id = data.get("id")
+
+        if request_id is not None and not method and request_id in self._pending_client_requests:
+            fut = self._pending_client_requests.pop(request_id)
+            if not fut.done():
+                if data.get("error") is not None:
+                    fut.set_exception(RuntimeError(str(data.get("error"))))
+                else:
+                    fut.set_result(data.get("result"))
+            return
 
         if not method:
             await self._send_error(request_id, -32600, "Invalid Request: missing method")
@@ -298,7 +360,7 @@ class RpcHandler:
         skill_timeout = 50.0
         # Skills triggered directly (not via agent) still get a SkillContext
         # so context-aware display skills work end-to-end.
-        ctx = SkillContext(notify_fn=self._safe_notify)
+        ctx = SkillContext(notify_fn=self._safe_notify, request_fn=self._safe_request)
         try:
             result = await asyncio.wait_for(
                 self.skills.execute(name, args, context=ctx),
@@ -460,7 +522,8 @@ class RpcHandler:
         ]
         try:
             reply = await asyncio.to_thread(caller, test_messages)
-            if reply:
+            content = reply.content if hasattr(reply, "content") else str(reply or "")
+            if content:
                 return {"ok": True}
             else:
                 return {"ok": False, "error": "Empty response from LLM"}
@@ -469,6 +532,28 @@ class RpcHandler:
 
     async def _handle_agent_chat(self, params: dict) -> Any:
         """Start an agent conversation. Streams via JSON-RPC notifications."""
+        workspace_path = params.get("workspace_path") or None
+        lock_key = _normalise_workspace(workspace_path)
+        busy = await self._reserve_workspace_lock(lock_key, source="chat")
+        if busy is not None:
+            return busy
+        try:
+            queue_item, agent_profile, session_store = self._build_queue_item_from_chat_params(params)
+        except Exception:
+            await self._release_workspace_lock(lock_key)
+            raise
+        return await self._execute_agent_queue_item(
+            queue_item,
+            lock_key=lock_key,
+            agent_profile=agent_profile,
+            session_store=session_store,
+        )
+
+    def _build_queue_item_from_chat_params(
+        self,
+        params: dict,
+    ) -> tuple[AgentQueueItem, Any, SessionStore]:
+        """Create durable inbox + queue records from chat-style params."""
         message = params.get("message")
         if not message:
             raise ValueError("Missing required parameter: message")
@@ -480,6 +565,7 @@ class RpcHandler:
         # to persist step scripts. None means "no workspace open → fall
         # back to appdata/agent-runs/<run_id>/".
         workspace_path = params.get("workspace_path") or None
+        profile_name = params.get("agent_profile") or params.get("profile_name") or None
 
         # Process attachments: detect workflow vs regular files vs skills.
         attachments = params.get("attachments") or []
@@ -508,72 +594,228 @@ class RpcHandler:
         if regular_attachments:
             message = self._inject_attachments(message, regular_attachments)
 
-        # D2: serial lock per workspace. We reject rather than queue,
-        # keeping the state model obvious to the UI. Frontend should
-        # disable the Send button while another run is live, but if a
-        # stale tab slips a second request through we bounce it here.
-        lock_key = _normalise_workspace(workspace_path)
-        if lock_key in self._workspace_locks:
-            # If the previous task is actually done (cancel propagated),
-            # release the stale lock and proceed.
-            if self._current_agent_task is None or self._current_agent_task.done():
-                logger.info("[chat] stale lock on %s (task done), releasing.", lock_key)
-                self._workspace_locks.pop(lock_key, None)
-            else:
-                owner = self._workspace_locks[lock_key]
-                return {
-                    "status": "busy",
-                    "message": (
-                        f"another agent run is active on this workspace "
-                        f"(run_id={owner}); stop it first via rpc.agent.interrupt."
-                    ),
-                    "owner_run_id": owner,
-                }
+        workflow_meta: dict[str, Any] = {}
+        if workflow_doc is not None:
+            try:
+                workflow_meta = WorkflowDocumentStore(workspace_path).save(workflow_doc)
+            except Exception:
+                logger.debug("workflow document persistence failed (non-fatal)", exc_info=True)
 
-        agent = self._ensure_agent()
-        ctx = SkillContext(
-            notify_fn=self._safe_notify,
+        agent_profile = None
+        if profile_name:
+            agent_profile = AgentProfileStore(workspace_path).get(str(profile_name))
+        inbox_item = AgentInboxItem.create(
+            prompt=message,
             conversation_id=params.get("conversation_id"),
-            meta={"workspace_path": workspace_path} if workspace_path else {},
+            profile_name=agent_profile.name if agent_profile is not None else str(profile_name or "gis-build"),
+            metadata={
+                "workspace_path": workspace_path,
+                "has_workflow": workflow_doc is not None,
+                "skill_groups": skill_groups,
+                "generate_title": bool(params.get("generate_title", False)),
+                **workflow_meta,
+            },
+        )
+        session_store = SessionStore(workspace_path)
+        session_store.add_inbox(inbox_item)
+        queue_item = self._agent_queue.enqueue(
+            AgentQueueItem.create(
+                inbox=inbox_item,
+                message=message,
+                workspace_path=workspace_path,
+                workflow=workflow_doc,
+                skill_groups=skill_groups,
+                user_instructions=user_instructions,
+                profile_name=profile_name,
+                conversation_id=params.get("conversation_id"),
+                metadata={
+                    "has_workflow": workflow_doc is not None,
+                    "skill_groups": skill_groups,
+                    "workspace_path": workspace_path,
+                    "generate_title": bool(params.get("generate_title", False)),
+                    **workflow_meta,
+                },
+            )
+        )
+        session_store.update_inbox(
+            inbox_item.id,
+            status=InboxStatus.QUEUED,
+            metadata={"queue_id": queue_item.id},
         )
 
+        return queue_item, agent_profile, session_store
+
+    def _resolve_queue_item(self, params: dict) -> AgentQueueItem | None:
+        queue_id = params.get("queue_id")
+        inbox_id = params.get("inbox_id")
+        workspace = params.get("workspace_path")
+        if queue_id:
+            item = self._agent_queue.get(str(queue_id))
+            if item is not None:
+                return item
+        if inbox_id:
+            item = self._agent_queue.get_by_inbox_id(str(inbox_id))
+            if item is not None:
+                return item
+        if not workspace:
+            return None
+        store = SessionStore(str(workspace))
+        raw = None
+        if inbox_id:
+            raw = store.get_inbox(str(inbox_id))
+        if raw is None and queue_id:
+            raw = store.find_inbox_by_queue_id(str(queue_id))
+        if raw is None:
+            return None
+        return self._agent_queue.ensure_from_inbox(raw)
+
+    def _restore_queue_from_workspace(
+        self,
+        workspace: str,
+        *,
+        limit: int = 100,
+    ) -> list[AgentQueueItem]:
+        store = SessionStore(workspace)
+        restored: list[AgentQueueItem] = []
+        for raw in store.list_resumable_inbox(limit=limit):
+            item = self._agent_queue.ensure_from_inbox(raw)
+            metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+            if not isinstance(metadata.get("queue_id"), str):
+                store.update_inbox(raw["id"], metadata={"queue_id": item.id})
+            restored.append(item)
+        return restored
+
+    async def _execute_agent_queue_item(
+        self,
+        queue_item: AgentQueueItem,
+        *,
+        lock_key: str,
+        agent_profile: Any = None,
+        session_store: SessionStore | None = None,
+    ) -> dict[str, Any]:
+        """Execute one queued agent item using the current streaming RPC contract."""
+        agent = self._ensure_agent()
+        session_store = session_store or SessionStore(queue_item.workspace_path)
+        ctx = SkillContext(
+            notify_fn=self._safe_notify,
+            request_fn=self._safe_request,
+            conversation_id=queue_item.conversation_id,
+            meta={"workspace_path": queue_item.workspace_path} if queue_item.workspace_path else {},
+        )
+        ctx.meta["_approval_callback"] = self._approval_callback
+        ctx.meta["_inbox_id"] = queue_item.inbox.id
+        ctx.meta["_queue_id"] = queue_item.id
+        if agent_profile is not None:
+            ctx.meta["agent_profile"] = agent_profile
+
         # We don't know the run_id until ScriptArchive.for_run generates
-        # one inside agent.run(); stash a placeholder and overwrite as
-        # soon as ctx.meta['run_id'] becomes available.
-        self._workspace_locks[lock_key] = "pending"
+        # one inside agent.run(); callers normally reserve the lock before
+        # reaching this method, but keep this fallback for direct/internal
+        # execution paths.
+        async with self._workspace_lock_guard:
+            self._workspace_locks.setdefault(lock_key, "pending")
 
         async def _drive():
             try:
-                async for event in agent.run(message, context=ctx, workflow=workflow_doc, active_skill_groups=skill_groups, user_instructions=user_instructions):
+                queue_item.mark(AgentQueueStatus.RUNNING)
+                session_store.update_inbox(queue_item.inbox.id, status=InboxStatus.RUNNING)
+                async for event in agent.run(
+                    queue_item.message,
+                    context=ctx,
+                    workflow=queue_item.workflow,
+                    active_skill_groups=queue_item.skill_groups,
+                    user_instructions=queue_item.user_instructions,
+                ):
                     # Promote the lock owner now that we know the run_id.
-                    if self._workspace_locks.get(lock_key) == "pending":
-                        rid = (ctx.meta or {}).get("run_id")
-                        if rid:
-                            self._workspace_locks[lock_key] = rid
+                    rid = (ctx.meta or {}).get("run_id")
+                    if rid:
+                        async with self._workspace_lock_guard:
+                            should_promote = self._workspace_locks.get(lock_key) == "pending"
+                            if should_promote:
+                                self._workspace_locks[lock_key] = rid
+                        if should_promote:
+                            queue_item.mark(AgentQueueStatus.RUNNING, run_id=rid)
+                            agent_session = (ctx.meta or {}).get("_agent_session")
+                            session_store.update_inbox(
+                                queue_item.inbox.id,
+                                status=InboxStatus.RUNNING,
+                                run_id=rid,
+                                session_id=getattr(agent_session, "id", None),
+                            )
                     await self._emit_agent_event(event)
                 # After successful run, generate a conversation title
                 # in the background (non-blocking) to avoid delaying
                 # the stream_end event.
-                asyncio.create_task(
-                    self._generate_title_if_needed(message, params.get("conversation_id"), workspace_path)
+                agent_session = (ctx.meta or {}).get("_agent_session")
+                queue_item.mark(
+                    AgentQueueStatus.SUCCESS,
+                    run_id=(ctx.meta or {}).get("run_id"),
                 )
+                session_store.update_inbox(
+                    queue_item.inbox.id,
+                    status=InboxStatus.SUCCESS,
+                    run_id=(ctx.meta or {}).get("run_id"),
+                    session_id=getattr(agent_session, "id", None),
+                )
+                if bool(queue_item.metadata.get("generate_title", False)):
+                    asyncio.create_task(
+                        self._generate_title_if_needed(
+                            queue_item.message,
+                            queue_item.conversation_id,
+                            queue_item.workspace_path,
+                        )
+                    )
             except asyncio.CancelledError:
+                queue_item.mark(
+                    AgentQueueStatus.CANCELLED,
+                    run_id=(ctx.meta or {}).get("run_id"),
+                )
+                session_store.update_inbox(
+                    queue_item.inbox.id,
+                    status=InboxStatus.CANCELLED,
+                    run_id=(ctx.meta or {}).get("run_id"),
+                )
                 await self._send_notification("chat.cancelled", {})
                 raise
             except Exception as e:
                 traceback.print_exc()
+                queue_item.mark(
+                    AgentQueueStatus.ERROR,
+                    run_id=(ctx.meta or {}).get("run_id"),
+                    error=str(e),
+                )
+                session_store.update_inbox(
+                    queue_item.inbox.id,
+                    status=InboxStatus.ERROR,
+                    run_id=(ctx.meta or {}).get("run_id"),
+                    error=str(e),
+                )
                 await self._send_notification("chat.error", {"error": self._humanize_error(str(e))})
 
         # Track the task so agent.cancel can interrupt.
         self._current_agent_task = asyncio.create_task(_drive())
+        self._current_agent_lock_key = lock_key
         try:
             await self._current_agent_task
         finally:
             self._current_agent_task = None
+            if self._current_agent_lock_key == lock_key:
+                self._current_agent_lock_key = None
             # D2: always release the lock, even on error/cancel.
-            self._workspace_locks.pop(lock_key, None)
+            await self._release_workspace_lock(lock_key)
 
-        return {"status": "completed", "run_id": (ctx.meta or {}).get("run_id")}
+        status = {
+            AgentQueueStatus.SUCCESS: "completed",
+            AgentQueueStatus.ERROR: "error",
+            AgentQueueStatus.CANCELLED: "cancelled",
+        }.get(queue_item.status, queue_item.status.value)
+        return {
+            "status": status,
+            "run_id": (ctx.meta or {}).get("run_id"),
+            "inbox_id": queue_item.inbox.id,
+            "queue_id": queue_item.id,
+            "item": queue_item.to_dict(),
+        }
 
     async def _handle_agent_cancel(self, params: dict) -> Any:
         """Interrupt the running agent — kill the subprocess and release locks."""
@@ -659,14 +901,66 @@ class RpcHandler:
         else:
             logger.debug("[CANCEL] %s NO active agent task to cancel!", _elapsed())
 
-        if self._workspace_locks:
-            released = list(self._workspace_locks.keys())
-            self._workspace_locks.clear()
-            logger.debug("[CANCEL] %s force-released locks: %s", _elapsed(), released)
+        released = await self._release_cancelled_workspace_locks(params)
+        if released:
+            logger.debug("[CANCEL] %s released locks: %s", _elapsed(), released)
 
         logger.debug("[CANCEL] %s _handle_agent_cancel DONE, returning status=%s",
                     _elapsed(), "cancelled" if cancelled else "idle")
         return {"status": "cancelled" if cancelled else "idle"}
+
+    async def _reserve_workspace_lock(self, lock_key: str, *, source: str) -> dict[str, Any] | None:
+        """Atomically reserve a workspace run slot or return a busy response."""
+        async with self._workspace_lock_guard:
+            if lock_key in self._workspace_locks:
+                # If the previous task is actually done (cancel propagated),
+                # release the stale lock and proceed.
+                if self._current_agent_task is None or self._current_agent_task.done():
+                    logger.info("[%s] stale lock on %s (task done), releasing.", source, lock_key)
+                    self._workspace_locks.pop(lock_key, None)
+                else:
+                    owner = self._workspace_locks[lock_key]
+                    return {
+                        "status": "busy",
+                        "message": (
+                            f"another agent run is active on this workspace "
+                            f"(run_id={owner}); stop it first via rpc.agent.interrupt."
+                        ),
+                        "owner_run_id": owner,
+                    }
+            self._workspace_locks[lock_key] = "pending"
+        return None
+
+    async def _release_workspace_lock(self, lock_key: str) -> None:
+        async with self._workspace_lock_guard:
+            self._workspace_locks.pop(lock_key, None)
+
+    async def _release_cancelled_workspace_locks(self, params: dict) -> list[str]:
+        workspace_path = params.get("workspace_path") or None
+        run_id = params.get("run_id") or params.get("owner_run_id")
+        async with self._workspace_lock_guard:
+            if workspace_path:
+                lock_key = _normalise_workspace(str(workspace_path))
+                if lock_key in self._workspace_locks:
+                    self._workspace_locks.pop(lock_key, None)
+                    return [lock_key]
+                return []
+            if run_id:
+                released = [
+                    key for key, owner in self._workspace_locks.items()
+                    if owner == run_id
+                ]
+                for key in released:
+                    self._workspace_locks.pop(key, None)
+                return released
+            # Legacy clients did not send a workspace. Release only the
+            # active run tracked by this handler instead of clearing every
+            # workspace lock in the process.
+            lock_key = self._current_agent_lock_key
+            if lock_key and lock_key in self._workspace_locks:
+                self._workspace_locks.pop(lock_key, None)
+                return [lock_key]
+            return []
 
     # ─── Debug: log level control ──────────────────────────────────────
 
@@ -789,7 +1083,254 @@ class RpcHandler:
         ra = RunArchive.load(workspace, run_id)
         if ra is None:
             return {"status": "not_found"}
-        return {"status": "ok", "meta": ra.meta, "steps": ra.read_steps()}
+        return {
+            "status": "ok",
+            "meta": ra.meta,
+            "steps": ra.read_steps(),
+            "tool_calls": ra.read_tool_calls(),
+            "tool_call_events": ra.read_tool_call_events(),
+            "artifacts": ra.read_artifacts(),
+        }
+
+    async def _handle_agent_profiles_list(self, params: dict) -> Any:
+        """List built-in plus workspace-defined agent profiles."""
+        workspace = params.get("workspace_path")
+        profiles = AgentProfileStore(workspace).load_all()
+        return {
+            "profiles": [
+                profile.to_dict()
+                for profile in sorted(profiles.values(), key=lambda p: p.name)
+            ]
+        }
+
+    async def _handle_agent_profiles_install_defaults(self, params: dict) -> Any:
+        """Install the default profile config into ``.opengis/agents.json``."""
+        workspace = params.get("workspace_path")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        path = AgentProfileStore(workspace).install_defaults()
+        if not path:
+            return {"status": "error", "message": "failed to install default profiles"}
+        return {"status": "ok", "path": path}
+
+    async def _handle_agent_sessions_list(self, params: dict) -> Any:
+        """List recent agent sessions for the workspace."""
+        workspace = params.get("workspace_path")
+        limit = int(params.get("limit", 100))
+        return {"sessions": SessionStore(workspace).list_recent(limit=limit)}
+
+    async def _handle_agent_inbox_list(self, params: dict) -> Any:
+        """List durable prompt admission records for the workspace."""
+        workspace = params.get("workspace_path")
+        status = params.get("status")
+        if status is not None:
+            status = str(status)
+            valid = {item.value for item in InboxStatus}
+            if status not in valid:
+                raise ValueError(f"status must be one of: {', '.join(sorted(valid))}")
+        limit = int(params.get("limit", 100))
+        return {
+            "items": SessionStore(workspace).list_inbox(status=status, limit=limit)
+        }
+
+    async def _handle_agent_queue_submit(self, params: dict) -> Any:
+        """Submit an agent prompt to the queue without executing it yet."""
+        queue_item, _agent_profile, _session_store = self._build_queue_item_from_chat_params(params)
+        return {
+            "status": "queued",
+            "queue_id": queue_item.id,
+            "inbox_id": queue_item.inbox.id,
+            "item": queue_item.to_dict(),
+        }
+
+    async def _handle_agent_queue_run(self, params: dict) -> Any:
+        """Execute a queued agent item by queue_id."""
+        queue_item = self._resolve_queue_item(params)
+        if queue_item is None:
+            return {"status": "not_found", "message": "no queue item found"}
+        if queue_item.status != AgentQueueStatus.QUEUED:
+            return {
+                "status": "invalid_state",
+                "message": f"queue item is {queue_item.status.value}, not queued",
+                "item": queue_item.to_dict(),
+            }
+        return await self._run_queue_item_with_lock(queue_item)
+
+    async def _run_queue_item_with_lock(self, queue_item: AgentQueueItem) -> dict[str, Any]:
+        """Run one queue item under the workspace serial lock."""
+        lock_key = _normalise_workspace(queue_item.workspace_path)
+        busy = await self._reserve_workspace_lock(lock_key, source="queue.run")
+        if busy is not None:
+            return busy
+
+        agent_profile = None
+        if queue_item.profile_name:
+            agent_profile = AgentProfileStore(queue_item.workspace_path).get(queue_item.profile_name)
+        return await self._execute_agent_queue_item(
+            queue_item,
+            lock_key=lock_key,
+            agent_profile=agent_profile,
+            session_store=SessionStore(queue_item.workspace_path),
+        )
+
+    async def _handle_agent_queue_get(self, params: dict) -> Any:
+        """Get one queue item by queue_id or inbox_id."""
+        queue_item = self._resolve_queue_item(params)
+        if queue_item is None:
+            return {"status": "not_found"}
+        return {"status": "ok", "item": queue_item.to_dict()}
+
+    async def _handle_agent_queue_resume(self, params: dict) -> Any:
+        """Restore queued/resumable inbox items from workspace storage."""
+        workspace = params.get("workspace_path")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        limit = int(params.get("limit", 100))
+        items = [item.to_dict() for item in self._restore_queue_from_workspace(str(workspace), limit=limit)]
+        return {"status": "ok", "items": items}
+
+    async def _handle_agent_queue_retry(self, params: dict) -> Any:
+        """Reset a failed/cancelled queue item back to queued."""
+        queue_item = self._resolve_queue_item(params)
+        if queue_item is None:
+            return {"status": "not_found"}
+        if queue_item.status not in {AgentQueueStatus.ERROR, AgentQueueStatus.CANCELLED}:
+            return {
+                "status": "invalid_state",
+                "message": f"queue item is {queue_item.status.value}, not retryable",
+                "item": queue_item.to_dict(),
+            }
+        queue_item.reset_for_retry()
+        SessionStore(queue_item.workspace_path).update_inbox(
+            queue_item.inbox.id,
+            status=InboxStatus.QUEUED,
+            error="",
+            metadata={"queue_id": queue_item.id, "retry": True},
+        )
+        return {"status": "queued", "item": queue_item.to_dict()}
+
+    async def _handle_agent_queue_cancel(self, params: dict) -> Any:
+        """Cancel a queued item, or delegate to active agent interrupt if running."""
+        queue_item = self._resolve_queue_item(params)
+        if queue_item is None:
+            return {"status": "not_found"}
+        if queue_item.status == AgentQueueStatus.RUNNING:
+            result = await self._handle_agent_cancel(params)
+            return {"status": result.get("status", "cancelled"), "item": queue_item.to_dict()}
+        if queue_item.status == AgentQueueStatus.QUEUED:
+            queue_item.cancel()
+            SessionStore(queue_item.workspace_path).update_inbox(
+                queue_item.inbox.id,
+                status=InboxStatus.CANCELLED,
+                error="cancelled before execution",
+            )
+            return {"status": "cancelled", "item": queue_item.to_dict()}
+        return {
+            "status": "invalid_state",
+            "message": f"queue item is {queue_item.status.value}, not cancellable",
+            "item": queue_item.to_dict(),
+        }
+
+    async def _handle_agent_queue_process(self, params: dict) -> Any:
+        """Process queued items for one workspace using the streaming path."""
+        workspace = params.get("workspace_path") or None
+        lock_key = _normalise_workspace(workspace)
+        existing = self._queue_processors.get(lock_key)
+        if existing is not None and not existing.done():
+            return {"status": "busy", "message": "queue processor is already running"}
+        limit = int(params.get("limit", 1))
+
+        async def _process() -> list[dict[str, Any]]:
+            if workspace:
+                self._restore_queue_from_workspace(str(workspace), limit=max(limit, 100))
+            processed: list[dict[str, Any]] = []
+            for _ in range(max(1, limit)):
+                queue_item = self._agent_queue.next_queued(workspace_path=workspace)
+                if queue_item is None:
+                    break
+                result = await self._run_queue_item_with_lock(queue_item)
+                processed.append(result)
+                if result.get("status") == "busy":
+                    break
+            return processed
+
+        task = asyncio.create_task(_process())
+        self._queue_processors[lock_key] = task
+        try:
+            processed = await task
+        finally:
+            if self._queue_processors.get(lock_key) is task:
+                self._queue_processors.pop(lock_key, None)
+        return {"status": "ok", "processed": processed}
+
+    async def _handle_agent_queue_list(self, params: dict) -> Any:
+        """List in-process agent queue items for the current backend."""
+        status = params.get("status")
+        if status is not None:
+            status = str(status)
+            valid = {item.value for item in AgentQueueStatus}
+            if status not in valid:
+                raise ValueError(f"status must be one of: {', '.join(sorted(valid))}")
+        limit = int(params.get("limit", 100))
+        return {"items": self._agent_queue.list(status=status, limit=limit)}
+
+    async def _handle_agent_artifacts_list(self, params: dict) -> Any:
+        """List recent workspace artifact references produced by agent tools."""
+        workspace = params.get("workspace_path")
+        limit = int(params.get("limit", 100))
+        return {"artifacts": ArtifactIndex(workspace).list_recent(limit=limit)}
+
+    async def _handle_agent_permissions_list(self, params: dict) -> Any:
+        """List recent permission requests, including pending approvals."""
+        status = params.get("status")
+        if status is not None:
+            status = str(status)
+            if status not in {"pending", "resolved"}:
+                raise ValueError("status must be 'pending' or 'resolved'")
+        limit = int(params.get("limit", 100))
+        return {
+            "requests": self._permission_requests.list(status=status, limit=limit)
+        }
+
+    async def _handle_agent_permission_rules_list(self, params: dict) -> Any:
+        """List persisted workspace permission rules."""
+        workspace = params.get("workspace_path")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        return {"rules": PermissionRuleStore(workspace).list_rules()}
+
+    async def _handle_agent_permission_rules_add(self, params: dict) -> Any:
+        """Add a persisted workspace permission rule."""
+        workspace = params.get("workspace_path")
+        tool = params.get("tool") or params.get("pattern")
+        action_raw = params.get("action")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        if not tool:
+            raise ValueError("Missing required parameter: tool")
+        try:
+            action = PermissionAction(str(action_raw))
+        except ValueError:
+            raise ValueError("action must be one of: allow, ask, deny")
+        rule = PermissionRuleStore(workspace).add_rule(
+            tool=str(tool),
+            action=action,
+            scope=str(params.get("scope") or "workspace"),
+            reason=str(params.get("reason") or ""),
+            profile_name=params.get("profile_name"),
+        )
+        return {"status": "ok", "rule": rule}
+
+    async def _handle_agent_permission_rules_remove(self, params: dict) -> Any:
+        """Remove a persisted workspace permission rule."""
+        workspace = params.get("workspace_path")
+        rule_id = params.get("rule_id") or params.get("id")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        if not rule_id:
+            raise ValueError("Missing required parameter: rule_id")
+        removed = PermissionRuleStore(workspace).remove_rule(str(rule_id))
+        return {"status": "ok" if removed else "not_found", "removed": removed}
 
     async def _handle_runs_replay(self, params: dict) -> Any:
         """Replay a previous run's prompt on the current model.
@@ -890,8 +1431,9 @@ class RpcHandler:
                 },
                 {"role": "user", "content": user_message[:200]},
             ]
-            title = await asyncio.to_thread(caller, title_messages)
-            title = title.strip().strip("\"'").strip()
+            raw_title = await asyncio.to_thread(caller, title_messages)
+            title_text = raw_title.content if hasattr(raw_title, "content") else str(raw_title or "")
+            title = title_text.strip().strip("\"'").strip()
             logger.info("Generated title: %r (len=%d)", title, len(title))
             if title and len(title) <= 60:
                 await self._send_notification(
@@ -1116,6 +1658,98 @@ class RpcHandler:
         except Exception as e:
             print(f"[RpcHandler] notify failed: {e}")
 
+    async def _safe_request(self, method: str, params: dict) -> Any:
+        """Thread-safe request callback for context-aware read skills."""
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("Frontend request channel is not connected.")
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._loop:
+            return await self._request_client(method, params)
+        fut = asyncio.run_coroutine_threadsafe(
+            self._request_client(method, params),
+            self._loop,
+        )
+        return fut.result(timeout=65)
+
+    def _approval_callback(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        decision: PermissionDecision,
+    ) -> PermissionDecision:
+        """Synchronously ask the frontend whether an ASK decision is allowed."""
+        if self._loop is None or not self._loop.is_running():
+            return PermissionDecision(
+                PermissionAction.DENY,
+                "Approval UI is not connected.",
+                decision.rule,
+            )
+        code = str(arguments.get("code") or "")
+        detail = decision.reason or f"Agent requests permission for {tool_name}."
+        request = self._permission_requests.create(
+            tool_name=tool_name,
+            arguments=arguments,
+            decision=decision,
+        )
+        params = {
+            "request_id": request.id,
+            "tool_name": tool_name,
+            "question": f"Allow agent tool call: {tool_name}?",
+            "reason": detail,
+            "danger": True,
+            "timeout_seconds": 120,
+        }
+        if tool_name == "execute_code":
+            params = {
+                "request_id": request.id,
+                "tool_name": tool_name,
+                "run_id": str(arguments.get("run_id") or "pending"),
+                "step": 0,
+                "code": code,
+                "risky_operations": [detail],
+                "explanation": detail,
+                "timeout_seconds": 120,
+            }
+            method = "rpc.ui.ask.approve_code"
+        else:
+            method = "rpc.ui.ask.confirm"
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._request_client(method, params, timeout=120),
+                self._loop,
+            )
+            result = fut.result(timeout=125)
+            approved = bool((result or {}).get("approved"))
+        except Exception as e:
+            logger.warning("approval request failed for %s: %s", tool_name, e)
+            approved = False
+
+        if approved:
+            self._permission_requests.resolve(
+                request.id,
+                action=PermissionAction.ALLOW,
+                reason=f"Approved by user: {decision.reason}",
+            )
+            return PermissionDecision(
+                PermissionAction.ALLOW,
+                f"Approved by user: {decision.reason}",
+                decision.rule,
+            )
+        self._permission_requests.resolve(
+            request.id,
+            action=PermissionAction.DENY,
+            reason=f"Denied by user: {decision.reason}",
+        )
+        return PermissionDecision(
+            PermissionAction.DENY,
+            f"Denied by user: {decision.reason}",
+            decision.rule,
+        )
+
     # ─── User Instructions ───
 
     async def _handle_ui_get(self, params: dict) -> Any:
@@ -1133,7 +1767,11 @@ class RpcHandler:
     # ─── JSON-RPC Helpers ───
 
     async def _send_result(self, request_id: str, result: Any) -> None:
+        if self._closed:
+            return
         async with self._ws_write_lock:
+            if self._closed:
+                return
             await self.ws.send_text(
                 json.dumps(
                     {
@@ -1146,7 +1784,11 @@ class RpcHandler:
             )
 
     async def _send_error(self, request_id: str | None, code: int, message: str) -> None:
+        if self._closed:
+            return
         async with self._ws_write_lock:
+            if self._closed:
+                return
             await self.ws.send_text(
                 json.dumps(
                     {
@@ -1159,7 +1801,11 @@ class RpcHandler:
             )
 
     async def _send_notification(self, method: str, params: dict) -> None:
+        if self._closed:
+            return
         async with self._ws_write_lock:
+            if self._closed:
+                return
             await self.ws.send_text(
                 json.dumps(
                     {
@@ -1170,3 +1816,34 @@ class RpcHandler:
                     cls=NumpyEncoder,
                 )
             )
+
+    async def _request_client(
+        self,
+        method: str,
+        params: dict,
+        *,
+        timeout: float = 60.0,
+    ) -> Any:
+        """Send a JSON-RPC request to the frontend and await its response."""
+        if self._closed:
+            raise RuntimeError("Frontend request channel is closed.")
+        request_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_client_requests[request_id] = fut
+        try:
+            async with self._ws_write_lock:
+                await self.ws.send_text(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": method,
+                            "params": params,
+                        },
+                        cls=NumpyEncoder,
+                    )
+                )
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            self._pending_client_requests.pop(request_id, None)

@@ -20,6 +20,87 @@ from opengis_backend.skills.context import SkillContext, run_async_from_sync
 from opengis_backend.skills.registry import skill
 
 
+def _style_payload(
+    *,
+    geometry_type: Optional[str] = None,
+    color: Optional[str] = None,
+    opacity: Optional[float] = None,
+    fill_color: Optional[str] = None,
+    fill_opacity: Optional[float] = None,
+    line_color: Optional[str] = None,
+    line_width: Optional[float] = None,
+    line_opacity: Optional[float] = None,
+    border_color: Optional[str] = None,
+    border_width: Optional[float] = None,
+    border_opacity: Optional[float] = None,
+    point_color: Optional[str] = None,
+    point_size: Optional[float] = None,
+    point_opacity: Optional[float] = None,
+) -> Optional[dict]:
+    """
+    Build a frontend-compatible MapLibre-ish style payload from agent-friendly
+    arguments. The TS side maps these paint keys onto OpenGIS LayerStyle.
+    """
+    paint: dict[str, Any] = {}
+
+    geom = (geometry_type or "").lower()
+    if geom in {"point", "multipoint"}:
+        style_type = "circle"
+    elif geom in {"linestring", "multilinestring"}:
+        style_type = "line"
+    else:
+        style_type = "fill"
+
+    if color is not None:
+        if style_type == "circle":
+            point_color = point_color or color
+        elif style_type == "line":
+            line_color = line_color or color
+        else:
+            fill_color = fill_color or color
+    if opacity is not None:
+        if style_type == "circle":
+            point_opacity = point_opacity if point_opacity is not None else opacity
+        elif style_type == "line":
+            line_opacity = line_opacity if line_opacity is not None else opacity
+        else:
+            fill_opacity = fill_opacity if fill_opacity is not None else opacity
+
+    if fill_color is not None:
+        paint["fill-color"] = fill_color
+    if fill_opacity is not None:
+        paint["fill-opacity"] = float(fill_opacity)
+
+    stroke_color = border_color or line_color
+    stroke_width = border_width if border_width is not None else line_width
+    stroke_opacity = border_opacity if border_opacity is not None else line_opacity
+    if line_color is not None:
+        paint["line-color"] = line_color
+    if line_width is not None:
+        paint["line-width"] = float(line_width)
+    if line_opacity is not None:
+        paint["line-opacity"] = float(line_opacity)
+    if stroke_color is not None:
+        paint["stroke-color"] = stroke_color
+        paint["circle-stroke-color"] = stroke_color
+    if stroke_width is not None:
+        paint["stroke-width"] = float(stroke_width)
+        paint["circle-stroke-width"] = float(stroke_width)
+    if stroke_opacity is not None:
+        paint["stroke-opacity"] = float(stroke_opacity)
+
+    if point_color is not None:
+        paint["circle-color"] = point_color
+    if point_size is not None:
+        paint["circle-radius"] = float(point_size)
+    if point_opacity is not None:
+        paint["circle-opacity"] = float(point_opacity)
+
+    if not paint:
+        return None
+    return {"type": style_type, "paint": paint}
+
+
 def _load_geojson_from_path(geojson_path: str) -> tuple[dict, str]:
     """
     Load a GeoJSON dict from a file path.
@@ -185,6 +266,28 @@ def _resolve_workspace_path(ctx: SkillContext, raw_path: str) -> str:
          "description": "Fill / line color, e.g. '#ff6600'. Defaults to a system color."},
         {"name": "opacity", "type": "number", "required": False,
          "description": "Layer opacity 0.0-1.0. Default 0.8."},
+        {"name": "fill_color", "type": "string", "required": False,
+         "description": "Polygon fill color, e.g. '#88ccff'."},
+        {"name": "fill_opacity", "type": "number", "required": False,
+         "description": "Polygon fill opacity 0.0-1.0."},
+        {"name": "line_color", "type": "string", "required": False,
+         "description": "Line color for line layers, or polygon outline color."},
+        {"name": "line_width", "type": "number", "required": False,
+         "description": "Line width / polygon outline width in pixels."},
+        {"name": "line_opacity", "type": "number", "required": False,
+         "description": "Line opacity 0.0-1.0."},
+        {"name": "border_color", "type": "string", "required": False,
+         "description": "Polygon/point border color. Alias for stroke color."},
+        {"name": "border_width", "type": "number", "required": False,
+         "description": "Polygon/point border width in pixels."},
+        {"name": "border_opacity", "type": "number", "required": False,
+         "description": "Polygon/point border opacity 0.0-1.0."},
+        {"name": "point_color", "type": "string", "required": False,
+         "description": "Point fill color."},
+        {"name": "point_size", "type": "number", "required": False,
+         "description": "Point radius in pixels."},
+        {"name": "point_opacity", "type": "number", "required": False,
+         "description": "Point opacity 0.0-1.0."},
     ],
     returns=(
         "dict with keys: layer_id (str), bbox (list[float] [minx, miny, maxx, maxy] "
@@ -205,6 +308,17 @@ def add_layer(
     name: Optional[str] = None,
     color: Optional[str] = None,
     opacity: Optional[float] = None,
+    fill_color: Optional[str] = None,
+    fill_opacity: Optional[float] = None,
+    line_color: Optional[str] = None,
+    line_width: Optional[float] = None,
+    line_opacity: Optional[float] = None,
+    border_color: Optional[str] = None,
+    border_width: Optional[float] = None,
+    border_opacity: Optional[float] = None,
+    point_color: Optional[str] = None,
+    point_size: Optional[float] = None,
+    point_opacity: Optional[float] = None,
 ) -> dict:
     if not geojson_path and not geojson:
         raise ValueError("add_layer requires either geojson_path or geojson")
@@ -233,16 +347,29 @@ def add_layer(
 
     payload["layer_id"] = layer_id
     payload["name"] = name or layer_id
-    if color:
-        payload["color"] = color
-    if opacity is not None:
-        payload["opacity"] = float(opacity)
-
     # Compute bbox locally so we can return it synchronously to the
     # agent's python sandbox — the frontend doesn't need to round-trip.
     bbox, feature_count, geometry_type = _compute_geojson_bbox(geojson_obj)
     if bbox is not None:
         payload["bbox"] = bbox
+    style = _style_payload(
+        geometry_type=geometry_type,
+        color=color,
+        opacity=opacity,
+        fill_color=fill_color,
+        fill_opacity=fill_opacity,
+        line_color=line_color,
+        line_width=line_width,
+        line_opacity=line_opacity,
+        border_color=border_color,
+        border_width=border_width,
+        border_opacity=border_opacity,
+        point_color=point_color,
+        point_size=point_size,
+        point_opacity=point_opacity,
+    )
+    if style:
+        payload["style"] = style
 
     _notify_map(ctx, "rpc.ui.map.add_layer_from_geojson", payload)
 
@@ -278,6 +405,86 @@ def remove_layer(ctx: SkillContext, layer_id: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# map read tools
+# ──────────────────────────────────────────────────────────────────────
+@skill(
+    name="list_layers",
+    display_name="List Map Layers",
+    description=(
+        "Read the current frontend map layer list. Use this whenever the user "
+        "asks what layers are on the map, how many layers exist, or asks for "
+        "current layer ids/names."
+    ),
+    category="visualization",
+    params=[],
+    returns="dict with keys: layers (list of layer summaries) and count (int).",
+    examples=["How many layers are on the current map?", "List current layer ids"],
+    tags=["map", "layer", "inspect", "current-state"],
+    needs_context=True,
+)
+def list_layers(ctx: SkillContext) -> dict:
+    return run_async_from_sync(ctx.request("rpc.ui.map.list_layers", {}))
+
+
+@skill(
+    name="get_layer",
+    display_name="Get Map Layer",
+    description=(
+        "Read metadata for one current frontend map layer by id. Use after "
+        "list_layers when you need bbox, geometry type, fields, visibility, "
+        "or renderer/style information."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "Layer id from list_layers()."},
+    ],
+    returns="dict containing the layer summary, fields, style, bbox, and visibility.",
+    examples=["Get metadata for the Shanghai districts layer"],
+    tags=["map", "layer", "inspect", "current-state"],
+    needs_context=True,
+)
+def get_layer(ctx: SkillContext, layer_id: str) -> dict:
+    return run_async_from_sync(ctx.request("rpc.ui.map.get_layer", {"layer_id": layer_id}))
+
+
+@skill(
+    name="query_features",
+    display_name="Query Map Features",
+    description=(
+        "Query features from a current frontend vector layer by attribute, bbox, "
+        "or point. Use this only when the user asks to inspect actual feature "
+        "records; use list_layers/get_layer for layer inventory."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "Vector layer id from list_layers()."},
+        {"name": "filter", "type": "object", "required": False,
+         "description": "Optional filter dict: {'attribute': [{'field': str, 'op': '=', 'value': any}], 'bbox': [minx,miny,maxx,maxy], 'point': [lng,lat]}."},
+        {"name": "limit", "type": "number", "required": False,
+         "description": "Maximum number of features to return. Default 1000."},
+    ],
+    returns="dict with keys: layer_id, total_matched, truncated, features.",
+    examples=["Query the selected layer for POI type='school'"],
+    tags=["map", "layer", "feature", "inspect", "query"],
+    needs_context=True,
+)
+def query_features(
+    ctx: SkillContext,
+    layer_id: str,
+    filter: Optional[dict] = None,
+    limit: Optional[float] = None,
+) -> dict:
+    payload: dict = {"layer_id": layer_id}
+    if filter is not None:
+        payload["filter"] = filter
+    if limit is not None:
+        payload["limit"] = int(limit)
+    return run_async_from_sync(ctx.request("rpc.ui.map.query_features", payload))
+
+
+# ──────────────────────────────────────────────────────────────────────
 # fly_to
 # ──────────────────────────────────────────────────────────────────────
 @skill(
@@ -296,7 +503,7 @@ def remove_layer(ctx: SkillContext, layer_id: str) -> bool:
          "description": "Target latitude."},
         {"name": "zoom", "type": "number", "required": False,
          "description": "Target zoom level (0-22)."},
-        {"name": "bbox", "type": "any", "required": False,
+        {"name": "bbox", "type": "array", "required": False,
          "description": "Bounding box as a list [minx, miny, maxx, maxy] OR a JSON-encoded string. Overrides lng/lat."},
         {"name": "duration", "type": "number", "required": False,
          "description": "Animation duration in ms. Default 1500."},
@@ -399,7 +606,10 @@ def zoom_to_layer(
 @skill(
     name="set_basemap",
     display_name="Set Basemap",
-    description="Switch the basemap. Common ids: 'osm', 'satellite', 'dark', 'light', 'terrain'.",
+    description=(
+        "Switch the basemap. Common ids: 'osm', 'satellite', 'dark', 'light'. "
+        "Use set_basemap_visibility(False) to hide the basemap entirely."
+    ),
     category="visualization",
     params=[
         {"name": "basemap_id", "type": "string", "required": True,
@@ -416,12 +626,39 @@ def set_basemap(ctx: SkillContext, basemap_id: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# set_basemap_visibility
+# ──────────────────────────────────────────────────────────────────────
+@skill(
+    name="set_basemap_visibility",
+    display_name="Set Basemap Visibility",
+    description="Show or hide the basemap without changing vector/raster layer visibility.",
+    category="visualization",
+    params=[
+        {"name": "visible", "type": "boolean", "required": True,
+         "description": "True to show the basemap, False to hide it."},
+    ],
+    returns="dict with keys: success (bool), visible (bool)",
+    examples=["Hide the basemap", "Show the basemap again"],
+    tags=["map", "basemap", "visibility"],
+    needs_context=True,
+)
+def set_basemap_visibility(ctx: SkillContext, visible: bool) -> dict:
+    run_async_from_sync(
+        ctx.notify("rpc.ui.map.set_basemap_visibility", {"visible": bool(visible)})
+    )
+    return {"success": True, "visible": bool(visible)}
+
+
+# ──────────────────────────────────────────────────────────────────────
 # update_layer_style
 # ──────────────────────────────────────────────────────────────────────
 @skill(
     name="update_layer_style",
     display_name="Update Layer Style",
-    description="Change color / opacity / visibility of an existing layer.",
+    description=(
+        "Change color, opacity, line/border width, point size, or visibility "
+        "of an existing vector/raster layer."
+    ),
     category="visualization",
     params=[
         {"name": "layer_id", "type": "string", "required": True,
@@ -430,6 +667,28 @@ def set_basemap(ctx: SkillContext, basemap_id: str) -> dict:
          "description": "New color, e.g. '#3388ff'."},
         {"name": "opacity", "type": "number", "required": False,
          "description": "New opacity 0.0-1.0."},
+        {"name": "fill_color", "type": "string", "required": False,
+         "description": "Polygon fill color."},
+        {"name": "fill_opacity", "type": "number", "required": False,
+         "description": "Polygon fill opacity 0.0-1.0."},
+        {"name": "line_color", "type": "string", "required": False,
+         "description": "Line color for line layers, or polygon outline color."},
+        {"name": "line_width", "type": "number", "required": False,
+         "description": "Line width / polygon outline width in pixels."},
+        {"name": "line_opacity", "type": "number", "required": False,
+         "description": "Line opacity 0.0-1.0."},
+        {"name": "border_color", "type": "string", "required": False,
+         "description": "Polygon/point border color."},
+        {"name": "border_width", "type": "number", "required": False,
+         "description": "Polygon/point border width in pixels."},
+        {"name": "border_opacity", "type": "number", "required": False,
+         "description": "Polygon/point border opacity 0.0-1.0."},
+        {"name": "point_color", "type": "string", "required": False,
+         "description": "Point fill color."},
+        {"name": "point_size", "type": "number", "required": False,
+         "description": "Point radius in pixels."},
+        {"name": "point_opacity", "type": "number", "required": False,
+         "description": "Point opacity 0.0-1.0."},
         {"name": "visible", "type": "boolean", "required": False,
          "description": "Show / hide the layer."},
     ],
@@ -443,6 +702,17 @@ def update_layer_style(
     layer_id: str,
     color: Optional[str] = None,
     opacity: Optional[float] = None,
+    fill_color: Optional[str] = None,
+    fill_opacity: Optional[float] = None,
+    line_color: Optional[str] = None,
+    line_width: Optional[float] = None,
+    line_opacity: Optional[float] = None,
+    border_color: Optional[str] = None,
+    border_width: Optional[float] = None,
+    border_opacity: Optional[float] = None,
+    point_color: Optional[str] = None,
+    point_size: Optional[float] = None,
+    point_opacity: Optional[float] = None,
     visible: Optional[bool] = None,
 ) -> dict:
     payload: dict = {"layer_id": layer_id}
@@ -452,26 +722,37 @@ def update_layer_style(
         payload["opacity"] = float(opacity)
     if visible is not None:
         payload["visible"] = bool(visible)
+    style = _style_payload(
+        color=color,
+        opacity=opacity,
+        fill_color=fill_color,
+        fill_opacity=fill_opacity,
+        line_color=line_color,
+        line_width=line_width,
+        line_opacity=line_opacity,
+        border_color=border_color,
+        border_width=border_width,
+        border_opacity=border_opacity,
+        point_color=point_color,
+        point_size=point_size,
+        point_opacity=point_opacity,
+    )
+
     # Canonical v3.0: style and visibility go through different handlers.
     # Only send the canonical messages that have meaningful payload.
-    if color is not None or opacity is not None:
-        style_payload: dict = {
-            "layer_id": layer_id,
-            "style": {
-                "type": "fill",  # best-effort default; Stage 3.5 handler can re-infer
-                "paint": {
-                    **({"fill-color": color} if color is not None else {}),
-                    **({"fill-opacity": float(opacity)} if opacity is not None else {}),
-                },
-            },
-        }
+    if style is not None:
+        style_payload: dict = {"layer_id": layer_id, "style": style}
         run_async_from_sync(ctx.notify("rpc.ui.map.set_layer_style", style_payload))
     if visible is not None:
         run_async_from_sync(
             ctx.notify("rpc.ui.map.set_layer_visibility",
                        {"layer_id": layer_id, "visible": bool(visible)})
         )
-    return {"success": True, "layer_id": layer_id}
+    return {
+        "success": True,
+        "layer_id": layer_id,
+        "note": "Style update sent to map. Verify visually that the change took effect.",
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -626,6 +907,7 @@ def add_raster(
     name: Optional[str] = None,
     opacity: Optional[float] = None,
 ) -> dict:
+    path = _resolve_workspace_path(ctx, path)
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Raster file not found: {path}")

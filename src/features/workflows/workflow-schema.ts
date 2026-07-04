@@ -74,6 +74,20 @@ export interface WorkflowNode {
    */
   description?: string
   /**
+   * Human-authored contract describing what this node expects to receive
+   * from upstream nodes. This is intentionally descriptive rather than a
+   * strict runtime type: the workflow designer tells the agent what prior
+   * outputs mean and how they should be consumed.
+   */
+  inputContract?: string
+  /**
+   * Human-authored contract describing what this node must hand off to
+   * downstream nodes. The backend prompt treats this as a high-priority
+   * deliverable and asks the agent to surface exact paths/layer ids/metrics
+   * in the step summary.
+   */
+  outputContract?: string
+  /**
    * Path to the backing Python script, *relative to the workspace root*.
    * Empty string for placeholder / not-yet-bound nodes — this lets users
    * drag out empty nodes and bind scripts later.
@@ -211,6 +225,16 @@ function normaliseNode(n: any): WorkflowNode {
     id: String(n?.id ?? `node_${Math.random().toString(36).slice(2, 8)}`),
     title: String(n?.title ?? 'Untitled Node'),
     description: typeof n?.description === 'string' ? n.description : undefined,
+    inputContract: typeof n?.inputContract === 'string'
+      ? n.inputContract
+      : typeof n?.input_contract === 'string'
+        ? n.input_contract
+        : undefined,
+    outputContract: typeof n?.outputContract === 'string'
+      ? n.outputContract
+      : typeof n?.output_contract === 'string'
+        ? n.output_contract
+        : undefined,
     scriptPath: typeof n?.scriptPath === 'string' ? n.scriptPath : '',
     inputs: Array.isArray(n?.inputs) ? n.inputs.map(normalisePort) : [],
     outputs: Array.isArray(n?.outputs) ? n.outputs.map(normalisePort) : [],

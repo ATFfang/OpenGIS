@@ -15,7 +15,6 @@
 import type {
   GeoJSONFeatureCollection,
   MapLayerDefinition,
-  GraduatedClassification,
 } from '@/services/geo'
 import {
   type LayerRenderer,

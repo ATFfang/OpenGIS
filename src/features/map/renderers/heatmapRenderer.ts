@@ -46,7 +46,7 @@ export const heatmapRenderer: LayerRenderer = {
     const intensity = settings.intensity ?? 1
 
     // 权重表达式：字段存在 → 归一化到 0-1，不存在 → 常数 1
-    const weight = buildWeightExpression(def, settings.weightField)
+    const weight = buildWeightExpression(settings.weightField)
 
     if (!map.getLayer(heatId)) {
       ctx.addRenderLayer({
@@ -91,7 +91,7 @@ export const heatmapRenderer: LayerRenderer = {
     ctx.map.setPaintProperty(
       heatId,
       'heatmap-weight',
-      buildWeightExpression(def, settings.weightField),
+      buildWeightExpression(settings.weightField),
     )
   },
 
@@ -117,10 +117,7 @@ export const heatmapRenderer: LayerRenderer = {
  * @param weightField - 权重字段名
  * @returns 权重表达式
  */
-function buildWeightExpression(
-  def: { data: unknown },
-  weightField?: string,
-): any {
+function buildWeightExpression(weightField?: string): any {
   if (!weightField) return 1
   return [
     'case',

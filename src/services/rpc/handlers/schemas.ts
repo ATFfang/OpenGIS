@@ -61,6 +61,7 @@ export const AddRasterFromUrlSchema = z.object({
  */
 export const AddRasterFromFileSchema = z.object({
   path: z.string().min(1),
+  layer_id: z.string().min(1).optional(),
   name: z.string().optional(),
   visible: z.boolean().optional(),
   opacity: z.number().min(0).max(1).optional(),
@@ -191,6 +192,10 @@ export const SetBasemapSchema = z.object({
   ]),
 });
 
+export const SetBasemapVisibilitySchema = z.object({
+  visible: z.boolean(),
+});
+
 export const ListLayersSchema = z.object({}).passthrough();
 
 export const GetLayerSchema = z.object({ layer_id: LayerIdSchema });
@@ -227,6 +232,7 @@ export const ShowTextSchema = z.object({
 export const ShowImageSchema = z.object({
   path: z.string().min(1),
   caption: z.string().optional(),
+  run_id: z.string().optional(),
 });
 
 export const ShowTableSchema = z.object({
@@ -272,11 +278,11 @@ export const PlanUpdateSchema = z.object({
  * 在委派子任务时调用本 method，前端按 `subagent_id` upsert 同一张卡片。
  * 只携带任务标题与状态，不携带子智能体的内部步骤/输出（上下文隔离的本意）。
  */
-export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed']);
+export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed', 'cancelled']);
 
 export const SubagentUpdateSchema = z.object({
   subagent_id: z.string().min(1),
-  status: z.enum(['running', 'done']),
+  status: z.enum(['running', 'done', 'failed', 'cancelled']),
   parallel: z.boolean().optional(),
   tasks: z
     .array(
@@ -296,11 +302,14 @@ export const SubagentUpdateSchema = z.object({
 // ─────────────────────────────────────────────────────────────────────
 
 export const ApproveCodeSchema = z.object({
+  request_id: z.string().optional(),
+  tool_name: z.string().optional(),
   run_id: z.string().min(1),
   step: z.number().int().nonnegative(),
   code: z.string(),
   risky_operations: z.array(z.string()),
   explanation: z.string().optional(),
+  timeout_seconds: z.number().positive().optional(),
 });
 
 export const AskChooseSchema = z.object({
@@ -318,7 +327,10 @@ export const AskTextSchema = z.object({
 });
 
 export const AskConfirmSchema = z.object({
+  request_id: z.string().optional(),
+  tool_name: z.string().optional(),
   question: z.string().min(1),
+  reason: z.string().optional(),
   danger: z.boolean().optional(),
   timeout_seconds: z.number().positive().optional(),
 });
@@ -332,6 +344,11 @@ export const GetWorkspaceSchema = z.object({}).passthrough();
 export const ListAssetsSchema = z.object({
   pattern: z.string().optional(),
 });
+
+export const RefreshAssetsSchema = z.object({
+  path: z.string().min(1).optional(),
+  reason: z.string().optional(),
+}).passthrough();
 
 export const OpenExternalSchema = z.object({
   path: z.string().min(1),

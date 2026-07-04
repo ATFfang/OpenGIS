@@ -55,6 +55,7 @@ export const circleRenderer: LayerRenderer = {
             (def.style.strokeWidth ?? 1) + 2,
             def.style.strokeWidth,
           ] as any,
+          'circle-stroke-opacity': def.style.strokeOpacity ?? 1,
         },
       })
       ctx.registerRenderLayerId(def.id, circleId)
@@ -94,6 +95,7 @@ export const circleRenderer: LayerRenderer = {
         (def.style.strokeWidth ?? 1) + 2,
         def.style.strokeWidth,
       ] as any)
+      ctx.map.setPaintProperty(circleId, 'circle-stroke-opacity', def.style.strokeOpacity ?? 1)
     }
   },
 

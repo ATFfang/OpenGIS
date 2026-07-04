@@ -10,7 +10,7 @@
  * - Zoom-to-layer
  * - Add data button (file picker + drag & drop)
  */
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Eye,
   EyeOff,
@@ -33,6 +33,8 @@ import { loadGeoFiles } from '@/services/geo'
 import { mapEngine } from '@/features/map/engine/MapEngine'
 import { getCategorizedCache } from '@/features/map/renderers/categorizedRenderer'
 import type { MapLayerDefinition, LayerStyle } from '@/services/geo'
+import { usePivotStore } from '@/stores/pivotStore'
+import { targetFromLayer } from '@/features/pivot/types'
 import { LayerIcon } from './LayerIcon'
 import { GraduatedStylePanel } from './GraduatedStylePanel'
 
@@ -222,7 +224,7 @@ export function LayerPanel() {
                     mapEngine.fitBounds([bbox.minX, bbox.minY, bbox.maxX, bbox.maxY])
                   }
                 }}
-                onDragStart={searchQuery ? undefined : () => setDragLayerId(layer.id)}
+                onDragStart={searchQuery ? () => {} : () => setDragLayerId(layer.id)}
                 onDragEnd={() => {
                   setDragLayerId(null)
                   setDragOverLayerId(null)
@@ -298,9 +300,11 @@ function LayerItem({
   const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [showClassification, setShowClassification] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const setLayerOpacity = useMapStore((s) => s.setLayerOpacity)
   const updateLayerStyle = useMapStore((s) => s.updateLayerStyle)
   const renameLayer = useMapStore((s) => s.renameLayer)
+  const openPivot = usePivotStore((s) => s.open)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -310,7 +314,6 @@ function LayerItem({
   // Determine geometry-based type (independent of renderType, so graduated/categorized still know the geometry)
   const isPointGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Point' || layer.data.geometryType === 'MultiPoint')
   const isFillGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Polygon' || layer.data.geometryType === 'MultiPolygon')
-  const isLineGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'LineString' || layer.data.geometryType === 'MultiLineString')
   const isClassified = layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized'
   // For StylePanel compatibility
   const isPointLayer = layer.style.renderType === 'circle'
@@ -347,11 +350,19 @@ function LayerItem({
     [onDropLayer]
   )
 
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    onSelect()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }, [onSelect])
+
   return (
     <div
       onDragEnd={onDragEnd}
       onDragOver={handleRowDragOver}
       onDrop={handleRowDrop}
+      onContextMenu={handleContextMenu}
       className={`
         group relative mx-1 rounded-md transition-colors duration-100
         ${isActive ? 'bg-accent-primary/10' : 'hover:bg-bg-hover'}
@@ -520,7 +531,6 @@ function LayerItem({
               layer={layer}
               isPointGeom={isPointGeom}
               isFillGeom={isFillGeom}
-              isLineGeom={isLineGeom}
               onStyleChange={(updates) => updateLayerStyle(layer.id, updates)}
               onOpacityChange={(v) => setLayerOpacity(layer.id, v)}
               onEditClassification={() => setShowClassification(true)}
@@ -575,6 +585,60 @@ function LayerItem({
           </div>
         </div>
       )}
+
+      {contextMenu && (
+        <LayerContextMenu
+          position={contextMenu}
+          onClose={() => setContextMenu(null)}
+          onOpenPivot={() => {
+            setContextMenu(null)
+            openPivot(targetFromLayer(layer))
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function LayerContextMenu({
+  position,
+  onClose,
+  onOpenPivot,
+}: {
+  position: { x: number; y: number }
+  onClose: () => void
+  onOpenPivot: () => void
+}) {
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose()
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-[9999] bg-bg-secondary border border-border rounded-lg shadow-xl py-1 min-w-[160px] animate-fade-in"
+      style={{ left: position.x, top: position.y }}
+    >
+      <button
+        onClick={onOpenPivot}
+        className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-accent-geo hover:bg-accent-geo/10 transition-colors"
+      >
+        <BarChart3 className="w-3.5 h-3.5" />
+        <span>数据透视</span>
+      </button>
     </div>
   )
 }
@@ -590,7 +654,6 @@ interface ClassifiedStyleSummaryProps {
   layer: MapLayerDefinition
   isPointGeom: boolean
   isFillGeom: boolean
-  isLineGeom: boolean
   onStyleChange: (updates: Partial<LayerStyle>) => void
   onOpacityChange: (v: number) => void
   onEditClassification: () => void
@@ -601,7 +664,6 @@ function ClassifiedStyleSummary({
   layer,
   isPointGeom,
   isFillGeom,
-  isLineGeom,
   onStyleChange,
   onOpacityChange,
   onEditClassification,

@@ -1,23 +1,14 @@
-"""Custom Agent Loop -- the heart of OpenGIS's Hybrid CodeAct architecture.
+"""Agent Loop — hybrid tool-calling + CodeAct architecture.
 
-Replaces smolagents' CodeAgent with a direct litellm-based loop that
-lets the LLM autonomously decide at each step whether to:
+The LLM can respond in two ways at each step:
+1. **Tool calls** (primary): structured function calls executed directly.
+2. **Code blocks** (fallback): ```python``` fences executed in sandbox.
 
-1. Reply with plain text -- for greetings, explanations, clarifications.
-2. Emit a ```python ... ``` code block -- executed in the subprocess sandbox.
-3. Call final_answer() inside code -- signals the run is complete.
-
-Termination strategy (aligned with mainstream open-source agents):
-- Explicit tool termination: final_answer() in code -> loop exits.
-- Response format detection: pure text reply -> task considered done,
-  BUT only immediately when code_steps == 0 (simple conversation).
-  When code_steps > 0, the loop nudges the LLM once to continue or
-  call final_answer() explicitly. If it still replies with text, accept.
-  This prevents premature termination from mid-task text explanations
-  while adding at most one extra LLM call overhead.
-
-References:
-- CodeAct paper: "Executable Code Actions Elicit Better LLM Agents" (Wang et al., 2024)
+Termination:
+- Tool calls → loop continues until LLM stops calling tools (finish_reason="stop")
+- Pure text reply → treated as final answer
+- Tool calling → loop continues until LLM stops calling tools
+- Max steps exceeded → LLM summarization
 - Claude Code: hybrid text/code agent loop with context compression
 - OpenHands/OpenDevin: CodeAct + browsing in a sandboxed environment
 """
@@ -25,6 +16,7 @@ References:
 from __future__ import annotations
 
 import logging
+import ast
 import random
 import re
 import threading
@@ -33,6 +25,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from opengis_backend.agent.context_manager import ContextManager
+from opengis_backend.agent.tool_runtime import (
+    ToolRuntime,
+    parse_tool_arguments,
+)
+from opengis_backend.agent.permission import PermissionAction
 from opengis_backend.constants import (  # noqa: E402 module-level import
     DEFAULT_MAX_ITERATIONS,
     AGENT_LOOP_SAFETY_MULTIPLIER,
@@ -92,10 +89,18 @@ except ImportError:
 # Code block extraction
 # ─────────────────────────────────────────────────────────────────────
 
-# We support both markdown fences and <code> tags for code extraction.
-# The LLM is prompted to use ```python fences (more natural than <code>
-# tags now that we control the prompt).
-_CODE_FENCE_RE = re.compile(
+# We execute only explicit Python fences. Older prompts sometimes emitted
+# bare fences, so those are accepted only when the body parses like real
+# Python. Non-Python fences (text/mermaid/json/etc.) must remain text.
+_PY_CODE_FENCE_RE = re.compile(
+    r"```(?:python|py)\s*\n(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_BARE_CODE_FENCE_RE = re.compile(
+    r"```\s*\n(.*?)```",
+    re.DOTALL,
+)
+_ANY_CODE_FENCE_RE = re.compile(
     r"```\w*\s*\n(.*?)```",
     re.DOTALL,
 )
@@ -105,25 +110,53 @@ _CODE_TAG_RE = re.compile(
 )
 
 
+def _looks_like_python_code(code: str) -> bool:
+    """Return True only for code-shaped Python, not arbitrary fenced text."""
+    text = (code or "").strip()
+    if not text:
+        return False
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    if not tree.body:
+        return False
+    # A lone name/string/number parses as Python but is usually prose or
+    # a markdown formatting accident. Calls, assignments, imports, control
+    # flow, etc. are code-shaped enough to execute.
+    if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
+        value = tree.body[0].value
+        if isinstance(value, (ast.Name, ast.Constant)):
+            return False
+    return True
+
+
 def extract_code_block(text: str) -> Optional[str]:
     """Extract the first Python code block from LLM output.
 
-    Tries markdown fences first, then <code> tags for backward compat.
-    Returns None if no code block is found.
+    Only explicit ```python/```py fences are trusted. Bare fences are a
+    compatibility fallback and must parse like Python. This prevents final
+    answers, diagrams, layer trees, mermaid blocks, and JSON snippets from
+    being executed by the legacy CodeAct fallback.
     """
-    m = _CODE_FENCE_RE.search(text)
+    m = _PY_CODE_FENCE_RE.search(text)
     if m:
         return m.group(1).strip()
+    m = _BARE_CODE_FENCE_RE.search(text)
+    if m:
+        candidate = m.group(1).strip()
+        return candidate if _looks_like_python_code(candidate) else None
     m = _CODE_TAG_RE.search(text)
     if m:
-        return m.group(1).strip()
+        candidate = m.group(1).strip()
+        return candidate if _looks_like_python_code(candidate) else None
     return None
 
 
 def extract_thought(text: str) -> str:
     """Extract the 'thought' portion -- everything before the code block."""
     # Remove code blocks to get the thought text.
-    cleaned = _CODE_FENCE_RE.sub("", text)
+    cleaned = _ANY_CODE_FENCE_RE.sub("", text)
     cleaned = _CODE_TAG_RE.sub("", cleaned)
     return cleaned.strip()
 
@@ -264,18 +297,22 @@ class StreamingParser:
     # state: "in_fence_open" — saw ` and waiting to confirm/refute fence
     def _step_fence_open(self) -> bool:
         buf = self._pending
-        # We accept ``` followed by any language tag (or none) and a
-        # newline.  This handles ```python, ```py, ```bash, ```json,
-        # bare ```, etc. — the agent always executes the body as Python
-        # regardless of the tag.
+        # Only explicit Python fences are streamed/executed as code.
+        # Non-Python fences are assistant text and must not open a code
+        # execution card.
         if buf.startswith(_FENCE_OPEN_MARKER):
             # Look for the terminating newline after ```.
             for suffix in ("\n", "\r\n"):
                 idx = buf.find(suffix, len(_FENCE_OPEN_MARKER))
                 if idx >= 0:
-                    # Found ```...<lang>\n — open the code body.
-                    self._pending = buf[idx + len(suffix):]
-                    self._enter_code()
+                    fence_header = buf[len(_FENCE_OPEN_MARKER):idx].strip().lower()
+                    if fence_header in {"python", "py"}:
+                        self._pending = buf[idx + len(suffix):]
+                        self._enter_code()
+                    else:
+                        self._emit_thought(buf[:idx + len(suffix)])
+                        self._pending = buf[idx + len(suffix):]
+                        self._state = "thought"
                     return True
             # No newline yet — could still be typing.  But if we've
             # held too much (e.g. ``` followed by a very long non-newline
@@ -395,7 +432,6 @@ class CodeExecResult:
     output: Any = None
     logs: str = ""
     error: Optional[str] = None
-    is_final_answer: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -410,7 +446,6 @@ class AgentStep:
     code: str = ""
     output: str = ""
     error: Optional[str] = None
-    is_final_answer: bool = False
     is_text_reply: bool = False
     text_reply: str = ""
     duration_ms: float = 0.0
@@ -429,7 +464,7 @@ class AgentLoop:
     observations for the next step.
 
     Termination uses a layered "nudge" strategy:
-    - final_answer() in code -> explicit termination (preferred)
+    - Tool calling → loop continues until LLM stops calling tools
     - Pure text reply at code_steps==0 -> immediate exit (conversation)
     - Pure text reply at code_steps>0 -> nudge once, then accept
     - No extra LLM self-evaluation call (at most one nudge)
@@ -454,12 +489,17 @@ class AgentLoop:
         Optional pre-existing ContextManager (for multi-turn conversations).
     """
 
-    llm_call: Callable[..., str]
+    llm_call: Callable[..., Any]  # Returns LLMResponse (or str for legacy)
     executor_call: Callable[[str], CodeExecResult]
     system_prompt: str
     max_steps: int = DEFAULT_MAX_ITERATIONS
     step_callback: Optional[Callable[[AgentStep], None]] = None
     progress_callback: Optional[Callable[[str, str], None]] = None
+    # Tool calling support
+    tool_runtime: Optional[ToolRuntime] = None
+    tool_schemas: Optional[list[dict]] = None
+    on_tool_start: Optional[Callable[[str, dict, str], None]] = None
+    on_tool_result: Optional[Callable[..., None]] = None
     # Streaming hooks — invoked from the LLM worker thread as tokens
     # arrive. The agent loop uses StreamingParser to dispatch into
     # these granular callbacks so the UI can render code as it's
@@ -478,6 +518,7 @@ class AgentLoop:
     on_reasoning_promote: Optional[Callable[[int], None]] = None  # round became a text reply
     context: ContextManager = field(default_factory=ContextManager)
     user_instructions: Optional[str] = None
+    exclude_workflow_context: bool = True
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point. Checked at the top of each iteration.
     _interrupted: bool = field(default=False, init=False, repr=False)
@@ -524,7 +565,11 @@ class AgentLoop:
                 self.context.compress(self.llm_call)
 
             # 1. Build messages with context compression.
-            messages = self.context.build_messages(self.system_prompt, user_instructions=self.user_instructions)
+            messages = self.context.build_messages(
+                self.system_prompt,
+                user_instructions=self.user_instructions,
+                exclude_workflow_context=self.exclude_workflow_context,
+            )
 
             # 2. Call LLM — notify the UI that we're waiting.
             if self.progress_callback:
@@ -629,15 +674,49 @@ class AgentLoop:
                 on_code_delta=_on_chunk_code_delta,
                 on_code_end=_on_chunk_code_end,
             )
+            streamed_tool_code: dict[int, dict[str, Any]] = {}
+
+            def _on_tool_delta(tool_index: int, tool_name: str, payload: dict[str, Any]) -> None:
+                if tool_name != "execute_code":
+                    return
+                code = payload.get("code")
+                if not isinstance(code, str):
+                    return
+                state = streamed_tool_code.setdefault(
+                    tool_index,
+                    {"step": tentative_step + tool_index, "length": 0, "open": False},
+                )
+                if not state["open"]:
+                    code_started["v"] = True
+                    _close_reasoning_if_open()
+                    _bump_round()
+                    if self.on_code_start:
+                        try:
+                            self.on_code_start(int(state["step"]))
+                        except Exception:
+                            logger.exception("on_code_start failed")
+                    state["open"] = True
+                previous_length = int(state["length"])
+                if len(code) > previous_length and self.on_code_delta:
+                    try:
+                        self.on_code_delta(int(state["step"]), code[previous_length:])
+                    except Exception:
+                        logger.exception("on_code_delta failed")
+                    state["length"] = len(code)
 
             def _on_llm_delta(piece: str) -> None:
                 parser.feed(piece)
 
             logger.debug("[AGENT] LLM call START, _interrupted=%s", self._interrupted)
-            response = None
+            llm_response = None
             for _retry_attempt in range(LLM_MAX_RETRIES + 1):
                 try:
-                    response = self.llm_call(messages, on_delta=_on_llm_delta)
+                    llm_response = self.llm_call(
+                        messages,
+                        on_delta=_on_llm_delta,
+                        on_tool_delta=_on_tool_delta,
+                        tools=self.tool_schemas,
+                    )
                     parser.finish()
                     break
                 except TypeError as te:
@@ -645,12 +724,14 @@ class AgentLoop:
                     # about the on_delta parameter (older shim that doesn't
                     # accept it).  Re-raise any other TypeError so real bugs
                     # aren't silently swallowed.
-                    if "on_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
+                    if "on_delta" not in str(te) and "on_tool_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
                         raise
-                    response = self.llm_call(messages)
-                    if response and self.on_thought_delta:
+                    llm_response = self.llm_call(messages, tools=self.tool_schemas)
+                    # Extract content for UI callback
+                    _content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+                    if _content and self.on_thought_delta:
                         try:
-                            self.on_thought_delta(response)
+                            self.on_thought_delta(_content)
                         except Exception as e:
                             logger.warning("on_thought_delta failed: %s", e)
                     break
@@ -686,10 +767,117 @@ class AgentLoop:
                     raise
 
             duration_ms = (time.monotonic() - t0) * 1000
-            logger.debug("[AGENT] LLM call END, duration=%.0fms, _interrupted=%s, response_len=%d",
-                        duration_ms, self._interrupted, len(response) if response else 0)
+
+            # Extract content and tool_calls from response
+            if hasattr(llm_response, 'content'):
+                # LLMResponse object (tool-calling path)
+                response_text = llm_response.content or ""
+                tool_calls = llm_response.tool_calls
+            else:
+                # Legacy string response (backward compat)
+                response_text = str(llm_response) if llm_response else ""
+                tool_calls = None
+
+            logger.debug("[AGENT] LLM call END, duration=%.0fms, _interrupted=%s, content_len=%d, tool_calls=%d",
+                        duration_ms, self._interrupted, len(response_text), len(tool_calls) if tool_calls else 0)
+
+            for state in streamed_tool_code.values():
+                if state.get("open") and self.on_code_end:
+                    try:
+                        self.on_code_end(int(state["step"]))
+                    except Exception:
+                        logger.exception("on_code_end failed")
+
+            # ── Handle tool_calls (primary path) ──
+            if tool_calls:
+                _close_reasoning_if_open()
+
+                # Store assistant message with tool_calls in context
+                self.context.add_assistant_with_tool_calls(response_text, tool_calls)
+
+                # Execute each tool call
+                for tool_index, tc in enumerate(tool_calls):
+                    tc_id = tc.get("id", "")
+                    func = tc.get("function", {})
+                    tool_name = func.get("name", "")
+                    raw_args = func.get("arguments", "{}")
+
+                    arguments = parse_tool_arguments(raw_args)
+                    try:
+                        import json as _json
+                        _args_preview = _json.dumps(arguments, ensure_ascii=False)[:200]
+                    except Exception:
+                        _args_preview = repr(arguments)[:200]
+                    logger.info("TOOL CALL: %s(%s)", tool_name, _args_preview)
+
+                    # Notify progress
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback("tool_call", f"Calling {tool_name}...")
+                        except Exception:
+                            pass
+
+                    if self.on_tool_start:
+                        try:
+                            self.on_tool_start(tool_name, arguments, tc_id)
+                        except Exception:
+                            logger.exception("on_tool_start failed")
+
+                    if self.tool_runtime is None:
+                        result_content = '{"success": false, "error": "Tool runtime not configured"}'
+                        result_error = "Tool runtime not configured"
+                        result_ms = 0.0
+                        result_metadata = None
+                    else:
+                        tool_result = self.tool_runtime.execute(tool_name, arguments)
+                        result_content = tool_result.content
+                        result_error = tool_result.error
+                        result_ms = tool_result.duration_ms
+                        result_metadata = dict(tool_result.metadata or {})
+                        if tool_name == "execute_code":
+                            stream_state = streamed_tool_code.get(tool_index)
+                            if stream_state is not None:
+                                result_metadata["code_step"] = int(stream_state["step"])
+
+                    if self.on_tool_result:
+                        try:
+                            self.on_tool_result(
+                                tool_name,
+                                result_content,
+                                result_error,
+                                result_ms,
+                                tc_id,
+                                result_metadata,
+                            )
+                        except Exception:
+                            logger.exception("on_tool_result failed")
+
+                    if tool_name == "execute_code" and result_metadata:
+                        script_path = result_metadata.get("script_path") or result_metadata.get("script_abs_path")
+                        if script_path:
+                            persisted_note = (
+                                "\n\n[script] Persisted script path: "
+                                f"{script_path}\n"
+                                "If this code failed or needs refinement, read this file and patch it "
+                                "with edit_file, then rerun the same script instead of creating a "
+                                "near-duplicate script."
+                            )
+                            result_content = f"{result_content}{persisted_note}"
+
+                    # Store tool result in context
+                    self.context.add_tool_result(tc_id, tool_name, result_content)
+                    self.context.prune_tool_results()
+
+                code_steps += max(1, len(tool_calls))
+                # Keep nudge state scoped to the whole user turn. Resetting it
+                # after every tool call lets a short completed task be pushed
+                # into unrelated follow-up work repeatedly.
+                continue  # Let LLM see the tool results
+
+            # ── No tool_calls: handle as text response ──
 
             # 3. Parse response: extract thought + code block.
+            response = response_text
             code_block = extract_code_block(response)
             thought = extract_thought(response)
 
@@ -716,7 +904,12 @@ class AgentLoop:
                 # nudged yet this turn, push the LLM to continue or finish
                 # explicitly. This prevents premature termination when the
                 # LLM emits "Next I will..." without a code block.
-                if code_steps > 0 and not getattr(self, '_nudged_this_turn', False):
+                if code_steps > 0 and self._looks_like_completion(response):
+                    logger.info(
+                        "Text-only completion after %d tool/code steps -- accepting without nudge.",
+                        code_steps,
+                    )
+                elif code_steps > 0 and not getattr(self, '_nudged_this_turn', False):
                     self._nudged_this_turn = True
                     logger.info(
                         "Text-only reply mid-task (code_steps=%d) -- nudging LLM to continue.",
@@ -726,11 +919,9 @@ class AgentLoop:
                     _close_reasoning_if_open()
                     self.context.add_assistant_message(response)
                     self.context.add_user_message(
-                        "[System] You are mid-task. Either write a ```python code block "
-                        "to continue, or call final_answer(\"summary\") to finish. "
-                        "A plain text reply will end the task.\n"
-                        "[系统] 任务尚未完成。请继续写 ```python 代码块，"
-                        "或调用 final_answer(\"summary\") 结束。纯文本回复将终止任务。"
+                        "[System] You are mid-task. Either call a tool "
+                        "to continue, or reply with a summary to finish.\n"
+                        "[系统] 任务尚未完成。请调用工具继续，或回复总结结束任务。"
                     )
                     continue
 
@@ -767,12 +958,48 @@ class AgentLoop:
 
             # 4b. Code block found -> execute.
             code_steps += 1
-            self._nudged_this_turn = False  # Reset: next text-only gets a fresh nudge.
+            # Do not reset _nudged_this_turn here; one nudge per user turn is
+            # enough and prevents scope creep after successful tool work.
             # If the LLM wrote some text *after* the code fence (post-code
             # thought / explanation), close that reasoning bubble too \u2014
             # we don't promote it because the round did contain code.
             _close_reasoning_if_open()
             self.context.add_assistant_message(response)
+
+            permission_runtime = getattr(self.tool_runtime, "permission_runtime", None)
+            enforce_permissions = bool(
+                permission_runtime is not None
+                and getattr(permission_runtime.policy, "enforce", False)
+            )
+            if permission_runtime is not None:
+                decision = permission_runtime.evaluate("execute_code", {"code": code_block})
+                if enforce_permissions and decision.action != PermissionAction.ALLOW:
+                    error_msg = decision.reason or decision.action.value
+                    logger.info(
+                        "Code block execution blocked by permission policy: %s (%s)",
+                        decision.action.value,
+                        error_msg,
+                    )
+                    step = AgentStep(
+                        step_num=code_steps,
+                        thought=thought,
+                        code=code_block,
+                        output="",
+                        error=error_msg,
+                        duration_ms=duration_ms,
+                    )
+                    if self.step_callback:
+                        try:
+                            self.step_callback(step)
+                        except Exception:
+                            logger.exception("step_callback failed")
+                    self.context.add_code_output(
+                        step=code_steps,
+                        code=code_block,
+                        output="",
+                        error=error_msg,
+                    )
+                    continue
 
             # Auto-install missing packages before execution.
             try:
@@ -781,6 +1008,7 @@ class AgentLoop:
                     code_block,
                     python_executable=None,  # uses sys.executable (same as subprocess)
                     progress_callback=self.progress_callback,
+                    permission_runtime=permission_runtime,
                 )
             except Exception:
                 logger.warning("auto_install check failed (non-fatal), code execution may fail if packages are missing", exc_info=True)
@@ -806,8 +1034,8 @@ class AgentLoop:
                 logger.debug("[AGENT] CODE EXEC EXCEPTION: %s, _interrupted=%s", error_msg, self._interrupted)
                 result = CodeExecResult(error=error_msg)
             exec_duration_ms = (time.monotonic() - t1) * 1000
-            logger.debug("[AGENT] CODE EXEC END step=%d, duration=%.0fms, error=%s, is_final=%s, _interrupted=%s",
-                        code_steps, exec_duration_ms, result.error is not None, result.is_final_answer, self._interrupted)
+            logger.debug("[AGENT] CODE EXEC END step=%d, duration=%.0fms, error=%s, _interrupted=%s",
+                        code_steps, exec_duration_ms, result.error is not None, self._interrupted)
 
             # DEBUG: log execution output
             if result.error:
@@ -823,7 +1051,6 @@ class AgentLoop:
                 code=code_block,
                 output=result.logs or str(result.output or ""),
                 error=result.error,
-                is_final_answer=result.is_final_answer,
                 duration_ms=duration_ms + exec_duration_ms,
             )
 
@@ -833,10 +1060,6 @@ class AgentLoop:
                     self.step_callback(step)
                 except Exception:
                     logger.exception("step_callback failed")
-
-            # Check for final_answer.
-            if result.is_final_answer:
-                return str(result.output) if result.output is not None else "(done)"
 
             # Add observation to context.
             # Detect skill calls so the context manager can flag this
@@ -879,17 +1102,57 @@ class AgentLoop:
             "text summary."
         )
         self.context.add_user_message(summary_prompt)
-        messages = self.context.build_messages(self.system_prompt)
+        messages = self.context.build_messages(
+            self.system_prompt,
+            exclude_workflow_context=self.exclude_workflow_context,
+        )
         try:
             response = self.llm_call(messages)
-            self.context.add_assistant_message(response)
-            return response
+            if hasattr(response, "content"):
+                response_text = response.content or ""
+            else:
+                response_text = str(response) if response is not None else ""
+            self.context.add_assistant_message(response_text)
+            return response_text
         except Exception as e:
             logger.error("Summary generation failed: %s", e)
             return (
                 f"Reached maximum steps ({steps_taken}). "
                 "Unable to generate summary due to an error."
             )
+
+
+    def _looks_like_completion(self, text: str) -> bool:
+        """Conservative completion detector for post-tool text replies."""
+        if not text or not text.strip():
+            return False
+        lowered = text.lower()
+        continuation_markers = (
+            "next i will",
+            "i will now",
+            "下一步",
+            "接下来",
+            "继续",
+            "还需要",
+            "尚未",
+            "not complete",
+            "need to",
+        )
+        if any(marker in lowered for marker in continuation_markers):
+            return False
+        completion_markers = (
+            "done",
+            "completed",
+            "finished",
+            "successfully",
+            "all set",
+            "已完成",
+            "已经完成",
+            "处理完成",
+            "执行完成",
+            "已按要求完成",
+        )
+        return any(marker in lowered for marker in completion_markers)
 
 
 __all__ = [

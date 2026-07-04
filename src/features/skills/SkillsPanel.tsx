@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { ChevronDown, ChevronRight, Zap, Layers, Search, Code, FileText, Map, HelpCircle, Terminal, ArrowRightLeft, Wrench, BookOpen, Bot, BarChart3 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Zap, Search, FileText, Map, HelpCircle, Terminal, BookOpen, Bot, BarChart3 } from 'lucide-react'
 import { pythonClient } from '@/services/pythonClient'
 import { useT } from '@/i18n'
 
@@ -52,7 +52,7 @@ const DEFAULT_CATEGORY_STYLE: Omit<CategoryInfo, 'label'> = {
   order: 99,
 }
 
-function getCategoryInfo(cat: string, skillCount: number): CategoryInfo {
+function getCategoryInfo(cat: string): CategoryInfo {
   const style = CATEGORY_STYLES[cat]
   return {
     label: style?.label ?? cat.charAt(0).toUpperCase() + cat.slice(1),
@@ -114,8 +114,8 @@ export function SkillsPanel() {
     // Sort categories by order defined in CATEGORY_STYLES
     const sorted: Record<string, SkillSchemaDict[]> = {}
     for (const cat of Object.keys(map).sort((a, b) => {
-      const oa = getCategoryInfo(a, 0).order
-      const ob = getCategoryInfo(b, 0).order
+      const oa = getCategoryInfo(a).order
+      const ob = getCategoryInfo(b).order
       return oa - ob
     })) {
       sorted[cat] = map[cat]
@@ -184,7 +184,7 @@ export function SkillsPanel() {
       {/* Skill list */}
       <div className="flex-1 overflow-y-auto">
         {Object.entries(grouped).map(([cat, items]) => {
-          const info = getCategoryInfo(cat, items.length)
+          const info = getCategoryInfo(cat)
           const Icon = info.icon
           const isOpen = expandedCategory === cat
           const categoryLabel = t.skills.categories[cat as keyof typeof t.skills.categories] ?? info.label

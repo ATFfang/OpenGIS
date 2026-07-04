@@ -27,9 +27,10 @@ responsible for populating the model field correctly.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import litellm
@@ -70,6 +71,25 @@ class LLMConfig:
     model: str = "gpt-4o"
     api_key: str = ""
     base_url: str = ""
+
+
+@dataclass
+class LLMResponse:
+    """Structured response from an LLM call.
+
+    Supports both pure text replies and tool_call responses.
+    """
+    content: str | None = None
+    tool_calls: list[dict] | None = None
+    finish_reason: str = "stop"  # "stop" | "tool_calls" | "length"
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.content and not self.tool_calls
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -151,18 +171,98 @@ def _extract_content_delta(chunk: Any) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Tool call extraction
+# ──────────────────────────────────────────────────────────────────
+
+
+def _extract_tool_calls(message: Any) -> list[dict] | None:
+    """Extract tool_calls from a litellm message object.
+
+    Returns a list of dicts with keys: id, type, function{name, arguments}.
+    Returns None if no tool_calls present.
+    """
+    raw = getattr(message, "tool_calls", None)
+    if not raw:
+        return None
+    result = []
+    for tc in raw:
+        func = getattr(tc, "function", None)
+        if func is None:
+            continue
+        result.append({
+            "id": getattr(tc, "id", "") or "",
+            "type": "function",
+            "function": {
+                "name": getattr(func, "name", "") or "",
+                "arguments": getattr(func, "arguments", "{}") or "{}",
+            },
+        })
+    return result if result else None
+
+
+def _extract_partial_json_string_field(raw: str, field: str) -> str | None:
+    """Best-effort extraction of a string field from partial JSON."""
+    if not raw:
+        return None
+    marker = json.dumps(field)
+    idx = raw.find(marker)
+    if idx < 0:
+        return None
+    colon = raw.find(":", idx + len(marker))
+    if colon < 0:
+        return None
+    pos = colon + 1
+    while pos < len(raw) and raw[pos].isspace():
+        pos += 1
+    if pos >= len(raw) or raw[pos] != '"':
+        return None
+    pos += 1
+
+    escaped: list[str] = []
+    i = pos
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "\\":
+            if i + 1 >= len(raw):
+                break
+            escaped.append(ch)
+            escaped.append(raw[i + 1])
+            i += 2
+            continue
+        if ch == '"':
+            break
+        escaped.append(ch)
+        i += 1
+
+    try:
+        return json.loads('"' + "".join(escaped) + '"')
+    except Exception:
+        return None
+
+
+def _extract_finish_reason(choice: Any) -> str:
+    """Extract finish_reason from a litellm choice object."""
+    fr = getattr(choice, "finish_reason", None)
+    if fr is None and isinstance(choice, dict):
+        fr = choice.get("finish_reason")
+    return str(fr or "stop")
+
+
+# ──────────────────────────────────────────────────────────────────
 # Factory — direct litellm caller (no smolagents dependency)
 # ──────────────────────────────────────────────────────────────────
 LLMCaller = Callable[..., str]
 
 
 def build_llm_caller(config: LLMConfig) -> LLMCaller:
-    """Build a callable ``(messages, *, on_delta=None) -> str``.
+    """Build a callable ``(messages, *, on_delta=None, tools=None) -> LLMResponse``.
+
+    When ``tools`` is supplied, the LLM may return tool_calls instead of
+    (or in addition to) text content. The caller should check
+    ``response.has_tool_calls`` to decide the next action.
 
     When ``on_delta`` is supplied the call uses ``stream=True`` and
-    forwards each text delta to the callback as it arrives. The full
-    assembled response is still returned so callers that don't care
-    about streaming behave exactly as before.
+    forwards each text delta to the callback as it arrives.
 
     The returned callable is synchronous (blocking) — designed to be
     called from the agent loop's worker thread.
@@ -177,7 +277,9 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
         messages: list[dict],
         *,
         on_delta: Callable[[str], None] | None = None,
-    ) -> str:
+        on_tool_delta: Callable[[int, str, dict[str, Any]], None] | None = None,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,
@@ -187,42 +289,141 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
             kwargs["api_key"] = api_key
         if api_base:
             kwargs["api_base"] = api_base
+        if tools:
+            kwargs["tools"] = tools
+            logger.info("[LLM] Passing %d tools to LLM: %s", len(tools), [t.get("function", {}).get("name", "?") for t in tools[:10]])
 
-        # Non-streaming fast path — preserves old behaviour exactly.
+        # Non-streaming fast path
         if on_delta is None:
             response = litellm.completion(**kwargs)
             choice = response.choices[0]
-            return choice.message.content or ""
+            msg = choice.message
+            return LLMResponse(
+                content=msg.content or None,
+                tool_calls=_extract_tool_calls(msg),
+                finish_reason=_extract_finish_reason(choice),
+            )
 
         # Streaming path.
         kwargs["stream"] = True
         try:
             stream = litellm.completion(**kwargs)
         except Exception:
-            # If the provider rejects streaming (rare) fall back to a
-            # blocking call so the agent run doesn't crash.
             logger.warning("streaming completion failed, retrying non-streaming", exc_info=True)
             kwargs.pop("stream", None)
             response = litellm.completion(**kwargs)
-            full = response.choices[0].message.content or ""
-            try:
-                on_delta(full)
-            except Exception:
-                logger.exception("on_delta callback raised on fallback path")
-            return full
+            choice = response.choices[0]
+            msg = choice.message
+            full = msg.content or ""
+            if full:
+                try:
+                    on_delta(full)
+                except Exception:
+                    logger.exception("on_delta callback raised on fallback path")
+            return LLMResponse(
+                content=full or None,
+                tool_calls=_extract_tool_calls(msg),
+                finish_reason=_extract_finish_reason(choice),
+            )
 
+        # Collect streaming chunks
         parts: list[str] = []
+        # For streaming tool_calls, we need to collect them incrementally
+        streaming_tool_calls: dict[int, dict] = {}  # index -> {id, name, arguments_parts}
+        finish_reason = "stop"
+
         for chunk in stream:
-            piece = _extract_content_delta(chunk)
-            if not piece:
+            choice = getattr(chunk, "choices", [None])[0] if hasattr(chunk, "choices") else None
+            if choice is None:
                 continue
-            parts.append(piece)
-            try:
-                on_delta(piece)
-            except Exception:
-                # The callback must never break the LLM call.
-                logger.exception("on_delta callback raised — continuing")
-        return "".join(parts)
+
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+
+            # Collect content delta
+            piece = _extract_content_delta(chunk)
+            if piece:
+                parts.append(piece)
+                try:
+                    on_delta(piece)
+                except Exception:
+                    logger.exception("on_delta callback raised — continuing")
+
+            # Collect tool_calls delta
+            tc_delta = getattr(delta, "tool_calls", None)
+            if tc_delta:
+                for tc in tc_delta:
+                    idx = getattr(tc, "index", 0) or 0
+                    if idx not in streaming_tool_calls:
+                        streaming_tool_calls[idx] = {
+                            "id": getattr(tc, "id", "") or "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    entry = streaming_tool_calls[idx]
+                    # Update id if provided
+                    tc_id = getattr(tc, "id", None)
+                    if tc_id:
+                        entry["id"] = tc_id
+                    # Update function name
+                    func = getattr(tc, "function", None)
+                    if func:
+                        name = getattr(func, "name", None)
+                        if name:
+                            entry["function"]["name"] = name
+                        args = getattr(func, "arguments", None)
+                        if args:
+                            entry["function"]["arguments"] += args
+                        if on_tool_delta:
+                            tool_name = entry["function"].get("name", "")
+                            payload: dict[str, Any] = {
+                                "arguments": entry["function"]["arguments"],
+                            }
+                            if tool_name == "execute_code":
+                                code = _extract_partial_json_string_field(
+                                    entry["function"]["arguments"],
+                                    "code",
+                                )
+                                if code is not None:
+                                    payload["code"] = code
+                            try:
+                                on_tool_delta(idx, tool_name, payload)
+                            except Exception:
+                                logger.exception("on_tool_delta callback raised — continuing")
+
+            # Track finish reason
+            fr = getattr(choice, "finish_reason", None)
+            if fr:
+                finish_reason = str(fr)
+
+        # Build final response
+        content = "".join(parts) or None
+        tool_calls = None
+        if streaming_tool_calls:
+            tool_calls = []
+            for idx in sorted(streaming_tool_calls.keys()):
+                entry = streaming_tool_calls[idx]
+                # Try to parse accumulated arguments
+                try:
+                    json.loads(entry["function"]["arguments"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Malformed tool_call arguments: %s", entry["function"]["arguments"][:200])
+                tool_calls.append(entry)
+            logger.info("[LLM] Streaming collected %d tool_calls: %s",
+                       len(tool_calls),
+                       [tc.get("function", {}).get("name", "?") for tc in tool_calls])
+
+        logger.info("[LLM] Response: content_len=%d, tool_calls=%d, finish_reason=%s",
+                   len(content) if content else 0,
+                   len(tool_calls) if tool_calls else 0,
+                   finish_reason)
+
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
 
     return _call
 
@@ -239,6 +440,7 @@ def build_llm_model(config: LLMConfig) -> LLMCaller:
 
 __all__ = [
     "LLMConfig",
+    "LLMResponse",
     "LLMCaller",
     "_resolve_llm_route",
     "build_llm_caller",

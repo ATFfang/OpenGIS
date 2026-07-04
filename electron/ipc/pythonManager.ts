@@ -301,7 +301,7 @@ export class PythonManager {
   /**
    * Stop the Python backend server.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     this.restartCount = 0  // Reset on intentional stop
     this.isRestarting = false
     // Clear any pending force-kill timeout from a previous stop/restart.
@@ -309,23 +309,46 @@ export class PythonManager {
       clearTimeout(this.killTimeout)
       this.killTimeout = null
     }
-    if (this.process) {
-      this.status = { status: 'stopped' }
-      this.process.kill('SIGTERM')
-
-      // Force kill after 5 seconds
-      this.killTimeout = setTimeout(() => {
-        if (this.process) {
-          this.process.kill('SIGKILL')
+    const proc = this.process
+    this.status = { status: 'stopped' }
+    if (!proc) {
+      if (this.stdoutMirror) {
+        this.stdoutMirror.end()
+        this.stdoutMirror = null
+      }
+      return
+    }
+    return new Promise((resolve) => {
+      let settled = false
+      const cleanup = () => {
+        if (settled) return
+        settled = true
+        if (this.killTimeout) {
+          clearTimeout(this.killTimeout)
+          this.killTimeout = null
+        }
+        if (this.process === proc) {
           this.process = null
         }
-        this.killTimeout = null
+        if (this.stdoutMirror) {
+          this.stdoutMirror.end()
+          this.stdoutMirror = null
+        }
+        resolve()
+      }
+
+      proc.once('exit', cleanup)
+      proc.once('error', cleanup)
+      proc.kill('SIGTERM')
+
+      this.killTimeout = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill('SIGKILL')
+          return
+        }
+        cleanup()
       }, 5000)
-    }
-    if (this.stdoutMirror) {
-      this.stdoutMirror.end()
-      this.stdoutMirror = null
-    }
+    })
   }
 
   /**
@@ -359,9 +382,7 @@ export class PythonManager {
    * Restart the Python backend server.
    */
   async restart(): Promise<void> {
-    this.stop()
-    // Wait a bit for cleanup
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await this.stop()
     await this.start()
   }
 

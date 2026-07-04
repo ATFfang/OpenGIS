@@ -115,21 +115,24 @@ export class PythonClient {
     }
     this.reconnectAttempts = this.maxReconnectAttempts // Prevent reconnect
     
-    // Reject all pending requests to prevent hanging promises
-    for (const [id, callback] of this.pendingRequests.entries()) {
-      try {
-        callback(null, new Error('WebSocket disconnected'))
-      } catch (e) {
-        console.error(`[PythonClient] Error rejecting pending request ${id}:`, e)
-      }
-    }
-    this.pendingRequests.clear()
+    this.rejectPendingRequests(new Error('WebSocket disconnected'))
     
     if (this.ws) {
       this.ws.close()
       this.ws = null
     }
     this._isConnected = false
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    for (const [id, callback] of this.pendingRequests.entries()) {
+      try {
+        callback(null, error)
+      } catch (e) {
+        console.error(`[PythonClient] Error rejecting pending request ${id}:`, e)
+      }
+    }
+    this.pendingRequests.clear()
   }
 
   /**
@@ -201,13 +204,10 @@ export class PythonClient {
       const isChat = method === 'chat.user_message'
       const isSkill = method.startsWith('rpc.skill.')
       const isScriptRun = method === 'rpc.code.run_script'
-      // chat.user_message drives the agent loop which may run for 10+ minutes
-      // (especially in workflow mode). No client-side timeout — the backend's
-      // exec_timeout (default 600s) handles runaway runs.
       const effectiveTimeout =
         timeoutMs ??
         (isChat
-          ? 0 // no timeout — controlled by backend
+          ? 10 * 60 * 1000 // 10 min
           : isScriptRun
           ? 10 * 60 * 1000 // 10 min
           : isSkill
@@ -258,6 +258,7 @@ export class PythonClient {
       this.ws.onclose = () => {
         console.log('[PythonClient] Disconnected')
         this._isConnected = false
+        this.rejectPendingRequests(new Error('WebSocket disconnected'))
         this._scheduleReconnect()
       }
 

@@ -10,7 +10,6 @@
 import { memo, useState, useCallback } from 'react'
 import { Camera, X, Loader2, Check, MapPin } from 'lucide-react'
 import { mapEngine } from '@/features/map/engine/MapEngine'
-import { useT } from '@/i18n'
 
 interface ScreenshotRowProps {
   requestId: string
@@ -19,7 +18,6 @@ interface ScreenshotRowProps {
 }
 
 export const ScreenshotRow = memo(({ requestId, savePath, prompt }: ScreenshotRowProps) => {
-  const t = useT()
   const [status, setStatus] = useState<'pending' | 'capturing' | 'done' | 'skipped'>('pending')
 
   const handleCapture = useCallback(async () => {

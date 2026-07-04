@@ -4,15 +4,61 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { Copy, Check } from 'lucide-react'
+import { Copy, Check, X, Download } from 'lucide-react'
 import { useChatCodeTheme } from './useChatCodeTheme'
+import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 import 'katex/dist/katex.min.css'
 
 interface MarkdownBlockProps {
   markdown?: string
   showCursor?: boolean
+  /** Directory of the markdown source file. Relative images resolve here. */
+  baseDir?: string
   /** Optional: resolve a relative image path to a usable URL (async). */
   resolveImageSrc?: (relativePath: string) => Promise<string>
+}
+
+const URL_LIKE_RE = /^(https?:|data:|blob:)/i
+const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/
+const IMAGE_PATH_RE = /\.(png|jpe?g|gif|bmp|webp|svg)(?:[?#].*)?$/i
+
+function stripFileProtocol(src: string): string {
+  if (!src.toLowerCase().startsWith('file://')) return src
+  try {
+    return decodeURIComponent(new URL(src).pathname)
+  } catch {
+    return src.replace(/^file:\/\//i, '')
+  }
+}
+
+function decodeLocalPath(src: string): string {
+  try {
+    return decodeURIComponent(src)
+  } catch {
+    return src
+  }
+}
+
+function joinBasePath(baseDir: string, relativePath: string): string {
+  const root = baseDir.replace(/[\\/]+$/, '')
+  const rel = relativePath.replace(/^\.?[\\/]+/, '')
+  return `${root}/${rel}`
+}
+
+async function defaultResolveImageSrc(src: string, baseDir?: string): Promise<string> {
+  if (URL_LIKE_RE.test(src)) return src
+
+  const localPath = decodeLocalPath(stripFileProtocol(src).trim())
+  const isAbsoluteLocal = localPath.startsWith('/') || WINDOWS_ABS_RE.test(localPath)
+  if (isAbsoluteLocal && IMAGE_PATH_RE.test(localPath)) {
+    return pathToImageUrl(localPath)
+  }
+
+  if (baseDir && IMAGE_PATH_RE.test(localPath)) {
+    return pathToImageUrl(joinBasePath(baseDir, localPath))
+  }
+
+  return src
 }
 
 /**
@@ -20,22 +66,34 @@ interface MarkdownBlockProps {
  * Uses resolveImageSrc to convert a relative path to a Blob URL via
  * Electron IPC, then renders the image.
  */
-function ResolvedImage({ src, alt, resolveImageSrc }: {
+function ResolvedImage({ src, alt, resolveImageSrc, onClick }: {
   src: string
   alt?: string
   resolveImageSrc: (path: string) => Promise<string>
+  onClick?: (resolvedSrc: string) => void
 }) {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    setResolvedSrc(null)
+    setError(null)
     resolveImageSrc(src).then((url) => {
       if (!cancelled) setResolvedSrc(url)
-    }).catch(() => {
-      if (!cancelled) setResolvedSrc(src) // Fallback to original src
+    }).catch((err) => {
+      if (!cancelled) setError((err as Error)?.message || 'Image could not be loaded')
     })
     return () => { cancelled = true }
   }, [src, resolveImageSrc])
+
+  if (error) {
+    return (
+      <div className="my-2 rounded-lg border border-border/15 bg-bg-tertiary/40 px-3 py-2 text-xs text-text-muted">
+        Image unavailable: {src}
+      </div>
+    )
+  }
 
   if (!resolvedSrc) {
     return <div className="w-full h-20 rounded-lg bg-bg-tertiary/30 animate-pulse my-2" />
@@ -45,7 +103,8 @@ function ResolvedImage({ src, alt, resolveImageSrc }: {
     <img
       src={resolvedSrc}
       alt={alt}
-      className="max-w-full rounded-lg my-2"
+      className="max-w-full rounded-lg my-2 cursor-zoom-in"
+      onClick={() => onClick?.(resolvedSrc)}
       onError={(e) => {
         // Fallback: hide the image if it fails to load
         ;(e.target as HTMLImageElement).style.display = 'none'
@@ -58,7 +117,13 @@ function ResolvedImage({ src, alt, resolveImageSrc }: {
  * MarkdownBlock — Cline-inspired markdown renderer.
  * Renders markdown with syntax highlighting, GFM support, and cursor animation.
  */
-const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownBlockProps) => {
+const MarkdownBlock = memo(({ markdown, showCursor, baseDir, resolveImageSrc }: MarkdownBlockProps) => {
+  const defaultImageResolver = useCallback(
+    (src: string) => defaultResolveImageSrc(src, baseDir),
+    [baseDir]
+  )
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+
   if (!markdown) return null
 
   // NOTE: 之前这里用 `<span className="inline">` 包住 ReactMarkdown，但 react-markdown
@@ -66,19 +131,35 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
   // inline <span> 是无效 HTML，浏览器会自动"修复"，在实际 DOM 里提前关闭 span 再插 div，
   // 结果经常看到**双边距 / 边框错位 / 代码块"重影"**。改成 block-level <div> 就彻底没事。
   return (
-    <div className="w-full min-w-0 overflow-hidden break-words">
+    <div className="inline-markdown-block w-full min-w-0 overflow-hidden break-words">
       <div className={`[&>p:first-child]:mt-0 ${showCursor ? 'inline-cursor-container' : ''}`}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
           components={{
             img({ src, alt, ...props }) {
-              // If resolveImageSrc is provided and src is not an absolute URL,
-              // resolve it asynchronously via Electron IPC.
-              if (resolveImageSrc && src && !/^https?:\/\//.test(src)) {
-                return <ResolvedImage src={src} alt={alt} resolveImageSrc={resolveImageSrc} />
+              const handleClick = (resolvedSrc: string) => {
+                setLightboxSrc(resolvedSrc)
               }
-              return <img src={src} alt={alt} className="max-w-full rounded-lg my-2" {...props} />
+              if (src && !URL_LIKE_RE.test(src)) {
+                return (
+                  <ResolvedImage
+                    src={src}
+                    alt={alt}
+                    resolveImageSrc={resolveImageSrc ?? defaultImageResolver}
+                    onClick={handleClick}
+                  />
+                )
+              }
+              return (
+                <img
+                  src={src}
+                  alt={alt}
+                  className="max-w-full rounded-lg my-2 cursor-zoom-in"
+                  onClick={() => src && handleClick(src)}
+                  {...props}
+                />
+              )
             },
             code({ className, children, node, ...props }) {
               const match = /language-(\w+)/.exec(className || '')
@@ -93,6 +174,9 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
 
               // Block code (with or without language)
               if (isBlockCode) {
+                if (showCursor) {
+                  return <StreamingCodeBlock language={match ? match[1] : 'text'} code={codeString} />
+                }
                 return (
                   <CodeBlock language={match ? match[1] : 'text'} code={codeString} />
                 )
@@ -101,7 +185,7 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
               // Inline code
               return (
                 <code
-                  className="font-mono text-[12px] bg-bg-tertiary/80 border border-border/60 rounded-[4px] px-1.5 py-0.5 whitespace-pre-line break-words text-accent-primary/90"
+                  className="font-mono text-[12px] bg-[var(--bg-tertiary)] rounded-[4px] px-1.5 py-0.5 whitespace-pre-line break-words text-accent-primary/90"
                   {...props}
                 >
                   {children}
@@ -137,7 +221,7 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
             },
             table({ children }) {
               return (
-                <div className="overflow-x-auto my-3 rounded-lg border border-border">
+                <div className="overflow-x-auto my-3 rounded-lg">
                   <table className="border-collapse w-full text-[13px]">
                     {children}
                   </table>
@@ -146,20 +230,20 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
             },
             th({ children }) {
               return (
-                <th className="p-2.5 border-b border-border text-left bg-bg-tertiary/50 font-semibold text-text-primary text-[12px] uppercase tracking-wider">
+                <th className="p-2.5 border-b border-border/20 text-left bg-bg-tertiary/50 font-semibold text-text-primary text-[12px] uppercase tracking-wider">
                   {children}
                 </th>
               )
             },
             td({ children }) {
               return (
-                <td className="p-2.5 border-b border-border/50 text-left text-text-secondary">
+                <td className="p-2.5 border-b border-border/15 text-left text-text-secondary">
                   {children}
                 </td>
               )
             },
             hr() {
-              return <hr className="my-4 border-border/50" />
+              return <hr className="my-4 border-border/15" />
             },
             blockquote({ children }) {
               return (
@@ -188,6 +272,38 @@ const MarkdownBlock = memo(({ markdown, showCursor, resolveImageSrc }: MarkdownB
           {markdown}
         </ReactMarkdown>
       </div>
+
+      {/* Image Lightbox */}
+      {lightboxSrc && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setLightboxSrc(null)}
+        >
+          <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={lightboxSrc}
+              alt="Preview"
+              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            />
+            <div className="absolute top-3 right-3 flex gap-2">
+              <a
+                href={lightboxSrc}
+                download
+                className="w-8 h-8 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Download className="w-4 h-4" />
+              </a>
+              <button
+                onClick={() => setLightboxSrc(null)}
+                className="w-8 h-8 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 })
@@ -197,6 +313,19 @@ MarkdownBlock.displayName = 'MarkdownBlock'
 export default MarkdownBlock
 
 // --- Code Block with copy button ---
+
+function StreamingCodeBlock({ language, code }: { language: string; code: string }) {
+  return (
+    <div className="relative my-3 overflow-hidden rounded-lg border border-border/15">
+      <div className="flex items-center justify-between border-b border-border/15 bg-bg-tertiary/80 px-3 py-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted">{language}</span>
+      </div>
+      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words bg-bg-tertiary px-4 py-3 font-mono text-[12px] leading-[1.6] text-text-secondary">
+        <code>{code || ' '}</code>
+      </pre>
+    </div>
+  )
+}
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false)
@@ -209,9 +338,9 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }, [code])
 
   return (
-    <div className="relative group my-3 rounded-lg overflow-hidden border border-border/60">
+    <div className="relative group my-3 rounded-lg overflow-hidden border border-border/15">
       {/* Language badge + copy button */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-bg-tertiary/80 border-b border-border/40">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-bg-tertiary/80 border-b border-border/15">
         <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">{language}</span>
         <button
           onClick={handleCopy}

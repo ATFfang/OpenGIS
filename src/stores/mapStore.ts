@@ -114,6 +114,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
       if (idx !== -1) {
         // Replace existing entry with same ID
         const layers = [...state.layers]
+        if (layers[idx] !== layer) _releaseLayerResources(layers[idx])
         layers[idx] = layer
         return { layers, activeLayerId: layer.id }
       }
@@ -129,6 +130,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
       for (const layer of incoming) {
         const idx = layers.findIndex((l) => l.id === layer.id)
         if (idx !== -1) {
+          if (layers[idx] !== layer) _releaseLayerResources(layers[idx])
           layers[idx] = layer
         } else {
           layers.push(layer)
@@ -142,10 +144,13 @@ export const useMapStore = create<MapStore>((set, get) => ({
     }),
 
   removeLayer: (id) =>
-    set((state) => ({
-      layers: state.layers.filter((l) => l.id !== id),
-      activeLayerId: state.activeLayerId === id ? null : state.activeLayerId,
-    })),
+    set((state) => {
+      _releaseLayerResources(state.layers.find((l) => l.id === id))
+      return {
+        layers: state.layers.filter((l) => l.id !== id),
+        activeLayerId: state.activeLayerId === id ? null : state.activeLayerId,
+      }
+    }),
 
   setActiveLayer: (id) =>
     set({ activeLayerId: id }),
@@ -184,6 +189,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
 
   clearLayers: () => {
     resetLayerColorIndex()
+    useMapStore.getState().layers.forEach(_releaseLayerResources)
     set({ layers: [], activeLayerId: null })
   },
 
@@ -265,9 +271,30 @@ export const useMapStore = create<MapStore>((set, get) => ({
 
 import { useAssetStore } from './assetStore'
 import { loadLayers, persistLayers, flushLayers } from '@/services/layerPersistence'
+import { loadMapView, persistMapView, flushMapView } from '@/services/mapViewPersistence'
 
 // 加载完成前不要把"空图层"写回磁盘，否则会用空数据覆盖已有持久化。
 let _layerPersistReady = false
+let _viewPersistReady = false
+let _isApplyingPersistedView = false
+
+function _releaseLayerResources(layer: MapLayerDefinition | undefined) {
+  if (!layer || layer.data.kind !== 'raster') return
+  const imageUrl = layer.data.imageUrl
+  const ext = layer.meta.extension?.toLowerCase()
+  const isOwnedGeoTiffBlob =
+    layer.sourceType === 'geotiff'
+    && (ext === '.tif' || ext === '.tiff')
+    && typeof imageUrl === 'string'
+    && imageUrl.startsWith('blob:')
+  if (isOwnedGeoTiffBlob) {
+    try {
+      URL.revokeObjectURL(imageUrl)
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+}
 
 function _applyLoadedLayers(layers: MapLayerDefinition[]) {
   useMapStore.setState({
@@ -278,18 +305,62 @@ function _applyLoadedLayers(layers: MapLayerDefinition[]) {
 
 async function _loadLayersForWorkspace(workspacePath: string | null) {
   _layerPersistReady = false
+  _viewPersistReady = false
   if (!workspacePath) {
     _layerPersistReady = true
+    _viewPersistReady = true
     return
   }
   try {
-    const loaded = await loadLayers(workspacePath)
+    const [loaded, loadedView] = await Promise.all([
+      loadLayers(workspacePath),
+      loadMapView(workspacePath),
+    ])
     _applyLoadedLayers(loaded)
+    if (loadedView) {
+      _isApplyingPersistedView = true
+      useMapStore.getState().setViewState(loadedView)
+      _isApplyingPersistedView = false
+    }
   } catch (e) {
-    console.error('[mapStore] 加载持久化图层失败:', e)
+    console.error('[mapStore] 加载持久化地图状态失败:', e)
+  } finally {
+    _layerPersistReady = true
+    _viewPersistReady = true
+  }
+}
+
+/**
+ * RPC handlers may run before the initial delayed workspace hydration has
+ * completed after an app restart. Give read/update map tools one lazy chance
+ * to restore persisted layers before they report an empty map.
+ */
+export async function hydrateMapLayersForRpc(): Promise<void> {
+  const workspacePath = useAssetStore.getState().workspacePath
+  if (!workspacePath) return
+  if (useMapStore.getState().layers.length > 0) return
+  if (_layerPersistReady) return
+  try {
+    const loaded = await loadLayers(workspacePath)
+    if (loaded.length > 0 && useMapStore.getState().layers.length === 0) {
+      _applyLoadedLayers(loaded)
+    }
+  } catch (e) {
+    console.error('[mapStore] RPC 图层懒加载失败:', e)
   } finally {
     _layerPersistReady = true
   }
+}
+
+export async function flushMapStateToDisk(
+  targetWorkspacePath?: string | null,
+): Promise<void> {
+  const wp = targetWorkspacePath ?? useAssetStore.getState().workspacePath
+  const state = useMapStore.getState()
+  await Promise.all([
+    flushLayers(wp, state.layers),
+    flushMapView(wp, state.viewState),
+  ])
 }
 
 // 图层变更 → 防抖持久化到当前工作区。
@@ -300,13 +371,28 @@ useMapStore.subscribe((state, prev) => {
   persistLayers(wp, state.layers)
 })
 
+// 视口变更 → 防抖持久化到当前工作区。
+useMapStore.subscribe((state, prev) => {
+  if (state.viewState === prev.viewState) return
+  if (!_viewPersistReady || _isApplyingPersistedView) return
+  const wp = useAssetStore.getState().workspacePath
+  persistMapView(wp, state.viewState)
+})
+
 // 工作区切换 → flush 旧的 → 清空 → 加载新的。
 useAssetStore.subscribe((state, prev) => {
   if (state.workspacePath === prev.workspacePath) return
   const oldWp = prev.workspacePath
   const currentLayers = useMapStore.getState().layers
+  const currentViewState = useMapStore.getState().viewState
   _layerPersistReady = false
-  const flushOld = oldWp ? flushLayers(oldWp, currentLayers) : Promise.resolve()
+  _viewPersistReady = false
+  const flushOld = oldWp
+    ? Promise.all([
+      flushLayers(oldWp, currentLayers),
+      flushMapView(oldWp, currentViewState),
+    ])
+    : Promise.resolve()
   flushOld.finally(() => {
     // 清空旧工作区图层，避免泄漏进新工作区
     useMapStore.getState().clearLayers()

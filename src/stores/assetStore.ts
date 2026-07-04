@@ -182,20 +182,6 @@ function sortNodes(nodes: FileNode[], mode: SortMode, order: SortOrder): FileNod
   })
 }
 
-/** Collect all directory paths recursively */
-function collectDirectoryPaths(nodes: FileNode[]): string[] {
-  const paths: string[] = []
-  for (const node of nodes) {
-    if (node.type === 'directory') {
-      paths.push(node.path)
-      if (node.children) {
-        paths.push(...collectDirectoryPaths(node.children))
-      }
-    }
-  }
-  return paths
-}
-
 // ─── Store Implementation ─────────────────────────────────────────
 
 export const useAssetStore = create<AssetStore>((set, get) => ({

@@ -36,7 +36,7 @@ import {
   detectGeometryType,
   normalizeToFeatureCollection,
 } from './_map_util';
-import { useMapStore } from '@/stores/mapStore';
+import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
 import { mapEngine } from '@/features/map/engine/MapEngine';
 import { exportMap } from '@/features/map/export';
 import {
@@ -65,6 +65,7 @@ import {
   QueryFeaturesSchema,
   RemoveLayerSchema,
   SetBasemapSchema,
+  SetBasemapVisibilitySchema,
   SetLayerRendererSchema,
   SetLayerStyleSchema,
   SetLayerVisibilitySchema,
@@ -161,6 +162,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       fileSize: text.length,
     };
     const style = getDefaultStyle(vector.geometryType);
+    applyPaintToLayerStyle(style, parsed.style?.paint);
 
     const definition: MapLayerDefinition = {
       id: layerId,
@@ -302,7 +304,7 @@ export const mapHandlers: Record<string, RpcHandler> = {
       );
     }
 
-    const layerId = `raster_${uuidv4()}`;
+    const layerId = parsed.layer_id ?? `raster_${uuidv4()}`;
     const meta: DataSourceMeta = {
       fileName,
       extension: '.tif',
@@ -449,12 +451,13 @@ export const mapHandlers: Record<string, RpcHandler> = {
    * categorized / heatmap / cluster / extrusion），否则 renderer 没法
    * 构造正确的 expression。fill/line/circle/raster 切换不需要配置段。
    */
-  'rpc.ui.map.set_layer_renderer': (params) => {
+  'rpc.ui.map.set_layer_renderer': async (params) => {
     const parsed = parseParams(
       SetLayerRendererSchema,
       params,
       'rpc.ui.map.set_layer_renderer',
     );
+    await hydrateMapLayersForRpc();
     const store = useMapStore.getState();
     const layer = store.getLayerById(parsed.layer_id);
     if (!layer) {
@@ -659,8 +662,9 @@ export const mapHandlers: Record<string, RpcHandler> = {
    * 聚焦到某个图层 —— 关键原语：LLM 不用传 bbox，TS 从 LayerStore
    * 里查 `data.bbox`。
    */
-  'rpc.ui.map.zoom_to_layer': (params) => {
+  'rpc.ui.map.zoom_to_layer': async (params) => {
     const parsed = parseParams(ZoomToLayerSchema, params, 'rpc.ui.map.zoom_to_layer');
+    await hydrateMapLayersForRpc();
     const layer = useMapStore.getState().getLayerById(parsed.layer_id);
     if (!layer) {
       throw RpcError.invalidParams(
@@ -684,8 +688,9 @@ export const mapHandlers: Record<string, RpcHandler> = {
    * 列出当前地图上所有图层的精简 meta。返回值里**不含 features**，避免
    * chat 协议被几百万 point 撑爆。需要 features 请走 query_features。
    */
-  'rpc.ui.map.list_layers': (params) => {
+  'rpc.ui.map.list_layers': async (params) => {
     parseParams(ListLayersSchema, params, 'rpc.ui.map.list_layers');
+    await hydrateMapLayersForRpc();
     const layers = useMapStore.getState().layers;
     return {
       layers: layers.map(summarizeLayer),
@@ -696,8 +701,9 @@ export const mapHandlers: Record<string, RpcHandler> = {
   /**
    * 按 id 查单层。返回 meta + 字段 schema，**不含 features**（同 list_layers）。
    */
-  'rpc.ui.map.get_layer': (params) => {
+  'rpc.ui.map.get_layer': async (params) => {
     const parsed = parseParams(GetLayerSchema, params, 'rpc.ui.map.get_layer');
+    await hydrateMapLayersForRpc();
     const layer = useMapStore.getState().getLayerById(parsed.layer_id);
     if (!layer) {
       throw RpcError.invalidParams(
@@ -715,8 +721,9 @@ export const mapHandlers: Record<string, RpcHandler> = {
    * point 命中判定：点落在 feature 的 bbox 内即视为命中（粗略但足够 LLM
    * 用；精确 point-in-polygon 留给后续 geo 分析 skill）。
    */
-  'rpc.ui.map.query_features': (params) => {
+  'rpc.ui.map.query_features': async (params) => {
     const parsed = parseParams(QueryFeaturesSchema, params, 'rpc.ui.map.query_features');
+    await hydrateMapLayersForRpc();
     const layer = useMapStore.getState().getLayerById(parsed.layer_id);
     if (!layer) {
       throw RpcError.invalidParams(
@@ -816,11 +823,14 @@ export const mapHandlers: Record<string, RpcHandler> = {
     };
 
     const style = getDefaultStyle(geometryType);
-    if (typeof extras.color === 'string' && extras.color) {
-      style.color = extras.color as string;
-    }
-    if (typeof extras.opacity === 'number') {
-      style.opacity = extras.opacity as number;
+    applyPaintToLayerStyle(style, parsed.style?.paint);
+    if (!parsed.style?.paint) {
+      if (typeof extras.color === 'string' && extras.color) {
+        style.color = extras.color as string;
+      }
+      if (typeof extras.opacity === 'number') {
+        style.opacity = extras.opacity as number;
+      }
     }
 
     const definition: MapLayerDefinition = {
@@ -846,8 +856,9 @@ export const mapHandlers: Record<string, RpcHandler> = {
     };
   },
 
-  'rpc.ui.map.remove_layer': (params) => {
+  'rpc.ui.map.remove_layer': async (params) => {
     const parsed = parseParams(RemoveLayerSchema, params, 'rpc.ui.map.remove_layer');
+    await hydrateMapLayersForRpc();
     const store = useMapStore.getState();
     const exists = !!store.getLayerById(parsed.layer_id);
     store.removeLayer(parsed.layer_id);
@@ -901,8 +912,21 @@ export const mapHandlers: Record<string, RpcHandler> = {
     );
   },
 
-  'rpc.ui.map.set_layer_style': (params) => {
+  'rpc.ui.map.set_basemap_visibility': (params) => {
+    const parsed = parseParams(
+      SetBasemapVisibilitySchema,
+      params,
+      'rpc.ui.map.set_basemap_visibility',
+    );
+    const store = useMapStore.getState();
+    store.setBasemapVisible(parsed.visible);
+    mapEngine.setBasemapVisible(parsed.visible);
+    return { visible: parsed.visible };
+  },
+
+  'rpc.ui.map.set_layer_style': async (params) => {
     const parsed = parseParams(SetLayerStyleSchema, params, 'rpc.ui.map.set_layer_style');
+    await hydrateMapLayersForRpc();
     const store = useMapStore.getState();
     const layer = store.getLayerById(parsed.layer_id);
     if (!layer) {
@@ -925,25 +949,10 @@ export const mapHandlers: Record<string, RpcHandler> = {
       layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized';
 
     const styleUpdates: Partial<LayerStyle> = {};
-
-    if (!isThematic) {
-      const color = firstDefinedString(paint, ['fill-color', 'line-color', 'circle-color']);
-      if (color !== null) styleUpdates.color = color;
-    }
-    const opacity = firstDefinedNumber(paint, ['fill-opacity', 'line-opacity', 'circle-opacity']);
-    if (opacity !== null) styleUpdates.opacity = opacity;
-    const fillOpacity = firstDefinedNumber(paint, ['fill-opacity']);
-    if (fillOpacity !== null) styleUpdates.fillOpacity = fillOpacity;
-    const strokeColor = firstDefinedString(paint, ['stroke-color', 'circle-stroke-color']);
-    if (strokeColor !== null) styleUpdates.strokeColor = strokeColor;
-    const strokeWidth = firstDefinedNumber(paint, [
-      'stroke-width',
-      'line-width',
-      'circle-stroke-width',
-    ]);
-    if (strokeWidth !== null) styleUpdates.strokeWidth = strokeWidth;
-    const radius = firstDefinedNumber(paint, ['circle-radius']);
-    if (radius !== null) styleUpdates.radius = radius;
+    applyPaintToLayerStyle(styleUpdates, paint, {
+      skipColor: isThematic,
+      renderType: layer.style.renderType,
+    });
 
     if (Object.keys(styleUpdates).length > 0) {
       store.updateLayerStyle(parsed.layer_id, styleUpdates);
@@ -952,12 +961,13 @@ export const mapHandlers: Record<string, RpcHandler> = {
     return { layer_id: parsed.layer_id, applied: styleUpdates };
   },
 
-  'rpc.ui.map.set_layer_visibility': (params) => {
+  'rpc.ui.map.set_layer_visibility': async (params) => {
     const parsed = parseParams(
       SetLayerVisibilitySchema,
       params,
       'rpc.ui.map.set_layer_visibility',
     );
+    await hydrateMapLayersForRpc();
     const store = useMapStore.getState();
     if (!store.getLayerById(parsed.layer_id)) {
       throw RpcError.invalidParams(
@@ -973,6 +983,56 @@ export const mapHandlers: Record<string, RpcHandler> = {
 // ─────────────────────────────────────────────────────────────────────
 // 内部工具
 // ─────────────────────────────────────────────────────────────────────
+
+function applyPaintToLayerStyle(
+  style: Partial<LayerStyle>,
+  paint: Record<string, unknown> | undefined,
+  options: { skipColor?: boolean; renderType?: LayerStyle['renderType'] } = {},
+): void {
+  if (!paint) return;
+
+  const renderType = options.renderType ?? style.renderType;
+  if (!options.skipColor) {
+    const colorKeys =
+      renderType === 'line'
+        ? ['line-color', 'fill-color', 'circle-color']
+        : renderType === 'circle'
+          ? ['circle-color', 'fill-color']
+          : ['fill-color', 'circle-color'];
+    const color = firstDefinedString(paint, colorKeys);
+    if (color !== null) style.color = color;
+  }
+  const opacityKeys =
+    renderType === 'line'
+      ? ['line-opacity', 'fill-opacity', 'circle-opacity']
+      : renderType === 'circle'
+        ? ['circle-opacity', 'fill-opacity']
+        : ['fill-opacity', 'circle-opacity'];
+  const opacity = firstDefinedNumber(paint, opacityKeys);
+  if (opacity !== null) style.opacity = opacity;
+  const fillOpacity = firstDefinedNumber(paint, ['fill-opacity']);
+  if (fillOpacity !== null) style.fillOpacity = fillOpacity;
+  const strokeColor = firstDefinedString(paint, [
+    'stroke-color',
+    'line-color',
+    'circle-stroke-color',
+  ]);
+  if (strokeColor !== null) style.strokeColor = strokeColor;
+  const strokeWidth = firstDefinedNumber(paint, [
+    'stroke-width',
+    'line-width',
+    'circle-stroke-width',
+  ]);
+  if (strokeWidth !== null) style.strokeWidth = strokeWidth;
+  const strokeOpacity = firstDefinedNumber(paint, [
+    'stroke-opacity',
+    'line-opacity',
+    'circle-stroke-opacity',
+  ]);
+  if (strokeOpacity !== null) style.strokeOpacity = strokeOpacity;
+  const radius = firstDefinedNumber(paint, ['circle-radius']);
+  if (radius !== null) style.radius = radius;
+}
 
 function firstDefinedString(
   obj: Record<string, unknown>,
@@ -1034,7 +1094,7 @@ function summarizeLayer(layer: MapLayerDefinition) {
 
 // ── query_features 过滤原语 ────────────────────────────────────────
 
-type AttrFilter = { field: string; op: '=' | '!=' | '>' | '<' | 'contains'; value: unknown };
+type AttrFilter = { field: string; op: '=' | '!=' | '>' | '<' | 'contains'; value?: unknown };
 
 function matchesAttributes(feature: GeoJSONFeature, filters: AttrFilter[]): boolean {
   if (filters.length === 0) return true;

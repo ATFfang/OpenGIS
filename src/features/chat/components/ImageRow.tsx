@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { MapPin, Maximize2, X, Check, Loader2 } from 'lucide-react'
+import { MapPin, Maximize2, X, Check, Loader2, ImageOff } from 'lucide-react'
 import type { UIMessage } from '@/types/chat'
 import { useMapStore } from '@/stores/mapStore'
 import type { PinnedImage } from '@/features/map/PinnedImagePanel'
@@ -67,7 +67,14 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
     }
   }, [path, url, pinState])
 
-  if (!url) return null
+  if (!url) {
+    return (
+      <div className="ml-[30px] mt-1 mb-1.5 max-w-[420px] rounded-lg border border-border/30 bg-bg-tertiary/40 px-3 py-2 text-[12px] text-text-muted flex items-center gap-2">
+        <ImageOff className="w-3.5 h-3.5" />
+        <span>Loading chart preview…</span>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -76,12 +83,12 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
           <img
             src={url}
             alt={message.text || 'plot'}
-            className="max-w-[420px] max-h-[320px] rounded-xl border border-border/60 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
+            className="max-w-[420px] max-h-[320px] rounded-xl border border-border/30 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
             onClick={() => setPreviewOpen(true)}
           />
 
-          {/* Hover toolbar */}
-          <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          {/* Toolbar: keep Pin visible so chart -> map remains discoverable. */}
+          <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-95 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               type="button"
               onClick={handlePin}

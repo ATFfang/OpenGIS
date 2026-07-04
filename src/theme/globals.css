@@ -10,6 +10,7 @@
   /* Dark theme (default) — inspired by VS Code / GitHub Dark */
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
+  --bg-sidebar: #161b22;
   --bg-tertiary: #1c2128;
   --bg-hover: #252c35;
 
@@ -41,12 +42,13 @@
 .light {
   --bg-primary: #f8f9fb;
   --bg-secondary: #ffffff;
+  --bg-sidebar: #eff6ff;
   --bg-tertiary: #f0f2f5;
   --bg-hover: #e8eaed;
 
-  --text-primary: #1a1d27;
-  --text-secondary: #5f6573;
-  --text-muted: #9aa0ad;
+  --text-primary: #111827;
+  --text-secondary: #374151;
+  --text-muted: #6b7280;
 
   --accent-primary: #2563eb;
   --accent-success: #16a34a;
@@ -62,6 +64,21 @@
   --orb-color-3: rgba(6, 182, 212, 0.4);
   --orb-color-4: rgba(34, 197, 94, 0.3);
   --orb-color-5: rgba(168, 85, 247, 0.4);
+}
+
+/* Chat status cards: slightly separated from the chat surface. */
+:root {
+  --chat-plan-bg: #20262f;
+  --chat-plan-border: #343b49;
+  --chat-subagent-bg: #182832;
+  --chat-subagent-border: #2b4652;
+}
+
+.light {
+  --chat-plan-bg: #eef1f5;
+  --chat-plan-border: #d9dee7;
+  --chat-subagent-bg: #eaf4f6;
+  --chat-subagent-border: #cfe2e7;
 }
 
 /* ============================================
@@ -179,6 +196,16 @@ body {
    Utility Classes
    ============================================ */
 
+.chat-plan-card {
+  background: var(--chat-plan-bg);
+  border-color: var(--chat-plan-border);
+}
+
+.chat-subagent-card {
+  background: var(--chat-subagent-bg);
+  border-color: var(--chat-subagent-border);
+}
+
 /* ============================================
    Cline-style Chat Animations
    ============================================ */
@@ -295,6 +322,35 @@ body {
   line-height: 1.6;
 }
 
+/* ── Table styles ── */
+.inline-markdown-block table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.inline-markdown-block th,
+.inline-markdown-block td {
+  border: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.inline-markdown-block th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inline-markdown-block tr:nth-child(even) {
+  background: var(--bg-secondary);
+}
+
+.inline-markdown-block tr:nth-child(odd) {
+  background: var(--bg-primary);
+}
+
 /* Inline cursor container — blinking cursor after last child */
 .inline-cursor-container > :last-child::after {
   content: "";
@@ -389,6 +445,33 @@ body {
 
   .animate-shimmer {
     animation: shimmer 5s infinite linear;
+  }
+
+  .chat-thinking-text {
+    background-image: linear-gradient(
+      90deg,
+      #2563eb 0%,
+      #0891b2 24%,
+      #0f172a 48%,
+      #0891b2 72%,
+      #2563eb 100%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: shimmer 3.2s infinite linear;
+  }
+
+  .dark .chat-thinking-text {
+    background-image: linear-gradient(
+      90deg,
+      #60a5fa 0%,
+      #a78bfa 24%,
+      #f8fafc 48%,
+      #22d3ee 72%,
+      #60a5fa 100%
+    );
   }
 
   .animate-fade-in {

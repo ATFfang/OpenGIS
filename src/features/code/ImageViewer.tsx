@@ -4,9 +4,8 @@
  * via Electron IPC (file:// URLs don't work in renderer).
  */
 
-import { memo, useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { ZoomIn, ZoomOut, RotateCcw, Download, Loader2 } from 'lucide-react'
-import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
 import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 
@@ -15,7 +14,6 @@ interface ImageViewerProps {
 }
 
 export function ImageViewer({ tab }: ImageViewerProps) {
-  const t = useT()
   const [scale, setScale] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)

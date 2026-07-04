@@ -13,7 +13,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from opengis_backend.skills.context import SkillContext
 from opengis_backend.skills.registry import skill
+from opengis_backend.skills.builtin._asset_refresh import notify_asset_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +30,14 @@ logger = logging.getLogger(__name__)
         {"name": "path", "type": "string", "description": "Absolute path of the directory to create."},
     ],
     returns="dict with keys: success (bool), path (str), created (bool), error (str|null)",
+    needs_context=True,
 )
-def create_directory(path: str) -> dict[str, Any]:
+def create_directory(ctx: SkillContext, path: str) -> dict[str, Any]:
     p = Path(path)
     try:
         existed = p.exists()
         p.mkdir(parents=True, exist_ok=True)
+        notify_asset_refresh(ctx, p, reason="create_directory")
         return {"success": True, "path": str(p), "created": not existed, "error": None}
     except Exception as e:
         return {"success": False, "path": str(p), "created": False, "error": str(e)}
@@ -51,8 +55,9 @@ def create_directory(path: str) -> dict[str, Any]:
         {"name": "recursive", "type": "boolean", "description": "If True and path is a directory, delete recursively. Default False."},
     ],
     returns="dict with keys: success (bool), path (str), error (str|null)",
+    needs_context=True,
 )
-def delete_file(path: str, recursive: bool = False) -> dict[str, Any]:
+def delete_file(ctx: SkillContext, path: str, recursive: bool = False) -> dict[str, Any]:
     p = Path(path)
     try:
         if not p.exists():
@@ -64,6 +69,7 @@ def delete_file(path: str, recursive: bool = False) -> dict[str, Any]:
                 p.rmdir()  # only works if empty
         else:
             p.unlink()
+        notify_asset_refresh(ctx, p.parent, reason="delete_file")
         return {"success": True, "path": str(p), "error": None}
     except Exception as e:
         return {"success": False, "path": str(p), "error": str(e)}
@@ -81,11 +87,14 @@ def delete_file(path: str, recursive: bool = False) -> dict[str, Any]:
         {"name": "dst", "type": "string", "description": "Absolute path of the destination."},
     ],
     returns="dict with keys: success (bool), src (str), dst (str), error (str|null)",
+    needs_context=True,
 )
-def move_file(src: str, dst: str) -> dict[str, Any]:
+def move_file(ctx: SkillContext, src: str, dst: str) -> dict[str, Any]:
     try:
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dst)
+        notify_asset_refresh(ctx, Path(src).parent, reason="move_file")
+        notify_asset_refresh(ctx, Path(dst), reason="move_file")
         return {"success": True, "src": src, "dst": dst, "error": None}
     except Exception as e:
         return {"success": False, "src": src, "dst": dst, "error": str(e)}
@@ -103,8 +112,9 @@ def move_file(src: str, dst: str) -> dict[str, Any]:
         {"name": "dst", "type": "string", "description": "Absolute path of the destination."},
     ],
     returns="dict with keys: success (bool), src (str), dst (str), error (str|null)",
+    needs_context=True,
 )
-def copy_file(src: str, dst: str) -> dict[str, Any]:
+def copy_file(ctx: SkillContext, src: str, dst: str) -> dict[str, Any]:
     try:
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         s = Path(src)
@@ -112,6 +122,7 @@ def copy_file(src: str, dst: str) -> dict[str, Any]:
             shutil.copytree(s, dst)
         else:
             shutil.copy2(s, dst)
+        notify_asset_refresh(ctx, Path(dst), reason="copy_file")
         return {"success": True, "src": src, "dst": dst, "error": None}
     except Exception as e:
         return {"success": False, "src": src, "dst": dst, "error": str(e)}

@@ -99,12 +99,16 @@ class AgentRunner:
         When True (default) the final answer is emitted as a trailing
         ``STREAM_DELTA``. Set to False when the underlying loop already
         streams its tokens — otherwise the final reply gets duplicated.
+    on_final_answer:
+        Optional callback invoked with the loop's returned final answer
+        regardless of whether it is emitted to the UI.
     """
 
     max_steps: int
     run_id: str
     thinking_banner: str = ""
     emit_final_answer: bool = True
+    on_final_answer: Optional[Callable[[str], None]] = None
     _worker_thread_id: int = field(default=0, init=False, repr=False)
 
     def interrupt_worker_thread(self) -> bool:
@@ -195,6 +199,12 @@ class AgentRunner:
                 yield AgentEvent(type=AgentEventType.ERROR, data=f"Agent error: {e}")
                 yield AgentEvent(type=AgentEventType.STREAM_END)
                 return
+
+            if final_answer and self.on_final_answer is not None:
+                try:
+                    self.on_final_answer(str(final_answer))
+                except Exception:
+                    logger.exception("on_final_answer callback failed")
 
             # Emit the final answer only if the underlying loop didn't
             # already stream it. AgentLoop streams via thought-delta

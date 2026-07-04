@@ -6,7 +6,12 @@
 
 import type { RpcHandler } from '../registry';
 import { notImplemented, parseParams } from './_util';
-import { GetWorkspaceSchema, ListAssetsSchema, OpenExternalSchema } from './schemas';
+import {
+  GetWorkspaceSchema,
+  ListAssetsSchema,
+  OpenExternalSchema,
+  RefreshAssetsSchema,
+} from './schemas';
 
 export const fsHandlers: Record<string, RpcHandler> = {
   'rpc.ui.fs.get_workspace': (params) => {
@@ -17,6 +22,14 @@ export const fsHandlers: Record<string, RpcHandler> = {
   'rpc.ui.fs.list_assets': (params) => {
     parseParams(ListAssetsSchema, params, 'rpc.ui.fs.list_assets');
     notImplemented('rpc.ui.fs.list_assets');
+  },
+
+  'rpc.ui.fs.refresh_assets': (params) => {
+    const parsed = parseParams(RefreshAssetsSchema, params, 'rpc.ui.fs.refresh_assets');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('opengis:assets-refresh', { detail: parsed }));
+    }
+    return { success: true };
   },
 
   'rpc.ui.fs.open_external': (params) => {

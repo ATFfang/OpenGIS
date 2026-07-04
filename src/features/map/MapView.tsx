@@ -246,6 +246,22 @@ export function MapView({
     }
   }, [basemap])
 
+  // ─── Sync restored/persisted view state to MapLibre ────────────
+
+  useEffect(() => {
+    const map = mapEngine.getMap()
+    if (!map) return
+    const center = map.getCenter()
+    const sameCamera =
+      Math.abs(center.lng - viewState.center[0]) < 1e-7 &&
+      Math.abs(center.lat - viewState.center[1]) < 1e-7 &&
+      Math.abs(map.getZoom() - viewState.zoom) < 1e-5 &&
+      Math.abs(map.getBearing() - viewState.bearing) < 1e-5 &&
+      Math.abs(map.getPitch() - viewState.pitch) < 1e-5
+    if (sameCamera) return
+    mapEngine.jumpTo(viewState)
+  }, [viewState])
+
   // ─── Sync basemap visibility ─────────────────────────────────
 
   useEffect(() => {

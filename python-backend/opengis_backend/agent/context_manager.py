@@ -298,13 +298,69 @@ class ContextManager:
 
     # ── Public API ──────────────────────────────────────────────────────
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(self, content: str, meta: Optional[dict[str, Any]] = None) -> None:
         """Append a user message to the history."""
-        self.messages.append({"role": "user", "content": content})
+        msg: dict[str, Any] = {"role": "user", "content": content}
+        if meta:
+            msg["_meta"] = meta
+        self.messages.append(msg)
 
-    def add_assistant_message(self, content: str) -> None:
+    def add_assistant_message(self, content: str, meta: Optional[dict[str, Any]] = None) -> None:
         """Append an assistant message (LLM's raw response) to the history."""
-        self.messages.append({"role": "assistant", "content": content})
+        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if meta:
+            msg["_meta"] = meta
+        self.messages.append(msg)
+
+    def add_system_message(self, content: str, meta: Optional[dict[str, Any]] = None) -> None:
+        """Append a system-scoped message to the history."""
+        msg: dict[str, Any] = {"role": "system", "content": content}
+        if meta:
+            msg["_meta"] = meta
+        self.messages.append(msg)
+
+    def add_assistant_with_tool_calls(self, content: str | None, tool_calls: list[dict]) -> None:
+        """Append an assistant message that includes tool_calls.
+
+        This is the format required by the OpenAI tool-calling protocol:
+        the assistant message must contain the tool_calls array so the LLM
+        can correlate tool results back to the original calls.
+        """
+        msg: dict = {"role": "assistant", "content": content or ""}
+        msg["tool_calls"] = tool_calls
+        self.messages.append(msg)
+
+    def mark_recent_scope(self, scope: str, *, count: int = 1, kind: str | None = None) -> None:
+        """Mark the newest messages as scoped/internal without changing protocol shape."""
+        for msg in reversed(self.messages):
+            if count <= 0:
+                break
+            meta = msg.get("_meta")
+            if not isinstance(meta, dict):
+                meta = {}
+                msg["_meta"] = meta
+            meta["scope"] = scope
+            if kind:
+                meta.setdefault("kind", kind)
+            count -= 1
+
+    def add_tool_result(self, tool_call_id: str, tool_name: str, content: str) -> None:
+        """Append a tool execution result.
+
+        This is the ``role: "tool"`` message that the OpenAI protocol requires
+        after the assistant emits tool_calls. The ``tool_call_id`` must match
+        the id from the corresponding tool_call.
+        """
+        self.messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": content,
+            "_meta": {
+                "kind": "tool_result",
+                "tool_name": tool_name,
+            },
+        })
 
     def add_code_output(
         self,
@@ -313,6 +369,7 @@ class ContextManager:
         output: str = "",
         error: Optional[str] = None,
         tool_name: Optional[str] = None,
+        meta: Optional[dict[str, Any]] = None,
     ) -> None:
         """Append a code execution result as a system/observation message.
 
@@ -350,19 +407,29 @@ class ContextManager:
                     code_first_line = stripped[:80]
                     break
 
+        message_meta = {
+            "kind": "tool_result",
+            "step": step,
+            "had_error": error is not None,
+            "code_summary": code_first_line,
+            "tool_name": tool_name,
+        }
+        if meta:
+            message_meta.update(meta)
+
         self.messages.append({
             "role": "user",
             "content": "\n".join(parts),
-            "_meta": {
-                "kind": "tool_result",
-                "step": step,
-                "had_error": error is not None,
-                "code_summary": code_first_line,
-                "tool_name": tool_name,
-            },
+            "_meta": message_meta,
         })
 
-    def build_messages(self, system_prompt: str, user_instructions: str | None = None) -> list[dict[str, str]]:
+    def build_messages(
+        self,
+        system_prompt: str,
+        user_instructions: str | None = None,
+        *,
+        exclude_workflow_context: bool = False,
+    ) -> list[dict[str, str]]:
         """Build the messages list for an LLM call.
 
         Structure:
@@ -387,15 +454,28 @@ class ContextManager:
             })
 
         if self._summary:
+            summary = (
+                self._strip_workflow_summary(self._summary)
+                if exclude_workflow_context
+                else self._summary
+            )
+            if not summary.strip():
+                summary = (
+                    "Earlier turns contained a structured workflow/report run. "
+                    "That context is intentionally hidden from this normal chat turn "
+                    "unless the user explicitly asks to continue it."
+                )
             result.append({
                 "role": "system",
                 "content": (
-                    f"[Conversation summary of earlier turns]\n{self._summary}"
+                    f"[Conversation summary of earlier turns]\n{summary}"
                 ),
             })
 
         # Append messages from cutoff onward (the "live" window).
         for msg in self.messages[self._summary_cutoff:]:
+            if exclude_workflow_context and self._is_workflow_context_message(msg):
+                continue
             result.append({
                 k: v for k, v in msg.items() if not k.startswith("_")
             })
@@ -535,6 +615,53 @@ class ContextManager:
         content = msg.get("content", "")
         # Heuristic: tool results contain "[Step N execution result]"
         return "[Step" in content and ("Output:" in content or "Error:" in content)
+
+    def _is_workflow_context_message(self, msg: dict) -> bool:
+        """Return True for workflow-only history that should not leak into chat.
+
+        Older persisted contexts did not carry metadata, so this also catches
+        the legacy prompt shapes emitted by WorkflowLoop.
+        """
+        meta = msg.get("_meta")
+        if isinstance(meta, dict):
+            kind = str(meta.get("kind") or "")
+            scope = str(meta.get("scope") or "")
+            if kind.startswith("workflow") or scope == "workflow":
+                return True
+
+        content = msg.get("content", "")
+        if not isinstance(content, str):
+            return False
+        stripped = content.strip()
+        if stripped.startswith("I'm executing the workflow **"):
+            return True
+        if stripped.startswith("## Workflow Step "):
+            return True
+        if stripped.startswith("[System] This step is not complete yet."):
+            return True
+        if "Workflow '" in stripped and (
+            "completed all" in stripped or "halted at step" in stripped
+        ):
+            return True
+        if "All workflow steps have been completed" in stripped:
+            return True
+        return False
+
+    def _strip_workflow_summary(self, summary: str) -> str:
+        """Remove stale workflow/report lines from a normal-chat summary."""
+        blocked = (
+            "workflow",
+            "工作流",
+            "Workflow Step",
+            "Academic GIS Report",
+            "学术报告",
+            "学术分析报告",
+        )
+        kept = [
+            line for line in summary.splitlines()
+            if not any(token in line for token in blocked)
+        ]
+        return "\n".join(kept).strip()
 
     def _make_pruned_placeholder(self, msg: dict) -> str:
         """Build a skeletal placeholder that retains step number, the first
@@ -815,7 +942,10 @@ class ContextManager:
             {"role": "system", "content": _COMPACTION_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
-        return llm_call(summary_messages)
+        response = llm_call(summary_messages)
+        if hasattr(response, "content"):
+            return getattr(response, "content", None) or ""
+        return str(response) if response is not None else ""
 
 
 

@@ -230,7 +230,7 @@ def _summarize(steps: list[dict]) -> str:
     params=[
         {
             "name": "steps",
-            "type": "any",
+            "type": "array",
             "required": True,
             "description": (
                 "A list describing the plan. Each item is either a string "

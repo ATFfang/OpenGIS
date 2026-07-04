@@ -9,7 +9,7 @@ import type {
   GeometryType,
   BBox,
   FieldDescriptor,
-} from './types'
+} from '../types'
 
 /**
  * Parse a GeoJSON string into structured vector data.

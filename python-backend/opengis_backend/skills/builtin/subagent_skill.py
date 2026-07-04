@@ -270,6 +270,8 @@ def _run_branch(
     # mirror the pattern build_agent_loop itself uses.
     from opengis_backend.agent.agent_factory import build_agent_loop
     from opengis_backend.agent.context_manager import ContextManager
+    from opengis_backend.agent.profile import AgentProfile
+    from opengis_backend.agent.session import AgentSession, SessionKind, SessionStatus, SessionStore
 
     registry = parent_meta.get("_skill_registry")
     llm_config = parent_meta.get("_llm_config")
@@ -293,6 +295,27 @@ def _run_branch(
     # parent's plan/run bookkeeping (notifications are silenced anyway).
     child_meta.pop("run_id", None)
     child_meta.pop("script_dir", None)
+    workspace = child_meta.get("workspace_path")
+    parent_session = child_meta.get("_agent_session")
+    child_session = AgentSession.create(
+        kind=SessionKind.SUBAGENT,
+        profile_name="gis-subagent",
+        parent_id=getattr(parent_session, "id", None),
+        run_id=parent_meta.get("run_id"),
+        title=_task_title(task),
+        metadata={"workspace_path": workspace},
+    )
+    child_meta["_agent_session"] = child_session
+    if parent_session is not None:
+        try:
+            parent_session.add_child(child_session)
+            SessionStore(workspace).upsert(parent_session)
+        except Exception:
+            logger.debug("sub-agent parent session update failed", exc_info=True)
+    try:
+        SessionStore(workspace).upsert(child_session)
+    except Exception:
+        logger.debug("sub-agent session create failed", exc_info=True)
     child_ctx = SkillContext(notify_fn=None, conversation_id=None, meta=child_meta)
 
     sub_loop, sub_executor = build_agent_loop(
@@ -302,6 +325,7 @@ def _run_branch(
         max_steps=max_steps,
         context=ContextManager(),  # isolated memory — the whole point
         skill_groups=skill_groups,
+        agent_profile=AgentProfile.subagent(max_steps=max_steps, tool_groups=skill_groups),
     )
 
     key = tracker.add(sub_loop, sub_executor) if tracker is not None else None
@@ -309,6 +333,11 @@ def _run_branch(
         if tracker is not None and tracker.cancelled:
             sub_loop.interrupt()
         result = sub_loop.run(task)
+        child_session.finish(status=SessionStatus.SUCCESS, summary=str(result)[:2000])
+        try:
+            SessionStore(workspace).upsert(child_session)
+        except Exception:
+            logger.debug("sub-agent success session update failed", exc_info=True)
         return {"task": task, "ok": True, "result": result}
     except KeyboardInterrupt:
         # Branch threads aren't directly injected, but be defensive.
@@ -316,9 +345,19 @@ def _run_branch(
             sub_loop.interrupt()
         except Exception:
             pass
+        child_session.finish(status=SessionStatus.CANCELLED, summary="interrupted")
+        try:
+            SessionStore(workspace).upsert(child_session)
+        except Exception:
+            logger.debug("sub-agent cancel session update failed", exc_info=True)
         return {"task": task, "ok": False, "error": "interrupted"}
     except Exception as e:  # noqa: BLE001 — a child failure must not kill siblings
         logger.exception("sub-agent branch failed for task=%r", task[:120])
+        child_session.finish(status=SessionStatus.ERROR, summary=f"{type(e).__name__}: {e}")
+        try:
+            SessionStore(workspace).upsert(child_session)
+        except Exception:
+            logger.debug("sub-agent error session update failed", exc_info=True)
         return {"task": task, "ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
         try:
@@ -394,7 +433,7 @@ def _format_results(results: list[Optional[dict]]) -> str:
         },
         {
             "name": "skill_groups",
-            "type": "any",
+            "type": "array",
             "required": False,
             "description": (
                 "Optional list of skill groups to narrow the child's toolset "
@@ -506,7 +545,7 @@ def run_subagent(
     params=[
         {
             "name": "tasks",
-            "type": "any",
+            "type": "array",
             "required": True,
             "description": (
                 "A list of self-contained instruction strings (or dicts with a "
@@ -517,7 +556,7 @@ def run_subagent(
         },
         {
             "name": "skill_groups",
-            "type": "any",
+            "type": "array",
             "required": False,
             "description": (
                 "Optional list of skill groups to narrow every child's toolset. "

@@ -18,7 +18,7 @@ See ``_subprocess_runner.py`` for the full wire format. In short:
   an RPC back to the parent, which invokes the real Tool and sends
   the result back.
 * Output value of an ``exec`` call is returned via ``{"kind":"done",
-  "ok": true, "output": ..., "is_final_answer": ..., "logs": ...}``.
+  "ok": true, "output": ..., "logs": ...}``.
 """
 
 from __future__ import annotations
@@ -218,7 +218,6 @@ class SubprocessPythonExecutor:
                     return CodeExecResult(
                         output=msg.get("output"),
                         logs=msg.get("logs", "") or "",
-                        is_final_answer=bool(msg.get("is_final_answer", False)),
                     )
                 # Child-side failure: wrap as a CodeExecResult with error.
                 err = msg.get("error") or "unknown error"

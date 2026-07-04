@@ -72,7 +72,7 @@ export const fillRenderer: LayerRenderer = {
             (def.style.strokeWidth ?? 1) + 2,
             def.style.strokeWidth,
           ] as any,
-          'line-opacity': def.style.opacity,
+          'line-opacity': def.style.strokeOpacity ?? def.style.opacity,
         },
       })
       ctx.registerRenderLayerId(def.id, strokeId)
@@ -114,7 +114,7 @@ export const fillRenderer: LayerRenderer = {
         (def.style.strokeWidth ?? 1) + 2,
         def.style.strokeWidth,
       ] as any)
-      ctx.map.setPaintProperty(strokeId, 'line-opacity', def.style.opacity)
+      ctx.map.setPaintProperty(strokeId, 'line-opacity', def.style.strokeOpacity ?? def.style.opacity)
     }
   },
 

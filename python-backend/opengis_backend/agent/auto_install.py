@@ -10,7 +10,7 @@ This eliminates the common pattern:
   Step N+2: import foo  (wastes 2 LLM calls)
 
 With auto-install:
-  Step N: (auto-detect foo is missing → pip install -q foo) → import foo ✓
+  Step N: (auto-detect foo is missing → pip install foo) → import foo ✓
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ import re
 import subprocess
 import sys
 from typing import Callable, Optional, Set
+
+from opengis_backend.agent.permission import PermissionAction, PermissionRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,8 @@ def auto_install_missing(
     code: str,
     python_executable: str | None = None,
     progress_callback: Optional[Callable[[str, str], None]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
+    permission_runtime: PermissionRuntime | None = None,
     timeout: float = 120.0,
 ) -> Optional[str]:
     """Detect and install missing packages for a code block.
@@ -206,22 +210,55 @@ def auto_install_missing(
             pass
 
     exe = python_executable or sys.executable
-    cmd = [exe, "-m", "pip", "install", "-q"] + pip_names
+    cmd = [exe, "-m", "pip", "install"] + pip_names
+    if permission_runtime is not None:
+        install_code = build_install_command(missing, python_executable=exe)
+        decision = permission_runtime.evaluate("execute_code", {"code": install_code})
+        enforce = bool(getattr(permission_runtime.policy, "enforce", False))
+        if enforce and decision.action != PermissionAction.ALLOW:
+            logger.info(
+                "Auto-install blocked by permission policy: %s (%s)",
+                decision.action.value,
+                decision.reason,
+            )
+            return None
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
             text=True,
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
         )
-        if result.returncode == 0:
+        lines: list[str] = []
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    lines.append(line)
+                    if output_callback:
+                        try:
+                            output_callback(line)
+                        except Exception:
+                            pass
+            return_code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise
+
+        if return_code == 0:
             installed_msg = f"Auto-installed: {', '.join(pip_names)}"
+            if output_callback:
+                try:
+                    output_callback(f"{installed_msg}\n")
+                except Exception:
+                    pass
             logger.info(installed_msg)
             return installed_msg
         else:
-            err = result.stderr.strip() or result.stdout.strip()
-            logger.warning("pip install failed (rc=%d): %s", result.returncode, err)
+            err = "".join(lines).strip()
+            logger.warning("pip install failed (rc=%d): %s", return_code, err)
             # Don't block execution — let the code fail naturally with ImportError
             return None
     except subprocess.TimeoutExpired:

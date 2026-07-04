@@ -16,7 +16,11 @@ from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult
 from opengis_backend.agent.context_manager import ContextManager
 from opengis_backend.agent.executor_factory import build_subprocess_executor
 from opengis_backend.agent.llm import LLMConfig, build_llm_caller
+from opengis_backend.agent.permission import PermissionRuntime
+from opengis_backend.agent.profile import AgentProfile
 from opengis_backend.agent.prompts import OPENGIS_SYSTEM_PROMPT, build_skill_signatures
+from opengis_backend.agent.tool_output import ToolOutputRuntime
+from opengis_backend.agent.tool_runtime import ToolRuntime, build_tool_schemas
 from opengis_backend.agent.tools import build_tool_callables
 from opengis_backend.agent.workflow_loop import WorkflowDocument, WorkflowLoop
 from opengis_backend.skills.context import SkillContext
@@ -54,13 +58,17 @@ def build_workflow_loop(
     max_retries_per_node: int = 3,
     step_callback: Optional[Callable[[AgentStep], None]] = None,
     progress_callback: Optional[Callable[[str, str], None]] = None,
+    execution_output_callback: Optional[Callable[[str], None]] = None,
     risky_op_listener: Optional[Callable[[dict], None]] = None,
     on_thought_delta: Optional[Callable[[str], None]] = None,
     on_code_start: Optional[Callable[[int], None]] = None,
     on_code_delta: Optional[Callable[[int, str], None]] = None,
     on_code_end: Optional[Callable[[int], None]] = None,
+    on_tool_start: Optional[Callable[[str, dict, str], None]] = None,
+    on_tool_result: Optional[Callable[..., None]] = None,
     context: Optional[ContextManager] = None,
     plan_callback: Optional[Callable[[dict], None]] = None,
+    agent_profile: Optional[AgentProfile] = None,
 ) -> tuple["WorkflowLoop", Any]:
     """Build a fresh WorkflowLoop + subprocess executor.
 
@@ -86,10 +94,14 @@ def build_workflow_loop(
     (workflow_loop, executor)
         The executor MUST be cleaned up by the caller after the run.
     """
+    profile = agent_profile or AgentProfile.workflow_runner()
     registered = skills.list_registered()
+    if profile.tool_groups is not None:
+        registered = [s for s in registered if s.schema.group in profile.tool_groups]
 
     # Build tool callables.
     tool_callables = build_tool_callables(registered, ctx_provider=lambda: ctx)
+    tool_schemas = build_tool_schemas(registered)
 
     # Build the LLM caller.
     llm_call = build_llm_caller(llm_config)
@@ -101,6 +113,9 @@ def build_workflow_loop(
         caption = msg.get("caption")
         if caption:
             payload["caption"] = caption
+        run_id = (getattr(ctx, "meta", None) or {}).get("run_id")
+        if run_id:
+            payload["run_id"] = run_id
         try:
             from opengis_backend.skills.context import run_async_from_sync
             run_async_from_sync(ctx.notify("rpc.ui.chat.show_image", payload))
@@ -110,6 +125,7 @@ def build_workflow_loop(
     # Build the subprocess executor.
     executor = build_subprocess_executor(
         ctx,
+        stdout_listener=execution_output_callback,
         risky_op_listener=risky_op_listener,
         plot_saved_listener=_plot_saved_listener,
     )
@@ -132,10 +148,33 @@ def build_workflow_loop(
         )
 
     system_prompt = base_prompt + _WORKFLOW_SYSTEM_SUFFIX
+    if profile.prompt_suffix:
+        system_prompt += "\n" + profile.prompt_suffix.strip() + "\n"
 
     # Wrap the executor as a simple callable.
     def _executor_call(code: str) -> CodeExecResult:
         return executor(code)
+
+    approval_callback = (getattr(ctx, "meta", None) or {}).get("_approval_callback")
+    permission_runtime = PermissionRuntime.from_profile(
+        profile,
+        workspace_path=(getattr(ctx, "meta", None) or {}).get("workspace_path"),
+    )
+    if callable(approval_callback):
+        permission_runtime.approval_callback = approval_callback
+
+    tool_runtime = ToolRuntime(
+        tool_schemas=tool_schemas,
+        tool_callables=tool_callables,
+        executor_call=_executor_call,
+        permission_runtime=permission_runtime,
+        output_runtime=ToolOutputRuntime(
+            workspace_path=(getattr(ctx, "meta", None) or {}).get("workspace_path"),
+        ),
+        progress_callback=progress_callback,
+        execution_output_callback=execution_output_callback,
+        python_executable=executor.config.python_executable,
+    )
 
     # Build the workflow loop. Reuse the shared conversation context if
     # provided so the workflow can see prior chat history.
@@ -151,8 +190,12 @@ def build_workflow_loop(
         on_code_start=on_code_start,
         on_code_delta=on_code_delta,
         on_code_end=on_code_end,
+        on_tool_start=on_tool_start,
+        on_tool_result=on_tool_result,
         plan_callback=plan_callback,
         context=context if context is not None else ContextManager(),
+        tool_runtime=tool_runtime,
+        tool_schemas=tool_schemas,
         workspace=str((getattr(ctx, "meta", None) or {}).get("workspace_path", "")),
     )
 

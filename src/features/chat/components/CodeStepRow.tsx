@@ -135,7 +135,7 @@ export const CodeStepRow = memo(({ message, isExpanded, onToggleExpand }: CodeSt
 
       {/* Collapsible code body */}
       {showBody && (
-        <div className="bg-bg-tertiary/50 rounded-xl overflow-hidden border border-border/60 ml-[30px]">
+        <div className="bg-bg-tertiary/50 rounded-xl overflow-hidden border border-border/30 ml-[30px]">
           <button
             onClick={handleHeaderClick}
             disabled={isStreaming}
@@ -165,45 +165,25 @@ export const CodeStepRow = memo(({ message, isExpanded, onToggleExpand }: CodeSt
           </button>
 
           {effectiveExpanded && (
-            <div className="border-t border-border/60">
-              {isStreaming ? (
-                // While streaming, re-highlighting the whole block on every
-                // code_delta is expensive (Prism re-tokenises the full text
-                // each keystroke). Show plain monospace text live; we swap in
-                // the highlighted view the instant the block finishes.
-                <pre
-                  className="m-0 font-mono overflow-auto whitespace-pre"
-                  style={{
-                    fontSize: '12px',
-                    lineHeight: '1.6',
-                    padding: '12px 16px',
-                    background: 'var(--bg-tertiary)',
-                    maxHeight: '400px',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  <code>{code}</code>
-                </pre>
-              ) : (
-                <SyntaxHighlighter
-                  style={codeTheme}
-                  language="python"
-                  PreTag="div"
-                  customStyle={{
-                    margin: 0,
-                    borderRadius: 0,
-                    fontSize: '12px',
-                    lineHeight: '1.6',
-                    padding: '12px 16px',
-                    background: 'var(--bg-tertiary)',
-                    maxHeight: '400px',
-                    overflowY: 'auto',
-                    textShadow: 'none',
-                  }}
-                >
-                  {code}
-                </SyntaxHighlighter>
-              )}
+            <div className="border-t border-border/25">
+              <SyntaxHighlighter
+                style={codeTheme}
+                language="python"
+                PreTag="div"
+                customStyle={{
+                  margin: 0,
+                  borderRadius: 0,
+                  fontSize: '12px',
+                  lineHeight: '1.6',
+                  padding: '12px 16px',
+                  background: 'var(--bg-tertiary)',
+                  maxHeight: '400px',
+                  overflowY: 'auto',
+                  textShadow: 'none',
+                }}
+              >
+                {code || (isStreaming ? ' ' : '')}
+              </SyntaxHighlighter>
             </div>
           )}
         </div>
@@ -265,7 +245,7 @@ function isDataFrameOutput(text: string): boolean {
 const DiffBlock = memo(({ diff }: { diff: string }) => {
   const lines = diff.split('\n')
   return (
-    <div className="rounded-lg overflow-hidden border border-border/60 font-mono text-[12px] leading-[1.6]">
+    <div className="rounded-lg overflow-hidden border border-border/30 font-mono text-[12px] leading-[1.6]">
       {lines.map((line, i) => {
         let bg = 'bg-bg-tertiary/30'
         let color = 'text-text-secondary'
@@ -315,14 +295,14 @@ const DataFrameTable = memo(({ text }: { text: string }) => {
   if (headers.length === 0 || rows.length === 0) return <MarkdownBlock markdown={text} />
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-border/60">
+    <div className="overflow-x-auto rounded-lg border border-border/30">
       <table className="border-collapse w-full text-[12px] font-mono">
         <thead>
           <tr>
             {headers.map((h, i) => (
               <th
                 key={i}
-                className="px-2.5 py-1.5 border-b border-border text-left bg-bg-tertiary/50 font-semibold text-text-primary whitespace-nowrap"
+                className="px-2.5 py-1.5 border-b border-border/35 text-left bg-bg-tertiary/50 font-semibold text-text-primary whitespace-nowrap"
               >
                 {h}
               </th>
@@ -396,7 +376,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
     const lineCount = output.split('\n').length
     return (
       <div className="ml-[30px] -mt-1">
-        <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/60">
+        <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/30">
           <button
             onClick={() => setCollapsed((v) => !v)}
             className="w-full flex items-center gap-2 py-1.5 px-3 text-[11px] hover:bg-bg-hover/50 transition-colors"
@@ -420,7 +400,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
           </button>
 
           {!collapsed && (
-            <div className="border-t border-border/40 p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
+            <div className="border-t border-border/25 p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
               <div className="text-[13px] leading-[1.7] text-text-primary/85">
                 <SmartOutput text={output} />
               </div>
@@ -437,7 +417,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
 
   return (
     <div className="ml-[30px] -mt-1">
-      <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/60">
+      <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/30">
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="w-full flex items-center gap-2 py-1.5 px-3 text-[11px] hover:bg-bg-hover/50 transition-colors"
@@ -462,7 +442,7 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
         </button>
 
         {!collapsed && (
-          <div className="border-t border-border/40">
+          <div className="border-t border-border/25">
             <pre className="text-[12px] p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[260px] overflow-y-auto scrollbar-thin font-mono leading-relaxed text-text-secondary">
               <code>{error}</code>
             </pre>

@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 # Type alias for the notify callback installed by the protocol layer.
 NotifyFn = Callable[[str, dict], Awaitable[None]]
+RequestFn = Callable[[str, dict], Awaitable[Any]]
 
 
 @dataclass
@@ -34,6 +35,7 @@ class SkillContext:
     """
 
     notify_fn: Optional[NotifyFn] = None
+    request_fn: Optional[RequestFn] = None
     conversation_id: Optional[str] = None
     meta: dict = field(default_factory=dict)
 
@@ -44,6 +46,12 @@ class SkillContext:
             print(f"[SkillContext] (no IPC) notify {method}: {params}")
             return
         await self.notify_fn(method, params or {})
+
+    async def request(self, method: str, params: dict | None = None) -> Any:
+        """Send a JSON-RPC request to the frontend and return its result."""
+        if self.request_fn is None:
+            raise RuntimeError(f"No request channel attached for {method}")
+        return await self.request_fn(method, params or {})
 
 
 # ── ContextVar for cross-async-call propagation ──────────────────────────

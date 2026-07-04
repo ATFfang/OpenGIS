@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { MainLayout } from './layouts/MainLayout'
 import { DialogHost } from '@/components/Dialog'
+import { ApprovalGate } from '@/features/approval/ApprovalGate'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAssetStore } from '@/stores/assetStore'
 import { pythonClient } from '@/services/pythonClient'
@@ -178,6 +179,7 @@ function App() {
   return (
     <>
       <MainLayout />
+      <ApprovalGate />
       <DialogHost />
     </>
   )

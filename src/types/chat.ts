@@ -46,6 +46,7 @@ export type SayType =
   | 'mistake_limit_reached'
   | 'max_steps_reached'
   | 'api_req_started'
+  | 'api_req_finished'
   | 'mcp_server_response'
   | 'screenshot'
 
@@ -77,6 +78,8 @@ export interface PlanData {
   title?: string
   steps: PlanStep[]
   runId?: string
+  /** True when this plan represents a workflow run shown in compact mode. */
+  workflow?: boolean
   /** Wall-clock of the latest update, for subtle "updated" affordances. */
   updatedAt?: number
 }
@@ -95,7 +98,7 @@ export interface SubagentTask {
 export interface SubagentData {
   /** Stable id; repeated updates with the same id replace the same card. */
   subagentId: string
-  status: 'running' | 'done' | 'cancelled'
+  status: 'running' | 'done' | 'failed' | 'cancelled'
   /** True when this is a parallel fan-out (run_subagents with >1 task). */
   parallel: boolean
   tasks: SubagentTask[]
@@ -116,9 +119,12 @@ export interface UIMessage {
   partial?: boolean
   images?: string[]
   files?: string[]
+  /** Directory used to resolve relative Markdown image paths. */
+  markdownBaseDir?: string
 
   // Tool / skill invocation
   toolName?: string
+  toolCallId?: string
   toolArgs?: Record<string, unknown>
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed'
 

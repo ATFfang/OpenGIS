@@ -40,6 +40,7 @@ interface Window {
     openFolderDialog: () => Promise<string | null>
     deleteFile: (path: string) => Promise<{ success: boolean; error?: string }>
     renameFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>
+    showItemInFolder: (path: string) => Promise<{ success: boolean; error?: string }>
     ensureDirectory: (path: string) => Promise<{ success: boolean; error?: string }>
     // Python
     getPythonStatus: () => Promise<{ status: 'stopped' | 'starting' | 'ready' | 'error'; port?: number; error?: string; pythonPath?: string }>

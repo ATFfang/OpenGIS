@@ -27,7 +27,7 @@ import {
   Eye,
   FileCode2,
 } from 'lucide-react'
-import { useViewStore, type CodeExecutionResult } from '@/stores/viewStore'
+import type { CodeExecutionResult } from '@/stores/viewStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
@@ -98,8 +98,26 @@ export function CodeViewer({ tab }: CodeViewerProps) {
   // Directory of the markdown file for resolving relative image paths
   const mdDir = useMemo(() => {
     if (!tab.filePath) return ''
-    return tab.filePath.substring(0, tab.filePath.lastIndexOf('/'))
+    const normalized = tab.filePath.replace(/\\/g, '/')
+    return normalized.substring(0, normalized.lastIndexOf('/'))
   }, [tab.filePath])
+
+  const resolveMarkdownImage = useCallback((imagePath: string) => {
+    if (/^(https?:|data:|blob:)/i.test(imagePath)) return Promise.resolve(imagePath)
+
+    let localPath = imagePath
+    if (/^file:\/\//i.test(localPath)) {
+      try {
+        localPath = decodeURIComponent(new URL(localPath).pathname)
+      } catch {
+        localPath = localPath.replace(/^file:\/\//i, '')
+      }
+    } else if (!localPath.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(localPath)) {
+      localPath = mdDir ? `${mdDir}/${localPath}` : localPath
+    }
+
+    return pathToImageUrl(localPath)
+  }, [mdDir])
 
   // Auto-show result when it arrives
   useEffect(() => {
@@ -220,13 +238,8 @@ export function CodeViewer({ tab }: CodeViewerProps) {
             <div className="p-6 max-w-[800px] mx-auto text-[14px] leading-[1.8] text-text-primary">
               <MarkdownRenderer
                 markdown={tab.content || ''}
-                resolveImageSrc={mdDir ? (relPath: string) => {
-                  // If it's already an absolute URL, return as-is
-                  if (/^https?:\/\//.test(relPath)) return Promise.resolve(relPath)
-                  // Resolve relative path against the markdown file's directory
-                  const absPath = `${mdDir}/${relPath}`
-                  return pathToImageUrl(absPath)
-                } : undefined}
+                baseDir={mdDir}
+                resolveImageSrc={resolveMarkdownImage}
               />
             </div>
           ) : (

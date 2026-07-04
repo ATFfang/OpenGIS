@@ -32,7 +32,7 @@ Child → parent (stdout, one JSON per line)::
     {"kind": "ready"}
     {"kind": "stdout", "text": "..."}
     {"kind": "tool_call", "call_id": "...", "name": "...", "args": {...}, "kwargs": {...}}
-    {"kind": "done", "ok": true, "output": <json|null>, "is_final_answer": bool, "logs": "..."}
+    {"kind": "done", "ok": true, "output": <json|null>, "logs": "..."}
     {"kind": "done", "ok": false, "error": "traceback text", "logs": "..."}
 
 Stderr is free-form — unbuffered forwards of the child's own ``sys.stderr``
@@ -48,20 +48,6 @@ import sys
 import traceback
 import uuid
 from typing import Any
-
-# final_answer convention — LLM calls ``final_answer(x)`` to
-# signal the run is done. We mirror that behaviour here so that the
-# agent loop terminates correctly when the LLM chooses to finish.
-_FINAL_ANSWER_SENTINEL = "__opengis_final_answer__"
-
-
-class _FinalAnswer(BaseException):
-    """Raised by the ``final_answer`` stub to unwind out of exec()."""
-
-    def __init__(self, value: Any) -> None:
-        super().__init__(_FINAL_ANSWER_SENTINEL)
-        self.value = value
-
 
 # ─────────────────────────────────────────────────────────────────────
 # IPC helpers
@@ -139,11 +125,6 @@ def _make_tool_stub(name: str):
     stub.__name__ = name
     stub.__qualname__ = name
     return stub
-
-
-def _final_answer_stub(value: Any = None) -> None:
-    """Convention — LLM calls this to end the run."""
-    raise _FinalAnswer(value)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -429,6 +410,7 @@ def _make_local_save_plot():
             bbox_inches="tight",
             facecolor=fig.get_facecolor(),
         )
+        setattr(fig, "_opengis_saved", True)
 
         abs_path = str(fpath.resolve())
 
@@ -465,8 +447,13 @@ def _build_namespace(tool_names: list[str]) -> dict[str, Any]:
             ns[name] = _make_local_save_plot()
         else:
             ns[name] = _make_tool_stub(name)
-    # final_answer is always available, matching the agent loop's behaviour.
-    ns["final_answer"] = _final_answer_stub
+    # final_answer is a no-op stub — legacy LLM code may call it.
+    # It just prints the value so the agent loop sees it as stdout.
+    # It does NOT signal completion or unwind execution.
+    def _final_answer_noop(value: Any = None) -> None:
+        if value is not None:
+            print(str(value))
+    ns["final_answer"] = _final_answer_noop
     return ns
 
 
@@ -474,13 +461,12 @@ def _run_exec(code: str, namespace: dict[str, Any]) -> None:
     """Execute a block of code inside ``namespace``.
 
     We emit exactly one ``done`` message on the way out, regardless of
-    success, failure, or final_answer.
+    success or failure.
     """
     captured = _TeeStdout()
     real_stdout = sys.stdout
     sys.stdout = captured
     output: Any = None
-    is_final_answer = False
     try:
         # Prefer eval for single-expression code so the expression value
         # becomes the CodeOutput.output — mirrors LocalPythonInterpreter.
@@ -490,14 +476,24 @@ def _run_exec(code: str, namespace: dict[str, Any]) -> None:
             output = eval(compiled, namespace, namespace)
         except SyntaxError:
             exec(compile(code, "<agent>", "exec"), namespace, namespace)
-    except _FinalAnswer as fa:
-        output = fa.value
-        is_final_answer = True
     except BaseException:  # noqa: BLE001 — we *want* to catch everything
         tb = traceback.format_exc()
+        try:
+            _autosave_open_plots(namespace)
+        except Exception:
+            traceback.print_exc()
         sys.stdout = real_stdout
         _emit({"kind": "done", "ok": False, "error": tb, "logs": captured.getvalue()})
         return
+    finally:
+        sys.stdout = real_stdout
+
+    sys.stdout = captured
+    try:
+        try:
+            _autosave_open_plots(namespace)
+        except Exception:
+            traceback.print_exc()
     finally:
         sys.stdout = real_stdout
 
@@ -505,9 +501,35 @@ def _run_exec(code: str, namespace: dict[str, Any]) -> None:
         "kind": "done",
         "ok": True,
         "output": output,
-        "is_final_answer": is_final_answer,
         "logs": captured.getvalue(),
     })
+
+
+def _autosave_open_plots(namespace: dict[str, Any]) -> None:
+    """Save any matplotlib figures left open by user code.
+
+    The agent should not need to remember to call ``save_plot``. If a code
+    block creates a matplotlib/seaborn chart and leaves a figure with axes
+    open, we save it and emit the usual ``plot_saved`` event.
+    """
+    save_plot_fn = namespace.get("save_plot")
+    if not callable(save_plot_fn):
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    for fig_num in list(plt.get_fignums()):
+        try:
+            fig = plt.figure(fig_num)
+            if not fig.get_axes():
+                continue
+            if getattr(fig, "_opengis_saved", False):
+                continue
+            save_plot_fn(auto_close=True)
+        except Exception:
+            traceback.print_exc()
 
 
 def main() -> None:

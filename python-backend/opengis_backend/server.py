@@ -167,6 +167,14 @@ async def websocket_endpoint(
         except Exception:
             pass
     finally:
+        # A websocket disconnect/reload must stop the active agent, not just
+        # cancel the request coroutine. Otherwise the worker thread can keep
+        # driving the previous plan run and leak stale events/state into the
+        # next renderer connection.
+        try:
+            await handler.shutdown()
+        except Exception:
+            logger.debug("websocket handler shutdown failed", exc_info=True)
         # Cancel any lingering background tasks on disconnect.
         for t in background_tasks:
             t.cancel()

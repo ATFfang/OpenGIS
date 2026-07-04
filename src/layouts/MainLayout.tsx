@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { Map, Code2, X } from 'lucide-react'
+import { Map } from 'lucide-react'
 import { useT } from '@/i18n'
 import { Sidebar } from './Sidebar'
 import { MapView } from '@/features/map/MapView'
@@ -17,6 +17,7 @@ import { WorkflowsPanel } from '@/features/workflows/WorkflowsPanel'
 import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
 import { RunsPanel } from '@/features/runs/RunsPanel'
 import { SkillsPanel } from '@/features/skills/SkillsPanel'
+import { DataPivotPanel } from '@/features/pivot/DataPivotPanel'
 import { useMapStore } from '@/stores/mapStore'
 import { useViewStore, type ViewTab } from '@/stores/viewStore'
 
@@ -33,7 +34,8 @@ import { useViewStore, type ViewTab } from '@/stores/viewStore'
  */
 export function MainLayout() {
   const [activeSidebarTab, setActiveSidebarTab] = useState<string>('layers')
-  const [showBottomPanel, setShowBottomPanel] = useState(false)
+  const [sidebarContentVisible, setSidebarContentVisible] = useState(true)
+  const [showBottomPanel] = useState(false)
   const [showChat, setShowChat] = useState(true)
   const [mapFullscreen, setMapFullscreen] = useState(false)
 
@@ -43,24 +45,42 @@ export function MainLayout() {
 
   const toggleFullscreen = () => setMapFullscreen((v) => !v)
 
-  // Fullscreen mode: render only MapView
+  const handleSidebarTabChange = useCallback((tab: string) => {
+    if (tab === 'settings') {
+      setActiveSidebarTab(tab)
+      setSidebarContentVisible(false)
+      return
+    }
+
+    if (tab === activeSidebarTab) {
+      setSidebarContentVisible((visible) => !visible)
+      return
+    }
+
+    setActiveSidebarTab(tab)
+    setSidebarContentVisible(true)
+  }, [activeSidebarTab])
+
+  // Fullscreen mode hides chrome, chat, and sidebars, but still keeps the
+  // primary tab container alive so image / CSV / code tabs can open.
   if (mapFullscreen) {
     return (
       <div className="h-screen w-screen overflow-hidden">
-        <MapView onToggleFullscreen={toggleFullscreen} isFullscreen />
+        <PrimaryPanel onToggleFullscreen={toggleFullscreen} isFullscreen />
       </div>
     )
   }
 
   // Determine if sidebar content panel should be shown
-  const showSidebarContent = !isSettingsView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'skills' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
+  const showSidebarContent = sidebarContentVisible && !isSettingsView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'skills' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
 
   return (
     <div className="h-screen w-screen flex overflow-hidden">
       {/* Icon Sidebar */}
       <Sidebar
         activeTab={activeSidebarTab}
-        onTabChange={setActiveSidebarTab}
+        isContentVisible={showSidebarContent || isSettingsView}
+        onTabChange={handleSidebarTabChange}
         showChat={showChat}
         onToggleChat={() => setShowChat(!showChat)}
       />
@@ -73,7 +93,7 @@ export function MainLayout() {
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Windows frameless title bar drag region */}
-        {isWindows && <div className="h-8 shrink-0" style={{ WebkitAppRegion: 'drag' }} />}
+        {isWindows && <div className="h-8 shrink-0 app-region-drag" />}
         {isSettingsView ? (
           /* Settings takes full width when active */
           <div className="flex-1 overflow-hidden">
@@ -113,11 +133,9 @@ export function MainLayout() {
         )}
 
         {/* Bottom bar */}
-        <StatusBar
-          showBottomPanel={showBottomPanel}
-          onToggleBottomPanel={() => setShowBottomPanel(!showBottomPanel)}
-        />
+        <StatusBar />
       </div>
+      <DataPivotPanel />
     </div>
   )
 }
@@ -194,13 +212,7 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
 /**
  * Status bar at the bottom of the application.
  */
-function StatusBar({
-  showBottomPanel,
-  onToggleBottomPanel,
-}: {
-  showBottomPanel: boolean
-  onToggleBottomPanel: () => void
-}) {
+function StatusBar() {
   const t = useT()
   const layers = useMapStore((s) => s.layers)
   const activeLayerId = useMapStore((s) => s.activeLayerId)
@@ -211,12 +223,6 @@ function StatusBar({
 
   return (
     <div className="h-6 bg-bg-secondary border-t border-border flex items-center px-3 text-2xs text-text-muted select-none">
-      <button
-        onClick={onToggleBottomPanel}
-        className="hover:text-text-primary transition-colors mr-4"
-      >
-        {showBottomPanel ? `▼ ${t.layout.hideTable}` : `▲ ${t.layout.showTable}`}
-      </button>
       <span className="mr-4">{crs}</span>
       {activeLayer && (
         <>
@@ -243,7 +249,23 @@ function PythonStatusIndicator() {
     stopped: 'bg-text-muted',
   }
 
-  const status = 'stopped' // Placeholder
+  const [status, setStatus] = useState<'stopped' | 'starting' | 'ready' | 'error'>('stopped')
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api) return
+
+    // Get initial status
+    api.getPythonStatus().then((s: any) => {
+      if (s?.status) setStatus(s.status)
+    }).catch(() => {})
+
+    // Subscribe to status changes
+    const unsubscribe = api.onPythonStatusChanged((s: any) => {
+      if (s?.status) setStatus(s.status)
+    })
+    return unsubscribe
+  }, [])
 
   return (
     <div className="flex items-center gap-1.5">
@@ -260,19 +282,25 @@ function PythonStatusIndicator() {
  * switch between Map view and Code viewer. Supports split view
  * (map + code side by side or top/bottom).
  */
-function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }) {
+function PrimaryPanel({
+  onToggleFullscreen,
+  isFullscreen = false,
+}: {
+  onToggleFullscreen: () => void
+  isFullscreen?: boolean
+}) {
   const t = useT()
   const tabs = useViewStore((s) => s.tabs)
   const activeTabId = useViewStore((s) => s.activeTabId)
   const setActiveTab = useViewStore((s) => s.setActiveTab)
   const closeTab = useViewStore((s) => s.closeTab)
 
-  const codeTabs = tabs.filter((t) => t.type === 'code' || t.type === 'text')
-  const activeCodeTab = tabs.find((t) => t.id === activeTabId)
+  const viewTabs = tabs.filter((t) => t.type === 'code' || t.type === 'text' || t.type === 'image')
+  const activeViewTab = tabs.find((t) => t.id === activeTabId)
 
-  // No code tabs — just show the map
-  if (codeTabs.length === 0) {
-    return <MapView onToggleFullscreen={onToggleFullscreen} />
+  // No file/image tabs — just show the map
+  if (viewTabs.length === 0) {
+    return <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
   }
 
   // Tab view: switch between map and code
@@ -297,7 +325,7 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
 
         {/* Code tabs */}
         <CodeTabHeader
-          tabs={codeTabs}
+          tabs={viewTabs}
           activeTabId={activeTabId}
           onTabClick={setActiveTab}
           onTabClose={closeTab}
@@ -307,11 +335,11 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTabId === 'map' ? (
-          <MapView onToggleFullscreen={onToggleFullscreen} />
-        ) : activeCodeTab ? (
-          <CodeTabContent tab={activeCodeTab} />
+          <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
+        ) : activeViewTab ? (
+          <CodeTabContent tab={activeViewTab} />
         ) : (
-          <MapView onToggleFullscreen={onToggleFullscreen} />
+          <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
         )}
       </div>
     </div>

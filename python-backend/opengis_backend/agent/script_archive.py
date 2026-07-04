@@ -1,23 +1,33 @@
 """
 ScriptArchive — persist every CodeAgent step to disk.
 
-Layout rules (agreed 2026-04-21):
+Layout rules:
 
 - If the user has a workspace open (``workspace_path`` provided):
-    <workspace>/script/YYYYMMDD-HHMMSS-step{n}.py
+    <workspace>/script/YYYYMMDD-HHMMSS-stepNN-semantic-name.py
     <workspace>/.opengis/runs/<run_id>/run.log
 
+- If the run is a workflow:
+    <workspace>/script/workflows/<workflow-name>-<run_id>/
+        YYYYMMDD-HHMMSS-stepNN-semantic-name.py
+        YYYYMMDD-HHMMSS-stepNN-semantic-name.metadata.json
+        _scripts_index.jsonl
+
 - If no workspace is open:
-    <app_data>/opengis/agent-runs/<run_id>/script/YYYYMMDD-HHMMSS-step{n}.py
+    <app_data>/opengis/agent-runs/<run_id>/script/YYYYMMDD-HHMMSS-stepNN-semantic-name.py
     <app_data>/opengis/agent-runs/<run_id>/run.log
 
-Every script file starts with a header comment that records the
-run_id / step / timestamp / user message for future forensics.
+Every script file starts with a header comment that records the run_id,
+step, timestamp, semantic name, metadata file, and user message for future
+forensics. A sibling metadata JSON file and an append-only JSONL index make
+scripts discoverable and reusable without parsing Python comments.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -45,6 +55,17 @@ def _ts_prefix() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def _slugify(value: str, *, fallback: str = "script", max_len: int = 64) -> str:
+    """Return a filesystem-safe semantic slug while preserving CJK text."""
+    text = (value or "").strip().replace("\n", " ")
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"[^\w\u4e00-\u9fff.-]+", "-", text, flags=re.UNICODE)
+    text = re.sub(r"-{2,}", "-", text).strip("-._")
+    if not text:
+        text = fallback
+    return text[:max_len].strip("-._") or fallback
+
+
 @dataclass
 class ScriptArchive:
     """
@@ -70,16 +91,26 @@ class ScriptArchive:
         cls,
         workspace_path: Optional[str] = None,
         run_id: Optional[str] = None,
+        workflow_name: Optional[str] = None,
     ) -> "ScriptArchive":
         rid = run_id or _short_run_id()
+        workflow_slug = _slugify(workflow_name or "", fallback="workflow") if workflow_name else None
         if workspace_path:
             ws = Path(workspace_path).expanduser().resolve()
-            script_dir = ws / "script"
+            script_dir = (
+                ws / "script" / "workflows" / f"{workflow_slug}-{rid}"
+                if workflow_slug
+                else ws / "script"
+            )
             run_log_dir = ws / ".opengis" / "runs" / rid
             path_base = ws
         else:
             root = _app_data_base() / "agent-runs" / rid
-            script_dir = root / "script"
+            script_dir = (
+                root / "script" / "workflows" / f"{workflow_slug}-{rid}"
+                if workflow_slug
+                else root / "script"
+            )
             run_log_dir = root
             path_base = root
 
@@ -112,6 +143,8 @@ class ScriptArchive:
         user_message: str = "",
         observations: str = "",
         error: Optional[str] = None,
+        semantic_name: str = "",
+        metadata: Optional[dict] = None,
     ) -> Path:
         """
         Persist one step's code to disk and return the absolute path.
@@ -122,12 +155,26 @@ class ScriptArchive:
         comment.
         """
         ts = _ts_prefix()
-        name = f"{ts}-step{step}.py"
+        semantic_slug = _slugify(semantic_name or user_message, fallback="script")
+        name = f"{ts}-step{step:02d}-{semantic_slug}.py"
         path = self.script_dir / name
+        created_at = datetime.now().isoformat(timespec="seconds")
+        meta = {
+            "run_id": self.run_id,
+            "step": step,
+            "timestamp": created_at,
+            "semantic_name": semantic_name or semantic_slug,
+            "script_path": str(path),
+            "user_message": user_message,
+            "has_error": bool(error),
+            **(metadata or {}),
+        }
 
         header = [
-            f"# ─── OpenGIS Agent · run {self.run_id} · step {step} ───",
-            f"# Timestamp : {datetime.now().isoformat(timespec='seconds')}",
+            f"# ─── OpenGIS Agent · run {self.run_id} · step {step} · {semantic_slug} ───",
+            f"# Timestamp : {created_at}",
+            f"# Semantic : {semantic_name or semantic_slug}",
+            f"# Metadata : {path.with_suffix('.metadata.json').name}",
         ]
         if user_message:
             # Truncate very long messages so the header stays readable.
@@ -155,6 +202,16 @@ class ScriptArchive:
             text += "\n" + "\n".join(tail_parts) + "\n"
 
         path.write_text(text, encoding="utf-8")
+        meta_path = path.with_suffix(".metadata.json")
+        meta_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            with (self.script_dir / "_scripts_index.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.debug("Failed to append script metadata index", exc_info=True)
         logger.debug("Wrote step %d to %s (%d bytes)", step, path, len(text))
         return path
 

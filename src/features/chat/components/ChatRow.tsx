@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react'
-import { AlertCircle, Check, Loader2, Cpu, ChevronRight, Hourglass, AlertTriangle, RefreshCw, Brain } from 'lucide-react'
+import { memo } from 'react'
+import { AlertCircle, Check, Cpu, ChevronRight, Hourglass, AlertTriangle } from 'lucide-react'
 import type { UIMessage, ApiReqInfo } from '@/types/chat'
 import { useT } from '@/i18n'
 import MarkdownBlock from './MarkdownBlock'
@@ -40,6 +40,19 @@ ChatRow.displayName = 'ChatRow'
 export default ChatRow
 
 // --- ChatRowContent ---
+
+function dirname(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const idx = normalized.lastIndexOf('/')
+  return idx > 0 ? normalized.slice(0, idx) : ''
+}
+
+function markdownBaseDirFor(message: UIMessage): string | undefined {
+  if (message.markdownBaseDir) return message.markdownBaseDir
+  const mdFile = message.files?.find((file) => /\.md$/i.test(file))
+  if (mdFile) return dirname(mdFile)
+  return undefined
+}
 
 const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowProps) => {
   const t = useT()
@@ -83,7 +96,6 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
         message={message}
         isExpanded={isExpanded}
         onToggleExpand={handleToggle}
-        isLast={isLast}
       />
     )
   }
@@ -156,7 +168,11 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
   if (type === 'text') {
     return (
       <div className="w-full min-w-0 overflow-hidden">
-        <MarkdownBlock markdown={message.text} showCursor={message.partial} />
+        <MarkdownBlock
+          markdown={message.text}
+          showCursor={message.partial}
+          baseDir={markdownBaseDirFor(message)}
+        />
       </div>
     )
   }
@@ -275,7 +291,6 @@ function useProgressLabels(): Record<string, string> {
 }
 
 function ProgressRow({ message }: { message: UIMessage }) {
-  const t = useT()
   const labels = useProgressLabels()
   const stage = message.progressStage || 'processing'
   const label = labels[stage] || labels.processing
@@ -312,7 +327,7 @@ function MaxStepsReachedRow({ message, isLast }: { message: UIMessage; isLast: b
   }
 
   return (
-    <div className="flex items-start gap-3 bg-bg-tertiary/40 border border-border/60 rounded-xl px-4 py-3">
+    <div className="flex items-start gap-3 bg-bg-tertiary/40 border border-border/30 rounded-xl px-4 py-3">
       <Hourglass className="w-4 h-4 shrink-0 mt-0.5 text-text-muted" />
       <div className="flex-1 min-w-0">
         <div className="text-[13px] text-text-primary leading-relaxed">
@@ -348,14 +363,17 @@ function CompletionRow({ message }: { message: UIMessage }) {
       </div>
       {message.text && (
         <div className="pl-7">
-          <MarkdownBlock markdown={message.text} />
+          <MarkdownBlock
+            markdown={message.text}
+            baseDir={markdownBaseDirFor(message)}
+          />
         </div>
       )}
     </div>
   )
 }
 
-function ApiRequestRow({ info, isLast }: { info: ApiReqInfo; isLast: boolean }) {
+function ApiRequestRow({ info }: { info: ApiReqInfo; isLast: boolean }) {
   const isFailed = !!info.streamingFailedMessage || !!info.cancelReason
 
   if (isFailed) {

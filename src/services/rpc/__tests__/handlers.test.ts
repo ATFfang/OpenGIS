@@ -1,6 +1,6 @@
 /**
  * Handler 骨架的契约测试：
- *   - 注册齐 28 个 method
+ *   - 注册齐当前 UI-facing method
  *   - 合法参数 → -32603 notImplemented（证明参数校验通过，落到 stub 抛错）
  *   - 非法参数 → -32602 invalidParams
  */
@@ -15,19 +15,20 @@ function req(method: string, params: unknown = {}, id = 'r'): JsonRpcRequest {
 }
 
 describe('Handler registration', () => {
-  it('registers expected method count (17 map + 3 chat + 4 ask + 3 fs + 1 agent.hello = 28 RPC UI-facing)', () => {
+  it('registers expected method count', () => {
     const reg = new HandlerRegistry();
     const names = registerAllHandlers(reg);
-    // 17 map (含 add_image_overlay) + 3 chat + 4 ask + 3 fs + 1 agent = 28
-    expect(names.length).toBe(28);
+    expect(names.length).toBe(33);
     // 抽样检查关键 method 在册
     expect(names).toContain('rpc.ui.map.add_layer');
     expect(names).toContain('rpc.ui.map.add_image_overlay');
     expect(names).toContain('rpc.ui.map.query_features');
+    expect(names).toContain('rpc.ui.map.set_basemap_visibility');
     expect(names).toContain('rpc.ui.chat.show_text');
     expect(names).toContain('rpc.ui.chat.show_image');
     expect(names).toContain('rpc.ui.ask.approve_code');
     expect(names).toContain('rpc.ui.fs.list_assets');
+    expect(names).toContain('rpc.ui.fs.refresh_assets');
     expect(names).toContain('rpc.agent.hello');
   });
 
@@ -57,19 +58,13 @@ describe('Handler contract: valid params → -32603 not implemented', () => {
   // 下面只保留**目前仍是 stub** 的 method。
   //   - chat.show_image 已真实现（plot 通道），不在此列。
   //   - chat.show_text / show_table 仍是 stub。
-  //   - ask.* 全是 stub（Stage 4 接 UI）。
-  //   - fs.* 全是 stub。
+  //   - ask.* 已接 Dialog 审批 UI，不在此列。
+  //   - fs.get_workspace / fs.list_assets / fs.open_external 仍是 stub。
+  //   - fs.refresh_assets 已真实现，不在此列。
   //   - agent.hello 是占位 stub。
   const validCases: Array<[string, unknown]> = [
     ['rpc.ui.chat.show_text', { text: 'hi' }],
     ['rpc.ui.chat.show_table', { columns: ['a'], rows: [[1]] }],
-    [
-      'rpc.ui.ask.approve_code',
-      { run_id: 'run_x', step: 0, code: 'print(1)', risky_operations: [] },
-    ],
-    ['rpc.ui.ask.choose', { question: 'pick', options: ['a', 'b'] }],
-    ['rpc.ui.ask.text', { question: 'name?' }],
-    ['rpc.ui.ask.confirm', { question: 'ok?' }],
     ['rpc.ui.fs.get_workspace', {}],
     ['rpc.ui.fs.list_assets', {}],
     ['rpc.ui.fs.open_external', { path: 'a.txt' }],
@@ -110,5 +105,51 @@ describe('Handler contract: invalid params → -32602 invalidParams', () => {
     const d = new Dispatcher({ registry: reg });
     const resp = await d.handleRequest(req(method, params));
     expect(resp).toMatchObject({ error: { code: -32602 } });
+  });
+});
+
+describe('rpc.ui.fs.refresh_assets', () => {
+  it('dispatches the AssetExplorer refresh event', async () => {
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const listener = vi.fn();
+    const previousWindow = (globalThis as any).window;
+    const previousCustomEvent = (globalThis as any).CustomEvent;
+    const target = new EventTarget();
+    const customEvent =
+      previousCustomEvent ??
+      class<T = unknown> extends Event {
+        detail: T;
+        constructor(type: string, init?: CustomEventInit<T>) {
+          super(type);
+          this.detail = init?.detail as T;
+        }
+      };
+
+    (globalThis as any).CustomEvent = customEvent;
+    (globalThis as any).window = {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+    };
+
+    try {
+      window.addEventListener('opengis:assets-refresh', listener);
+      const resp = await d.handleRequest(req('rpc.ui.fs.refresh_assets', {
+        path: '/tmp/result.geojson',
+        reason: 'write_file',
+      }));
+      window.removeEventListener('opengis:assets-refresh', listener);
+
+      expect(resp).toMatchObject({ result: { success: true } });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]?.[0]).toMatchObject({
+        detail: { path: '/tmp/result.geojson', reason: 'write_file' },
+      });
+    } finally {
+      (globalThis as any).window = previousWindow;
+      (globalThis as any).CustomEvent = previousCustomEvent;
+    }
   });
 });

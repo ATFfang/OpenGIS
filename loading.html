@@ -120,17 +120,13 @@
     .orb-center {
       position: relative;
       z-index: 2;
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      background: var(--bg-card);
-      border: 1.5px solid var(--border);
+      width: 80px;
+      height: 80px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 6px 32px var(--accent-glow);
     }
-    .orb-center img { width: 34px; height: 34px; object-fit: contain; }
+    .orb-center img { width: 80px; height: 80px; object-fit: contain; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.15)); }
 
     @keyframes orb-rotate {
       0%, 100% { transform: rotate(0deg) scale(1); }
@@ -575,7 +571,7 @@
     <div class="opening-subtext" id="openingSubtext"></div>
   </div>
 
-  <div class="footer">v4.0 - Powered by LiteLLM</div>
+  <div class="footer"></div>
 
   <script>
     const { ipcRenderer } = require('electron')
@@ -638,7 +634,7 @@
         renamePrompt: '重命名工程：',
         removeConfirm: '确定从列表中移除此工程吗？（文件不会被删除）',
         nameAndPathRequired: '请填写工程名称和文件夹路径。',
-        poweredBy: 'v4.0 - Powered by LiteLLM',
+        poweredBy: '',
         openingProject: '正在打开工程...',
         pleaseWait: '正在加载工作区，请稍候',
       },
@@ -674,7 +670,7 @@
         renamePrompt: 'Rename project:',
         removeConfirm: 'Remove this project from the list? (Files will not be deleted)',
         nameAndPathRequired: 'Please provide both a name and a folder path.',
-        poweredBy: 'v4.0 - Powered by LiteLLM',
+        poweredBy: '',
         openingProject: 'Opening project...',
         pleaseWait: 'Loading workspace, please wait',
       }
@@ -906,12 +902,29 @@
     async function renameProject(id) {
       const project = projects.find(p => p.id === id)
       if (!project) return
-      const newName = prompt(t.renamePrompt, project.name)
-      if (newName && newName.trim()) {
-        project.name = newName.trim()
-        await ipcRenderer.invoke('projects:rename', id, newName.trim())
+      const nameEl = document.querySelector(`.project-item[data-id="${id}"] .project-item-name`)
+      if (!nameEl) return
+      const input = document.createElement('input')
+      input.type = 'text'
+      input.value = project.name
+      input.className = 'rename-inline-input'
+      input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--accent-primary);border-radius:4px;font-size:13px;background:var(--bg-card);color:var(--text-primary);outline:none;'
+      nameEl.replaceWith(input)
+      input.focus()
+      input.select()
+      const commit = async () => {
+        const newName = input.value.trim()
+        if (newName && newName !== project.name) {
+          project.name = newName
+          await ipcRenderer.invoke('projects:rename', id, newName)
+        }
         renderProjects()
       }
+      input.addEventListener('blur', commit)
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') input.blur()
+        if (e.key === 'Escape') { input.value = project.name; input.blur() }
+      })
     }
 
     async function deleteProject(id) {

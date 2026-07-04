@@ -31,6 +31,7 @@ from opengis_backend.agent.agent_loop import (
     extract_code_block, extract_thought,
 )
 from opengis_backend.agent.context_manager import ContextManager
+from opengis_backend.agent.tool_runtime import ToolRuntime, parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class WorkflowNode:
     id: str
     title: str
     description: str = ""
+    input_contract: str = ""
+    output_contract: str = ""
     node_type: str = "process"  # process | input | output | decision
     config: dict = field(default_factory=dict)
     max_retries: int = 3
@@ -87,6 +90,8 @@ class WorkflowDocument:
                 id=n.get("id", ""),
                 title=n.get("title", n.get("label", "Untitled")),
                 description=n.get("description", ""),
+                input_contract=n.get("inputContract", n.get("input_contract", "")),
+                output_contract=n.get("outputContract", n.get("output_contract", "")),
                 # Accept both frontend (camelCase) and backend (snake_case) names.
                 node_type=n.get("nodeType", n.get("type", "process")),
                 config=n.get("params", n.get("config", {})),
@@ -109,6 +114,36 @@ class WorkflowDocument:
             edges=edges,
             metadata=data.get("metadata", {}),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the workflow document to a stable JSON-compatible shape."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "nodes": [
+                {
+                    "id": node.id,
+                    "title": node.title,
+                    "description": node.description,
+                    "inputContract": node.input_contract,
+                    "outputContract": node.output_contract,
+                    "type": node.node_type,
+                    "config": dict(node.config),
+                    "max_retries": node.max_retries,
+                    "hooks": list(node.hooks),
+                }
+                for node in self.nodes
+            ],
+            "edges": [
+                {
+                    "source": edge.source,
+                    "target": edge.target,
+                    "label": edge.label,
+                }
+                for edge in self.edges
+            ],
+            "metadata": dict(self.metadata),
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -189,6 +224,27 @@ def build_step_prompt(
     if node.description:
         parts.append(f"**Task for this step**: {node.description}\n")
 
+    if node.input_contract or node.output_contract:
+        parts.append("## Node Communication Contract (HIGH PRIORITY)")
+        if node.input_contract:
+            parts.append(
+                "**Receives from upstream**: "
+                f"{node.input_contract}\n"
+            )
+        if node.output_contract:
+            parts.append(
+                "**Must hand off downstream**: "
+                f"{node.output_contract}\n"
+            )
+        parts.append(
+            "Treat this contract as stronger than generic task wording. "
+            "Use upstream results according to the receive contract. "
+            "Before finishing this step, make sure the handoff contract is "
+            "satisfied and explicitly stated in your final plain-text step "
+            "summary with exact file paths, layer ids, field names, metrics, "
+            "or other identifiers needed by downstream nodes.\n"
+        )
+
     if predecessor_outputs:
         parts.append("**Results from previous steps**:")
         for pred_id, output in predecessor_outputs.items():
@@ -204,7 +260,9 @@ def build_step_prompt(
         "executed and the output fed back to you. Keep writing code until "
         "the step is FULLY complete (files saved, layers displayed, etc.). "
         "When this step is done, reply with plain text (no code block) to "
-        "signal completion and summarize what was accomplished.\n"
+        "signal completion and summarize what was accomplished. If a "
+        "downstream handoff contract is defined, your final text MUST list "
+        "the concrete handoff values.\n"
     )
 
     parts.append(
@@ -251,7 +309,7 @@ class WorkflowLoop:
         Optional pre-existing ContextManager.
     """
 
-    llm_call: Callable[..., str]
+    llm_call: Callable[..., Any]
     executor_call: Callable[[str], CodeExecResult]
     system_prompt: str
     workflow: WorkflowDocument
@@ -264,9 +322,13 @@ class WorkflowLoop:
     on_code_start: Optional[Callable[[int], None]] = None
     on_code_delta: Optional[Callable[[int, str], None]] = None
     on_code_end: Optional[Callable[[int], None]] = None
+    on_tool_start: Optional[Callable[[str, dict, str], None]] = None
+    on_tool_result: Optional[Callable[..., None]] = None
     # Plan callback — emits plan_update events for compact workflow UI.
     plan_callback: Optional[Callable[[dict], None]] = None
     context: ContextManager = field(default_factory=ContextManager)
+    tool_runtime: Optional[ToolRuntime] = None
+    tool_schemas: Optional[list[dict]] = None
     # Workspace path for writing intermediate files.
     workspace: str = ""
     # When True, the workflow stops immediately if any node fails
@@ -310,7 +372,10 @@ class WorkflowLoop:
             f"Total steps: {total_steps}\n"
             f"User request: {user_message}"
         )
-        self.context.add_user_message(workflow_intro)
+        self.context.add_system_message(
+            workflow_intro,
+            meta={"kind": "workflow_intro", "scope": "workflow"},
+        )
 
         # Emit initial plan (all steps pending)
         self._emit_plan(execution_order, node_outputs, total_steps)
@@ -412,7 +477,10 @@ class WorkflowLoop:
         # but a node may need multiple successful code blocks.
 
         # Add the step prompt as a user message.
-        self.context.add_user_message(step_prompt)
+        self.context.add_user_message(
+            step_prompt,
+            meta={"kind": "workflow_step_prompt", "scope": "workflow"},
+        )
 
         error_count = 0
         max_errors = node.max_retries or self.max_retries_per_node
@@ -481,6 +549,33 @@ class WorkflowLoop:
                 on_code_delta=_wf_on_code_delta,
                 on_code_end=_wf_on_code_end,
             )
+            streamed_tool_code: dict[int, dict[str, Any]] = {}
+
+            def _wf_on_tool_delta(tool_index: int, tool_name: str, payload: dict[str, Any]) -> None:
+                if tool_name != "execute_code":
+                    return
+                code = payload.get("code")
+                if not isinstance(code, str):
+                    return
+                state = streamed_tool_code.setdefault(
+                    tool_index,
+                    {"step": step_index * 100 + tool_index + 1, "length": 0, "open": False},
+                )
+                if not state["open"]:
+                    code_started["v"] = True
+                    if self.on_code_start:
+                        try:
+                            self.on_code_start(int(state["step"]))
+                        except Exception:
+                            logger.exception("on_code_start failed")
+                    state["open"] = True
+                previous_length = int(state["length"])
+                if len(code) > previous_length and self.on_code_delta:
+                    try:
+                        self.on_code_delta(int(state["step"]), code[previous_length:])
+                    except Exception:
+                        logger.exception("on_code_delta failed")
+                    state["length"] = len(code)
 
             def _on_llm_delta(piece: str) -> None:
                 parser.feed(piece)
@@ -488,17 +583,23 @@ class WorkflowLoop:
             response = None
             for _retry_attempt in range(LLM_MAX_RETRIES + 1):
                 try:
-                    response = self.llm_call(messages, on_delta=_on_llm_delta)
+                    response = self.llm_call(
+                        messages,
+                        on_delta=_on_llm_delta,
+                        on_tool_delta=_wf_on_tool_delta,
+                        tools=self.tool_schemas,
+                    )
                     parser.finish()
                     break
                 except TypeError as te:
                     # Only fall back if the TypeError is about on_delta.
-                    if "on_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
+                    if "on_delta" not in str(te) and "on_tool_delta" not in str(te) and "keyword" not in str(te).lower() and "unexpected" not in str(te).lower():
                         raise
-                    response = self.llm_call(messages)
-                    if response and self.on_thought_delta:
+                    response = self.llm_call(messages, tools=self.tool_schemas)
+                    response_text = self._response_text(response)
+                    if response_text and self.on_thought_delta:
                         try:
-                            self.on_thought_delta(response)
+                            self.on_thought_delta(response_text)
                         except Exception:
                             logger.exception("on_thought_delta failed on fallback")
                     break
@@ -537,9 +638,100 @@ class WorkflowLoop:
                     raise
             duration_ms = (time.monotonic() - t0) * 1000
 
+            response_text = self._response_text(response)
+            tool_calls = self._response_tool_calls(response)
+
+            for state in streamed_tool_code.values():
+                if state.get("open") and self.on_code_end:
+                    try:
+                        self.on_code_end(int(state["step"]))
+                    except Exception:
+                        logger.exception("on_code_end failed")
+
+            if tool_calls:
+                self.context.add_assistant_with_tool_calls(response_text, tool_calls)
+                self.context.mark_recent_scope(
+                    "workflow",
+                    count=1,
+                    kind="workflow_tool_calls",
+                )
+                for tool_index, tc in enumerate(tool_calls):
+                    tc_id = tc.get("id", "")
+                    func = tc.get("function", {})
+                    tool_name = func.get("name", "")
+                    arguments = parse_tool_arguments(func.get("arguments", "{}"))
+
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(
+                                "tool_call",
+                                f"Step {step_index}: {node.title} — calling {tool_name}...",
+                            )
+                        except Exception:
+                            pass
+
+                    if self.on_tool_start:
+                        try:
+                            self.on_tool_start(tool_name, arguments, tc_id)
+                        except Exception:
+                            logger.exception("on_tool_start failed")
+
+                    if self.tool_runtime is None:
+                        result_content = '{"success": false, "error": "Tool runtime not configured"}'
+                        result_error = "Tool runtime not configured"
+                        result_ms = 0.0
+                        result_metadata = None
+                    else:
+                        tool_result = self.tool_runtime.execute(tool_name, arguments)
+                        result_content = tool_result.content
+                        result_error = tool_result.error
+                        result_ms = tool_result.duration_ms
+                        result_metadata = dict(tool_result.metadata or {})
+                        if tool_name == "execute_code":
+                            stream_state = streamed_tool_code.get(tool_index)
+                            if stream_state is not None:
+                                result_metadata["code_step"] = int(stream_state["step"])
+
+                    if self.on_tool_result:
+                        try:
+                            self.on_tool_result(
+                                tool_name,
+                                result_content,
+                                result_error,
+                                result_ms,
+                                tc_id,
+                                result_metadata,
+                            )
+                        except Exception:
+                            logger.exception("on_tool_result failed")
+
+                    if tool_name == "execute_code" and result_metadata:
+                        script_path = result_metadata.get("script_path") or result_metadata.get("script_abs_path")
+                        if script_path:
+                            persisted_note = (
+                                "\n\n[script] Persisted script path: "
+                                f"{script_path}\n"
+                                "If this code failed or needs refinement, read this file and patch it "
+                                "with edit_file, then rerun the same script instead of creating a "
+                                "near-duplicate script."
+                            )
+                            result_content = f"{result_content}{persisted_note}"
+
+                    self.context.add_tool_result(tc_id, tool_name, result_content)
+                    self.context.mark_recent_scope(
+                        "workflow",
+                        count=1,
+                        kind="workflow_tool_result",
+                    )
+                    self.context.prune_tool_results()
+                    accumulated_output.append(f"[{tool_name}] {result_content}")
+
+                nudged = False
+                continue
+
             # Parse response.
-            code_block = extract_code_block(response)
-            thought = extract_thought(response)
+            code_block = extract_code_block(response_text)
+            thought = extract_thought(response_text)
 
             # If no code block, the LLM considers this node DONE.
             if code_block is None:
@@ -553,23 +745,30 @@ class WorkflowLoop:
                         "Text-only reply at start of node %s (iteration %d) — nudging to write code.",
                         node.id, iteration,
                     )
-                    self.context.add_assistant_message(response)
+                    self.context.add_assistant_message(
+                        response_text,
+                        meta={"kind": "workflow_node_response", "scope": "workflow"},
+                    )
                     self.context.add_user_message(
-                        "[System] This step requires code execution. "
-                        "Write a ```python code block to accomplish the task. "
-                        "A plain text reply will end this step.\n"
-                        "[系统] 此步骤需要执行代码。请写 ```python 代码块来完成任务。"
-                        "纯文本回复将结束此步骤。"
+                        "[System] This step is not complete yet. Call an appropriate tool "
+                        "or write a ```python code block to accomplish the task. "
+                        "A plain text reply after this nudge will end this step.\n"
+                        "[系统] 此步骤尚未完成。请调用合适的工具或写 ```python 代码块完成任务。"
+                        "本次提醒后的纯文本回复将结束此步骤。",
+                        meta={"kind": "workflow_nudge", "scope": "workflow"},
                     )
                     continue
 
                 # Genuine completion: either after code execution or after nudge.
-                self.context.add_assistant_message(response)
+                self.context.add_assistant_message(
+                    response_text,
+                    meta={"kind": "workflow_node_response", "scope": "workflow"},
+                )
                 step = AgentStep(
                     step_num=step_index,
                     thought=thought,
                     is_text_reply=True,
-                    text_reply=response,
+                    text_reply=response_text,
                     duration_ms=duration_ms,
                 )
                 if self.step_callback:
@@ -578,14 +777,17 @@ class WorkflowLoop:
                     except Exception:
                         logger.exception("step_callback failed")
                 # Return accumulated output + final text.
-                accumulated_output.append(response)
+                accumulated_output.append(response_text)
                 return self._finalize_step(
                     node, step_index, "\n".join(accumulated_output),
                 )
 
             # Execute the code block.
             sub_step += 1
-            self.context.add_assistant_message(response)
+            self.context.add_assistant_message(
+                response_text,
+                meta={"kind": "workflow_node_response", "scope": "workflow"},
+            )
 
             # Notify the UI that code is about to execute.
             if self.progress_callback:
@@ -615,7 +817,6 @@ class WorkflowLoop:
                 code=code_block,
                 output=output_str,
                 error=result.error,
-                is_final_answer=result.is_final_answer,
                 duration_ms=duration_ms + exec_duration_ms,
             )
 
@@ -626,13 +827,6 @@ class WorkflowLoop:
                 except Exception:
                     logger.exception("step_callback failed")
 
-            # Check for final_answer().
-            if result.is_final_answer:
-                accumulated_output.append(str(result.output) if result.output else "(done)")
-                return self._finalize_step(
-                    node, step_index, "\n".join(accumulated_output),
-                )
-
             if result.error is None:
                 # Success — feed the output back to the LLM so it can
                 # continue with the next sub-step of this node.
@@ -641,6 +835,7 @@ class WorkflowLoop:
                     code=code_block,
                     output=output_str,
                     error=None,
+                    meta={"kind": "workflow_code_output", "scope": "workflow"},
                 )
                 accumulated_output.append(output_str)
                 # Do NOT return here — let the LLM decide if more code
@@ -653,6 +848,7 @@ class WorkflowLoop:
                     code=code_block,
                     output=result.logs or "",
                     error=result.error,
+                    meta={"kind": "workflow_code_output", "scope": "workflow"},
                 )
                 if error_count >= max_errors:
                     logger.warning(
@@ -669,7 +865,10 @@ class WorkflowLoop:
                     f"Please fix the code and try again. "
                     f"(Error {error_count}/{max_errors})"
                 )
-                self.context.add_user_message(error_feedback)
+                self.context.add_user_message(
+                    error_feedback,
+                    meta={"kind": "workflow_error_feedback", "scope": "workflow"},
+                )
 
                 logger.warning(
                     "Node %s error %d/%d: %s",
@@ -746,6 +945,9 @@ class WorkflowLoop:
 
         # Build summary
         parts = [f"Step {step_index}: {node.title}"]
+
+        if node.output_contract:
+            parts.append(f"交付契约: {node.output_contract}")
 
         if paths:
             path_strs = [f"  - {p}" for p in paths[:8]]
@@ -869,7 +1071,10 @@ class WorkflowLoop:
             "Do NOT write any code."
         )
 
-        self.context.add_user_message(summary_prompt)
+        self.context.add_user_message(
+            summary_prompt,
+            meta={"kind": "workflow_summary_prompt", "scope": "workflow"},
+        )
         messages = self.context.build_messages(self.system_prompt)
 
         # Notify the UI that we're generating the summary.
@@ -921,17 +1126,22 @@ class WorkflowLoop:
                     )
             if response is None:
                 logger.error("Workflow summary LLM call returned None after all retries")
-                response = (
+                response_text = (
                     f"Workflow '{self.workflow.name}' completed all {len(execution_order)} steps. "
                     "Summary generation returned no response."
                 )
-            self.context.add_assistant_message(response)
+            else:
+                response_text = self._response_text(response)
+            self.context.add_assistant_message(
+                response_text,
+                meta={"kind": "workflow_summary", "scope": "workflow"},
+            )
             # Emit as a text reply step.
             step = AgentStep(
                 step_num=len(execution_order) + 1,
-                thought=response,
+                thought=response_text,
                 is_text_reply=True,
-                text_reply=response,
+                text_reply=response_text,
                 duration_ms=0,
             )
             if self.step_callback:
@@ -939,13 +1149,28 @@ class WorkflowLoop:
                     self.step_callback(step)
                 except Exception:
                     logger.exception("step_callback failed")
-            return response
+            return response_text
         except Exception as e:
             logger.error("Workflow summary generation failed: %s", e)
             return (
                 f"Workflow '{self.workflow.name}' completed all {len(execution_order)} steps. "
                 "Unable to generate summary due to an error."
             )
+
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        if response is None:
+            return ""
+        if hasattr(response, "content"):
+            return getattr(response, "content", None) or ""
+        return str(response)
+
+    @staticmethod
+    def _response_tool_calls(response: Any) -> list[dict] | None:
+        if response is None or not hasattr(response, "tool_calls"):
+            return None
+        calls = getattr(response, "tool_calls", None)
+        return calls if calls else None
 
 
 __all__ = [

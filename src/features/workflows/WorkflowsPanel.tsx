@@ -18,7 +18,6 @@ import {
   Pencil,
   Trash2,
   FolderPlus,
-  FileText,
   AlertCircle,
 } from 'lucide-react'
 import { useAssetStore } from '@/stores/assetStore'

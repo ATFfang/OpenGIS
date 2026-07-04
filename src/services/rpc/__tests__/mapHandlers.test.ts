@@ -34,6 +34,7 @@ function resetStore(): void {
     layers: [],
     activeLayerId: null,
     basemap: BUILTIN_BASEMAPS.find((b) => b.id === 'osm-streets')!,
+    basemapVisible: true,
   });
 }
 
@@ -92,6 +93,8 @@ describe('rpc.ui.map.add_layer_from_geojson', () => {
     expect(layers[0].name).toBe('北京三地标');
     expect(layers[0].style.color).toBe('#ff6600');
     expect(layers[0].visible).toBe(true);
+    expect(layers[0].data.kind).toBe('vector');
+    if (layers[0].data.kind !== 'vector') throw new Error('expected vector layer');
     expect(layers[0].data.featureCount).toBe(3);
   });
 
@@ -110,6 +113,38 @@ describe('rpc.ui.map.add_layer_from_geojson', () => {
 
     expect(resp).toMatchObject({ result: { feature_count: 1, geometry_type: 'Point' } });
     expect(useMapStore.getState().layers).toHaveLength(1);
+  });
+
+  it('applies agent style paint while adding a layer', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.add_layer_from_geojson', {
+        geojson: SAMPLE_FC,
+        name: 'styled',
+        layer_id: 'styled_points',
+        style: {
+          type: 'circle',
+          paint: {
+            'circle-color': '#3366ff',
+            'circle-radius': 9,
+            'circle-opacity': 0.7,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+            'circle-stroke-opacity': 0.8,
+          },
+        },
+      }),
+    );
+
+    const layer = useMapStore.getState().getLayerById('styled_points')!;
+    expect(layer.style).toMatchObject({
+      color: '#3366ff',
+      radius: 9,
+      opacity: 0.7,
+      strokeColor: '#ffffff',
+      strokeWidth: 2,
+      strokeOpacity: 0.8,
+    });
   });
 
   it('empty FeatureCollection → -32602 invalidParams', async () => {
@@ -218,6 +253,24 @@ describe('rpc.ui.map.set_basemap', () => {
   });
 });
 
+describe('rpc.ui.map.set_basemap_visibility', () => {
+  beforeEach(resetStore);
+
+  it('toggles basemap visibility in the store', async () => {
+    const spy = vi.spyOn(mapEngine, 'setBasemapVisible').mockImplementation(() => {});
+    const d = makeDispatcher();
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_basemap_visibility', { visible: false }),
+    );
+
+    expect(resp).toMatchObject({ result: { visible: false } });
+    expect(useMapStore.getState().basemapVisible).toBe(false);
+    expect(spy).toHaveBeenCalledWith(false);
+    spy.mockRestore();
+  });
+});
+
 describe('rpc.ui.map.set_layer_style', () => {
   beforeEach(resetStore);
 
@@ -250,6 +303,38 @@ describe('rpc.ui.map.set_layer_style', () => {
     const layer = useMapStore.getState().getLayerById('L1')!;
     expect(layer.style.color).toBe('#00ff00');
     expect(layer.style.opacity).toBe(0.5);
+  });
+
+  it('maps line and stroke paint without overwriting polygon fill color', async () => {
+    const d = makeDispatcher();
+    await addL(d, 'L1');
+    const before = useMapStore.getState().getLayerById('L1')!.style.color;
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_layer_style', {
+        layer_id: 'L1',
+        style: {
+          type: 'fill',
+          paint: {
+            'line-color': '#112233',
+            'line-width': 4,
+            'line-opacity': 0.55,
+          },
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'L1',
+        applied: { strokeColor: '#112233', strokeWidth: 4, strokeOpacity: 0.55 },
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('L1')!;
+    expect(layer.style.color).toBe(before);
+    expect(layer.style.strokeColor).toBe('#112233');
+    expect(layer.style.strokeWidth).toBe(4);
+    expect(layer.style.strokeOpacity).toBe(0.55);
   });
 
   it('unknown layer_id → -32602', async () => {

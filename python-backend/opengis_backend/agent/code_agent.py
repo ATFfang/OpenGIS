@@ -21,10 +21,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 
 from opengis_backend.agent.agent_factory import build_agent_loop
 from opengis_backend.agent.agent_loop import AgentStep
+from opengis_backend.agent.artifacts import ArtifactIndex, artifacts_from_tool_result
 from opengis_backend.agent.context_manager import ContextManager
 from opengis_backend.agent.context_persistence import save_context, load_context
 from opengis_backend.workspace.memory import append as memory_append
@@ -33,8 +35,10 @@ from opengis_backend.agent.events import (
     AgentEventType,
 )
 from opengis_backend.agent.llm import LLMConfig
+from opengis_backend.agent.profile import AgentProfile
 from opengis_backend.agent.runner import AgentRunner
 from opengis_backend.agent.script_archive import ScriptArchive
+from opengis_backend.agent.session import AgentSession, SessionKind, SessionStatus, SessionStore
 from opengis_backend.agent.step_recorder import StepRecorder
 from opengis_backend.agent.workflow_factory import build_workflow_loop
 from opengis_backend.agent.workflow_loop import WorkflowDocument
@@ -45,6 +49,7 @@ from opengis_backend.skills.context import (
     run_async_from_sync,
     set_current_context,
 )
+from opengis_backend.skills.builtin._asset_refresh import notify_asset_refresh
 from opengis_backend.skills.registry import SkillRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
 
@@ -75,6 +80,24 @@ def _extract_memory(workspace: str, user_message: str, final_answer: str) -> Non
     # Extract key numbers (feature counts, statistics, percentages)
     number_pattern = re.compile(r"(\d[\d,]+(?:\.\d+)?)\s*(?:条|个|家|features?|rows?|%)")
     numbers = number_pattern.findall(answer)[:3]
+
+    visual_style_pattern = re.compile(
+        r"(颜色|色彩|分类设色|按类别|类别分|分一下颜色|样式|渲染|符号|图层|color|colour|style|symbol|renderer)",
+        re.IGNORECASE,
+    )
+    durable_task_pattern = re.compile(
+        r"(报告|学术|论文|分析|统计|workflow|工作流|数据|文件|csv|geojson|shp|gpkg|report|analysis)",
+        re.IGNORECASE,
+    )
+    if (
+        len(task_summary) <= 80
+        and visual_style_pattern.search(task_summary)
+        and not durable_task_pattern.search(task_summary)
+        and not paths
+        and not numbers
+    ):
+        logger.debug("Skipping project memory for transient visual styling request")
+        return
 
     # Build structured entry
     entry = f"任务: {task_summary}"
@@ -210,11 +233,40 @@ class GISCodeAgent:
                 )
 
         # Persist scripts + per-run logs.
-        archive = ScriptArchive.for_run(workspace_path=workspace)
+        archive = ScriptArchive.for_run(
+            workspace_path=workspace,
+            workflow_name=workflow.name if workflow is not None else None,
+        )
         if ctx.meta is None:
             ctx.meta = {}
+        ctx.meta["_current_user_message"] = user_message
+        agent_profile = ctx.meta.get("agent_profile")
+        if not isinstance(agent_profile, AgentProfile):
+            agent_profile = (
+                AgentProfile.workflow_runner(max_steps=self.max_iterations)
+                if workflow is not None
+                else AgentProfile.gis_build(max_steps=self.max_iterations)
+            )
+        effective_max_steps = int(agent_profile.max_steps or self.max_iterations)
         ctx.meta.setdefault("run_id", archive.run_id)
         ctx.meta.setdefault("script_dir", str(archive.script_dir))
+        session = AgentSession.create(
+            kind=SessionKind.WORKFLOW if workflow is not None else SessionKind.CHAT,
+            profile_name=agent_profile.name,
+            run_id=archive.run_id,
+            title=user_message[:80],
+            metadata={
+                "conversation_id": conversation_id,
+                "workspace_path": workspace,
+                "inbox_id": (ctx.meta or {}).get("_inbox_id"),
+            },
+        )
+        ctx.meta.setdefault("_agent_session", session)
+        if workspace:
+            try:
+                SessionStore(workspace).upsert(session)
+            except Exception:
+                logger.debug("initial session persistence failed (non-fatal)", exc_info=True)
 
         # Wire orchestration deps so the Agent-as-Tool sub-agent skills
         # (run_subagent / run_subagents) can spin up isolated child loops.
@@ -261,11 +313,19 @@ class GISCodeAgent:
             queue=event_queue,
             user_message=user_message,
         )
+        pending_asset_refresh_paths: set[str] = set()
+
+        def _flush_asset_refreshes(reason: str) -> None:
+            if not pending_asset_refresh_paths:
+                return
+            paths = list(pending_asset_refresh_paths)
+            pending_asset_refresh_paths.clear()
+            notify_asset_refresh(ctx, paths[0], reason=reason)
 
         def _step_callback(step: AgentStep) -> None:
             """Step callback that records + mirrors to run archive."""
-            recorder.on_step(step)
             try:
+                recorder.on_step(step)
                 if step.is_text_reply or not step.code:
                     return
                 run_archive.record_step(
@@ -277,13 +337,55 @@ class GISCodeAgent:
                 )
             except Exception:
                 logger.exception("run_archive.record_step mirror failed")
+            finally:
+                if not step.is_text_reply and step.code:
+                    _flush_asset_refreshes("execute_code")
 
-        # Wire D3 risky-op telemetry.
-        risky_listener = run_archive.record_risky_op
+        # Wire D3 risky-op telemetry. The subprocess reports writes from
+        # open(..., "w"), Path.write_text, os.unlink, shutil.rmtree, etc.
+        # Record them for audit and refresh the frontend asset tree.
+        def risky_listener(entry: dict) -> None:
+            run_archive.record_risky_op(entry)
+            path_raw = entry.get("path")
+            if not path_raw:
+                return
+            try:
+                changed = Path(str(path_raw)).expanduser()
+                if not changed.is_absolute() and workspace:
+                    changed = Path(workspace).expanduser().resolve() / changed
+                pending_asset_refresh_paths.add(str(changed))
+            except Exception:
+                logger.debug("execute_code asset refresh failed", exc_info=True)
 
         # Progress callback: forwards thinking/executing status to the UI.
         def _progress_callback(stage: str, detail: str = "") -> None:
             recorder.on_progress(stage, detail)
+
+        current_output_tool: dict[str, str | None] = {
+            "call_id": None,
+            "name": None,
+        }
+
+        def _execution_output_callback(text: str) -> None:
+            if not text:
+                return
+            call_id = current_output_tool.get("call_id")
+            name = current_output_tool.get("name")
+            if not call_id or name != "execute_code":
+                return
+            _enqueue(
+                loop,
+                event_queue,
+                AgentEvent(
+                    type=AgentEventType.TOOL_OUTPUT_DELTA,
+                    data={
+                        "call_id": call_id,
+                        "name": name,
+                        "delta": text,
+                        "run_id": archive.run_id,
+                    },
+                ),
+            )
 
         # ── Streaming callbacks ───────────────────────────────────
         # These are invoked from the LLM worker thread as tokens arrive,
@@ -404,6 +506,156 @@ class GISCodeAgent:
                 ),
             )
 
+        def _on_tool_start(name: str, args: dict, call_id: str) -> None:
+            if name == "execute_code":
+                current_output_tool["call_id"] = call_id
+                current_output_tool["name"] = name
+            if ctx.meta is not None:
+                pending = ctx.meta.setdefault("_tool_call_args", {})
+                pending[call_id] = args
+            try:
+                run_archive.record_tool_call(
+                    call_id=call_id,
+                    name=name,
+                    arguments=args,
+                    status="running",
+                    metadata={"session_id": session.id},
+                )
+            except Exception:
+                logger.debug("tool call start archive failed (non-fatal)", exc_info=True)
+            _enqueue(
+                loop,
+                event_queue,
+                AgentEvent(
+                    type=AgentEventType.TOOL_START,
+                    data={
+                        "name": name,
+                        "args": args,
+                        "call_id": call_id,
+                        "run_id": archive.run_id,
+                    },
+                ),
+            )
+
+        def _on_tool_result(
+            name: str,
+            content: str,
+            error: str | None,
+            duration_ms: float,
+            call_id: str,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            args = {}
+            if ctx.meta is not None:
+                pending = ctx.meta.get("_tool_call_args")
+                if isinstance(pending, dict):
+                    args = pending.pop(call_id, {}) or {}
+
+            result_metadata = dict(metadata or {})
+            if current_output_tool.get("call_id") == call_id:
+                current_output_tool["call_id"] = None
+                current_output_tool["name"] = None
+            if name == "execute_code":
+                code = args.get("code")
+                if isinstance(code, str) and code.strip():
+                    persist_requested = bool(args.get("persist"))
+                    should_persist = workflow is not None or persist_requested
+                    try:
+                        step_no = int(result_metadata.get("code_step") or 0)
+                    except Exception:
+                        step_no = 0
+                    if step_no <= 0:
+                        step_no = archive.next_step_num()
+                    result_metadata["code_step"] = step_no
+                    result_metadata["persisted"] = should_persist
+                    if should_persist:
+                        semantic_name = str(args.get("script_name") or "")
+                        description = str(args.get("description") or "")
+                        try:
+                            abs_path = archive.write_step(
+                                step=step_no,
+                                code=code,
+                                user_message=user_message,
+                                observations=content,
+                                error=error,
+                                semantic_name=semantic_name,
+                                metadata={
+                                    "description": description,
+                                    "persist_requested": persist_requested,
+                                    "workflow": workflow.to_dict() if workflow is not None else None,
+                                    "loop_kind": "workflow" if workflow is not None else "chat",
+                                    "tool_call_id": call_id,
+                                },
+                            )
+                            rel_path = archive.to_relative(abs_path)
+                            result_metadata.update({
+                                "script_path": rel_path,
+                                "script_abs_path": str(abs_path),
+                            })
+                            notify_asset_refresh(ctx, abs_path, reason="persist_script")
+                            run_archive.record_step(
+                                step=step_no,
+                                code=code,
+                                output=content,
+                                error=error,
+                                script_path=rel_path,
+                            )
+                        except Exception:
+                            logger.debug("execute_code script persistence failed (non-fatal)", exc_info=True)
+
+            _enqueue(
+                loop,
+                event_queue,
+                AgentEvent(
+                    type=AgentEventType.TOOL_RESULT,
+                    data={
+                        "name": name,
+                        "output": content,
+                        "error": error,
+                        "duration_ms": duration_ms,
+                        "call_id": call_id,
+                        "run_id": archive.run_id,
+                        "metadata": result_metadata,
+                    },
+                ),
+            )
+            try:
+                permission_meta = {}
+                # ToolRuntime permission metadata is encoded in future result
+                # payloads; keep this record schema stable for the inspector.
+                archive_metadata = {
+                    "session_id": session.id,
+                    **result_metadata,
+                    **permission_meta,
+                }
+                run_archive.record_tool_call(
+                    call_id=call_id,
+                    name=name,
+                    arguments=args,
+                    output=content,
+                    error=error,
+                    duration_ms=duration_ms,
+                    metadata=archive_metadata,
+                    status="error" if error else "completed",
+                )
+                artifact_meta = {
+                    "run_id": archive.run_id,
+                    "session_id": session.id,
+                    "tool_name": name,
+                    "call_id": call_id,
+                    **(metadata or {}),
+                    **result_metadata,
+                }
+                artifacts = artifacts_from_tool_result(name, content, artifact_meta)
+                if artifacts:
+                    index = ArtifactIndex(workspace)
+                    for artifact in artifacts:
+                        payload = artifact.to_dict()
+                        run_archive.record_artifact(payload)
+                        index.append(artifact)
+            except Exception:
+                logger.debug("tool call archive recording failed (non-fatal)", exc_info=True)
+
         # ── Route: WorkflowLoop or AgentLoop ──────────────────────
         if workflow is not None:
             # DAG-driven workflow execution.
@@ -412,6 +664,7 @@ class GISCodeAgent:
             # detailed events (code blocks, tool calls) and show only the plan.
             def _plan_callback(plan_data: dict) -> None:
                 plan_data["workflow"] = True
+                plan_data.setdefault("run_id", archive.run_id)
                 try:
                     run_async_from_sync(ctx.notify("rpc.ui.chat.plan_update", plan_data))
                 except Exception:
@@ -430,13 +683,17 @@ class GISCodeAgent:
                 max_retries_per_node=3,
                 step_callback=_step_callback,
                 progress_callback=_progress_callback,
+                execution_output_callback=_execution_output_callback,
                 risky_op_listener=risky_listener,
                 on_thought_delta=_on_thought_delta,
                 on_code_start=_on_code_start,
                 on_code_delta=_on_code_delta,
                 on_code_end=_on_code_end,
+                on_tool_start=_on_tool_start,
+                on_tool_result=_on_tool_result,
                 plan_callback=_plan_callback,
                 context=shared_context,
+                agent_profile=agent_profile,
             )
             logger.info(
                 "Workflow mode: executing '%s' with %d nodes",
@@ -454,9 +711,10 @@ class GISCodeAgent:
                     base_url=self.base_url,
                         ),
                 ctx=ctx,
-                max_steps=self.max_iterations,
+                max_steps=effective_max_steps,
                 step_callback=_step_callback,
                 progress_callback=_progress_callback,
+                execution_output_callback=_execution_output_callback,
                 risky_op_listener=risky_listener,
                 context=shared_context,
                 on_thought_delta=_on_thought_delta,
@@ -466,8 +724,11 @@ class GISCodeAgent:
                 on_reasoning_start=_on_reasoning_start,
                 on_reasoning_end=_on_reasoning_end,
                 on_reasoning_promote=_on_reasoning_promote,
+                on_tool_start=_on_tool_start,
+                on_tool_result=_on_tool_result,
                 skill_groups=active_skill_groups,
                 user_instructions=user_instructions,
+                agent_profile=agent_profile,
             )
 
         # Expose the executor and loop for cancellation.
@@ -485,26 +746,57 @@ class GISCodeAgent:
         }
 
         def _cleanup() -> None:
-            reset_current_context(token)
             try:
-                executor.cleanup()
+                reset_current_context(token)
+            except ValueError:
+                # Cancellation / websocket disconnect can close the async
+                # generator from a different context than the one that
+                # installed the token. Cleanup must still clear live runner
+                # refs so later runs do not inherit a stale plan/loop.
+                logger.debug("skill context reset skipped: token belongs to another context")
             except Exception:
-                logger.exception("executor cleanup failed")
-            self.current_executor = None
-            self._current_loop = None
-            self._current_runner = None
+                logger.debug("skill context reset failed", exc_info=True)
+            finally:
+                try:
+                    executor.cleanup()
+                except Exception:
+                    logger.exception("executor cleanup failed")
+                self.current_executor = None
+                self._current_loop = None
+                self._current_runner = None
             # Persist conversation context to disk so it survives restarts.
             if conversation_id and workspace:
                 try:
                     save_context(workspace, conversation_id, shared_context)
                 except Exception:
                     logger.exception("context persistence failed")
-            # Auto-extract key facts into project memory.
-            if workspace and final_state.get("final_answer"):
+            # Auto-extract key facts into project memory for normal chat only.
+            # Workflow runs are already preserved in the run archive, session
+            # index, and workflow script folder. Writing their summaries into
+            # generic Project Memory makes later short chat turns behave as if
+            # the user wanted to continue the workflow.
+            if workspace and workflow is None and final_state.get("final_answer"):
                 try:
                     _extract_memory(workspace, user_message, final_state["final_answer"])
                 except Exception:
                     logger.debug("memory extraction failed (non-fatal)", exc_info=True)
+            try:
+                status_map = {
+                    "success": SessionStatus.SUCCESS,
+                    "error": SessionStatus.ERROR,
+                    "cancelled": SessionStatus.CANCELLED,
+                }
+                session.finish(
+                    status=status_map.get(final_state["status"], SessionStatus.ERROR),
+                    summary=final_state.get("final_answer") or final_state.get("error") or "",
+                )
+                if ctx.meta is not None:
+                    ctx.meta["_agent_session"] = session
+                run_archive.record_session(session.to_dict())
+                if workspace:
+                    SessionStore(workspace).upsert(session)
+            except Exception:
+                logger.debug("session finalization failed (non-fatal)", exc_info=True)
             # Post-run snapshot.
             if ws_ready:
                 try:
@@ -525,11 +817,12 @@ class GISCodeAgent:
                 logger.exception("run_archive.close failed")
 
         runner = AgentRunner(
-            max_steps=int(self.max_iterations),
+            max_steps=effective_max_steps,
             run_id=archive.run_id,
             # AgentLoop streams its own tokens via _on_thought_delta;
             # WorkflowLoop doesn't, so it still needs the trailing emit.
             emit_final_answer=(workflow is not None),
+            on_final_answer=lambda answer: final_state.update({"final_answer": answer}),
         )
         self._current_runner = runner
 

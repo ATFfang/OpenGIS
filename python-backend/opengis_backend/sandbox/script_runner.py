@@ -223,7 +223,7 @@ class ScriptRunner:
                 "run_id": rid,
                 "output": _jsonable(code_output.output),
                 "logs": code_output.logs or "",
-                "is_final_answer": bool(code_output.is_final_answer),
+                "is_final_answer": bool(getattr(code_output, "is_final_answer", False)),
                 "duration_ms": duration_ms,
             }
             await self._safe_notify("rpc.code.script_done", result)

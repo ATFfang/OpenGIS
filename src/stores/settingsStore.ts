@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { BUILTIN_BASEMAPS } from '@/services/geo'
 
 // Supported protocol types — only openai and anthropic
 export type ProtocolType = 'openai' | 'anthropic'
@@ -104,9 +103,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     })),
 
   updateAppearance: (updates) =>
-    set((state) => ({
-      appearance: { ...state.appearance, ...updates },
-    })),
+    set((state) => {
+      const newAppearance = { ...state.appearance, ...updates }
+      // Auto-switch basemap when theme changes (but not vice versa)
+      if (updates.theme !== undefined && updates.theme !== state.appearance.theme) {
+        if (updates.theme === 'dark') {
+          newAppearance.basemapId = 'carto-dark-nolabels'
+        } else if (updates.theme === 'light') {
+          newAppearance.basemapId = 'carto-light-nolabels'
+        }
+        // 'system' → detect OS theme
+        if (updates.theme === 'system') {
+          const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+          newAppearance.basemapId = isDark ? 'carto-dark-nolabels' : 'carto-light-nolabels'
+        }
+      }
+      return { appearance: newAppearance }
+    }),
 
   updateAgent: (updates) =>
     set((state) => ({

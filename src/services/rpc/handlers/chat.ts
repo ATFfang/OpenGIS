@@ -30,10 +30,27 @@ export const chatHandlers: Record<string, RpcHandler> = {
     const parsed = parseParams(ShowImageSchema, params, 'rpc.ui.chat.show_image');
 
     const url = await pathToImageUrl(parsed.path);
+    const store = useChatStore.getState();
+    const conv = store.activeConversation();
+
+    // A plot can arrive while the agent is still inside execute_code. Close
+    // any transient spinner so the image is visible as a first-class result.
+    if (conv) {
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const msg = conv.messages[i];
+        if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
+          store._updateMessage(msg.ts, { partial: false });
+          break;
+        }
+        if (msg.say === 'image' || msg.say === 'text' || msg.say === 'code_result') {
+          break;
+        }
+      }
+    }
 
     // Inject as a `say='image'` message. ImageRow renders the image and
-    // a "Pin to map" button which calls rpc.ui.map.add_image_overlay.
-    useChatStore.getState()._addMessage({
+    // a persistent "Pin to map" button.
+    store._addMessage({
       ts: Date.now(),
       type: 'say',
       say: 'image',
@@ -42,6 +59,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
       // Stash the absolute path so the Pin button can pass it back to
       // the map handler without re-reading the blob URL.
       files: [parsed.path],
+      runId: parsed.run_id,
     });
 
     return { ok: true, path: parsed.path };
@@ -66,6 +84,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
       title: parsed.title,
       steps: parsed.steps,
       runId: parsed.run_id,
+      workflow: Boolean(parsed.workflow),
       updatedAt: Date.now(),
     };
 
@@ -97,9 +116,12 @@ export const chatHandlers: Record<string, RpcHandler> = {
       });
     }
 
-    // Track workflow plan state for compact UI mode
+    // Track workflow compact mode only while a workflow is actively running.
+    // Completed / failed / skipped-only plans should not suppress later normal
+    // agent messages in the same conversation.
     if (parsed.workflow) {
-      useChatStore.setState({ workflowPlanActive: true })
+      const active = parsed.steps.some((step) => step.status === 'in_progress')
+      useChatStore.setState({ workflowPlanActive: active })
     }
 
     return { ok: true, plan_id: parsed.plan_id, steps: parsed.steps.length };
@@ -136,7 +158,11 @@ export const chatHandlers: Record<string, RpcHandler> = {
       subagentId: parsed.subagent_id,
       status: parsed.status,
       parallel: parsed.parallel ?? parsed.tasks.length > 1,
-      tasks: parsed.tasks,
+      tasks: parsed.tasks.map((task) =>
+        parsed.status !== 'running' && task.status === 'running'
+          ? { ...task, status: parsed.status === 'done' ? 'done' : parsed.status }
+          : task
+      ),
       okCount: parsed.ok_count,
       total: parsed.total ?? parsed.tasks.length,
       runId: parsed.run_id,
@@ -166,9 +192,10 @@ export const chatHandlers: Record<string, RpcHandler> = {
    * result marker so the backend skill can unblock.
    */
   'rpc.ui.chat.interactive_snapshot': (params) => {
-    const requestId = params?.request_id as string;
-    const savePath = params?.save_path as string;
-    const prompt = params?.prompt as string;
+    const raw = (params ?? {}) as Record<string, unknown>;
+    const requestId = raw.request_id as string;
+    const savePath = raw.save_path as string;
+    const prompt = raw.prompt as string;
 
     if (!requestId || !savePath) {
       return { ok: false, error: 'Missing request_id or save_path' };
