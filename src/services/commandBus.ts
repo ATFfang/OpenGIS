@@ -20,6 +20,8 @@ import { mapEngine } from '@/features/map/engine/MapEngine'
 import {
   BUILTIN_BASEMAPS,
   getDefaultStyle,
+  makeHandledVectorData,
+  shouldHandleLayer,
   type MapLayerDefinition,
   type DataSourceMeta,
   type ParsedVectorData,
@@ -53,7 +55,8 @@ const handlers: Record<string, CommandHandler> = {
     const bbox = computeBBox(fc)
     const displayName = typeof name === 'string' && name ? name : layer_id
 
-    const data: ParsedVectorData = {
+    const inlineSize = estimateGeoJSONBytes(fc)
+    let data: ParsedVectorData = {
       kind: 'vector',
       geojson: fc,
       geometryType,
@@ -61,6 +64,12 @@ const handlers: Record<string, CommandHandler> = {
       bbox,
       crs: 'EPSG:4326',
       fields: [],
+    }
+    if (shouldHandleLayer(inlineSize)) {
+      data = makeHandledVectorData(data, {
+        handleId: `vector:${layer_id}`,
+        sizeBytes: inlineSize,
+      })
     }
 
     // Agent-created layers aren't file-backed, but the UI assumes every
@@ -70,7 +79,7 @@ const handlers: Record<string, CommandHandler> = {
       fileName: `${displayName}.geojson`,
       extension: '.geojson',
       sourceType: 'geojson',
-      fileSize: 0,
+      fileSize: inlineSize,
     }
 
     const style = getDefaultStyle(geometryType)
@@ -227,6 +236,14 @@ function computeBBox(fc: GeoJSONFeatureCollection): BBox {
     return { minX: -180, minY: -90, maxX: 180, maxY: 90 }
   }
   return { minX, minY, maxX, maxY }
+}
+
+function estimateGeoJSONBytes(fc: GeoJSONFeatureCollection): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(fc)).byteLength
+  } catch {
+    return 0
+  }
 }
 
 // ─── Installation ──────────────────────────────────────────────────

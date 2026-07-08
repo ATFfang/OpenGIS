@@ -13,11 +13,26 @@ import uuid
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+STALE_RUNNING_SECONDS = 12 * 60 * 60
+
+
+def _iso_created_at_is_stale(raw: Any, *, max_age_seconds: float) -> bool:
+    if not raw:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(raw))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > max_age_seconds
+    except Exception:
+        return False
 
 
 class SessionKind(str, Enum):
@@ -196,6 +211,7 @@ class SessionStore:
         path = self.path
         if path is None or not path.exists():
             return []
+        self.reconcile_stale_running()
         data = self._load_raw(path)
         sessions = list((data.get("sessions") or {}).values())
         sessions.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
@@ -261,6 +277,7 @@ class SessionStore:
         path = self.path
         if path is None or not path.exists():
             return []
+        self.reconcile_stale_running()
         data = self._load_raw(path)
         items = list((data.get("inbox") or {}).values())
         if status:
@@ -290,15 +307,166 @@ class SessionStore:
         return None
 
     def list_resumable_inbox(self, limit: int = 100) -> list[dict[str, Any]]:
+        self.reconcile_stale_running()
         terminal = {
             InboxStatus.SUCCESS.value,
             InboxStatus.CANCELLED.value,
+            InboxStatus.ERROR.value,
         }
         return [
             item
             for item in self.list_inbox(limit=limit)
             if item.get("status") not in terminal
         ]
+
+    def reconcile_stale_running(self, *, max_age_seconds: float = STALE_RUNNING_SECONDS) -> int:
+        """Recover persisted running records that cannot still be active.
+
+        Active in-process tasks live only in the current backend process. After
+        a restart or crash, durable ``running`` records with terminal parents,
+        terminal run archives, or very old timestamps are stale UI state and
+        should not keep the control panel spinning forever.
+        """
+        path = self.path
+        if path is None or not path.exists():
+            return 0
+        data = self._load_raw(path)
+        sessions = data.setdefault("sessions", {})
+        inbox = data.setdefault("inbox", {})
+        now = time.time()
+        changed = 0
+
+        if isinstance(sessions, dict):
+            for raw in sessions.values():
+                if not isinstance(raw, dict) or raw.get("status") != SessionStatus.RUNNING.value:
+                    continue
+                status, reason = self._recovered_session_status(raw, sessions, now, max_age_seconds)
+                if not status:
+                    continue
+                raw["status"] = status
+                raw["summary"] = str(raw.get("summary") or reason)
+                raw["updated_at"] = now
+                metadata = raw.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["recovered_from_running"] = True
+                metadata["recovery_reason"] = reason
+                raw["metadata"] = metadata
+                changed += 1
+
+        if isinstance(inbox, dict):
+            for raw in inbox.values():
+                if not isinstance(raw, dict) or raw.get("status") != InboxStatus.RUNNING.value:
+                    continue
+                status, reason = self._recovered_inbox_status(raw, now, max_age_seconds)
+                if not status:
+                    continue
+                raw["status"] = status
+                raw["error"] = str(raw.get("error") or reason)
+                raw["updated_at"] = now
+                metadata = raw.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["recovered_from_running"] = True
+                metadata["recovery_reason"] = reason
+                raw["metadata"] = metadata
+                changed += 1
+
+        if changed:
+            try:
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.debug("session stale-running reconciliation failed", exc_info=True)
+        return changed
+
+    def _recovered_session_status(
+        self,
+        raw: dict[str, Any],
+        sessions: dict[str, Any],
+        now: float,
+        max_age_seconds: float,
+    ) -> tuple[str | None, str]:
+        parent_id = raw.get("parent_id")
+        if isinstance(parent_id, str) and parent_id:
+            parent = sessions.get(parent_id)
+            if isinstance(parent, dict) and parent.get("status") in {
+                SessionStatus.SUCCESS.value,
+                SessionStatus.ERROR.value,
+                SessionStatus.CANCELLED.value,
+            }:
+                return (
+                    SessionStatus.ERROR.value,
+                    f"Recovered stale running session: parent session is {parent.get('status')}.",
+                )
+
+        run_status, run_reason = self._status_from_run_meta(raw.get("run_id"), now, max_age_seconds)
+        if run_status:
+            return run_status, run_reason
+
+        updated_at = raw.get("updated_at") or raw.get("created_at")
+        if isinstance(updated_at, (int, float)) and now - float(updated_at) > max_age_seconds:
+            return (
+                SessionStatus.ERROR.value,
+                "Recovered stale running session: no active backend runner after restart.",
+            )
+        return None, ""
+
+    def _recovered_inbox_status(
+        self,
+        raw: dict[str, Any],
+        now: float,
+        max_age_seconds: float,
+    ) -> tuple[str | None, str]:
+        run_status, run_reason = self._status_from_run_meta(raw.get("run_id"), now, max_age_seconds)
+        if run_status:
+            inbox_status = {
+                SessionStatus.SUCCESS.value: InboxStatus.SUCCESS.value,
+                SessionStatus.ERROR.value: InboxStatus.ERROR.value,
+                SessionStatus.CANCELLED.value: InboxStatus.CANCELLED.value,
+            }.get(run_status, InboxStatus.ERROR.value)
+            return inbox_status, run_reason
+
+        updated_at = raw.get("updated_at") or raw.get("created_at")
+        if isinstance(updated_at, (int, float)) and now - float(updated_at) > max_age_seconds:
+            return (
+                InboxStatus.ERROR.value,
+                "Recovered stale running inbox item: no active backend runner after restart.",
+            )
+        return None, ""
+
+    def _status_from_run_meta(
+        self,
+        run_id: Any,
+        now: float,
+        max_age_seconds: float,
+    ) -> tuple[str | None, str]:
+        if not isinstance(run_id, str) or not run_id:
+            return None, ""
+        meta_path = self._run_meta_path(run_id)
+        if meta_path is None or not meta_path.exists():
+            return None, ""
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None, ""
+        status = str(meta.get("status") or "")
+        if status in {"success", "completed"}:
+            return SessionStatus.SUCCESS.value, f"Recovered running session from terminal run status: {status}."
+        if status == "cancelled":
+            return SessionStatus.CANCELLED.value, "Recovered running session from cancelled run status."
+        if status == "error":
+            return SessionStatus.ERROR.value, "Recovered running session from errored run status."
+        if status == "running" and meta.get("finished_at"):
+            return SessionStatus.ERROR.value, "Recovered running session: run archive has finished_at but remained running."
+        created_at = meta.get("created_at")
+        if status == "running" and _iso_created_at_is_stale(created_at, max_age_seconds=max_age_seconds):
+            return SessionStatus.ERROR.value, "Recovered stale running session: run archive is stale."
+        return None, ""
+
+    def _run_meta_path(self, run_id: str) -> Path | None:
+        if not self.workspace_path:
+            return None
+        return Path(self.workspace_path).expanduser().resolve() / ".opengis" / "runs" / run_id / "meta.json"
 
     @staticmethod
     def _load_raw(path: Path) -> dict[str, Any]:

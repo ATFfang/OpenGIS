@@ -35,6 +35,7 @@ interface Window {
     readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
     readFileAsBuffer: (path: string) => Promise<{ success: boolean; buffer?: ArrayBuffer; error?: string }>
     writeFile: (path: string, content: string) => Promise<{ success: boolean; error?: string }>
+    writeFileBinary: (path: string, buffer: ArrayBuffer) => Promise<{ success: boolean; error?: string }>
     getFileInfo: (path: string) => Promise<{ success: boolean; info?: any; error?: string }>
     readDirectory: (path: string) => Promise<{ success: boolean; entries?: any[]; error?: string }>
     openFolderDialog: () => Promise<string | null>

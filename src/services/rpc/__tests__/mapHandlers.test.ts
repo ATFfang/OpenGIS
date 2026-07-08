@@ -16,6 +16,7 @@ import { HandlerRegistry } from '../registry';
 import { registerAllHandlers } from '../handlers/register';
 import type { JsonRpcRequest } from '@/types/protocol';
 import { useMapStore } from '@/stores/mapStore';
+import { useAssetStore } from '@/stores/assetStore';
 import { mapEngine } from '@/features/map/engine/MapEngine';
 import { BUILTIN_BASEMAPS } from '@/services/geo';
 
@@ -30,6 +31,8 @@ function makeDispatcher(): Dispatcher {
 }
 
 function resetStore(): void {
+  ;(globalThis as any).window ??= {}
+  useAssetStore.setState({ workspacePath: null });
   useMapStore.setState({
     layers: [],
     activeLayerId: null,
@@ -157,6 +160,341 @@ describe('rpc.ui.map.add_layer_from_geojson', () => {
     );
     expect(resp).toMatchObject({ error: { code: -32602 } });
     expect(useMapStore.getState().layers).toHaveLength(0);
+  });
+});
+
+describe('rpc.ui.map.dynamic_layer_update', () => {
+  beforeEach(resetStore);
+
+  it('upserts a worker-driven layer and keeps dynamic metadata runtime-only', async () => {
+    const d = makeDispatcher();
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        worker_id: 'worker_1',
+        worker_name: 'ticker',
+        sequence: 1,
+        style: {
+          type: 'circle',
+          paint: { 'circle-color': '#22c55e', 'circle-radius': 7 },
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        feature_count: 3,
+        geometry_type: 'Point',
+        sequence: 1,
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('live_points');
+    expect(layer?.meta.dynamic).toMatchObject({
+      workerId: 'worker_1',
+      workerName: 'ticker',
+      sequence: 1,
+    });
+    expect(layer?.style.color).toBe('#22c55e');
+    expect(layer?.style.radius).toBe(7);
+  });
+
+  it('skips stale sequence frames', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        sequence: 2,
+      }),
+    );
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [],
+        },
+        sequence: 1,
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        skipped: true,
+        reason: 'stale_sequence',
+      },
+    });
+    expect(useMapStore.getState().getLayerById('live_points')?.data.kind).toBe('vector');
+    const data = useMapStore.getState().getLayerById('live_points')?.data as any;
+    expect(data.featureCount).toBe(3);
+  });
+
+  it('accepts lower sequence after the worker process generation changes', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        worker_id: 'worker_1',
+        worker_started_at: 100,
+        sequence: 203,
+      }),
+    );
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              id: 'fresh',
+              geometry: { type: 'Point', coordinates: [121.5, 31.2] },
+              properties: { status: 'restarted' },
+            },
+          ],
+        },
+        worker_id: 'worker_1',
+        worker_started_at: 200,
+        sequence: 1,
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        feature_count: 1,
+        sequence: 1,
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('live_points')!;
+    expect(layer.meta.dynamic?.workerStartedAt).toBe(200);
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector');
+    expect(layer.data.geojson.features[0].id).toBe('fresh');
+  });
+
+  it('skips updates from another workspace', async () => {
+    useAssetStore.setState({ workspacePath: '/workspace/current' });
+    const d = makeDispatcher();
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        workspace_path: '/workspace/other',
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        skipped: true,
+        reason: 'workspace_mismatch',
+      },
+    });
+    expect(useMapStore.getState().layers).toHaveLength(0);
+  });
+
+  it('applies diff updates against stable feature ids', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'full',
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              id: 'a',
+              geometry: { type: 'Point', coordinates: [116.4, 39.9] },
+              properties: { value: 1, keep: true },
+            },
+            {
+              type: 'Feature',
+              id: 'b',
+              geometry: { type: 'Point', coordinates: [116.5, 40.0] },
+              properties: { value: 2 },
+            },
+          ],
+        },
+        sequence: 1,
+      }),
+    );
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'diff',
+        layer_id: 'live_points',
+        diff: {
+          remove: ['b'],
+          add: [
+            {
+              type: 'Feature',
+              id: 'c',
+              geometry: { type: 'Point', coordinates: [116.6, 40.1] },
+              properties: { value: 3 },
+            },
+          ],
+          update: [
+            {
+              id: 'a',
+              newGeometry: { type: 'Point', coordinates: [117, 41] },
+              removeProperties: ['keep'],
+              addOrUpdateProperties: [{ key: 'value', value: 10 }],
+            },
+          ],
+        },
+        sequence: 2,
+        schema_changed: false,
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        feature_count: 2,
+        mode: 'diff',
+        updateable: true,
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('live_points')!;
+    expect(layer.meta.dynamic?.mode).toBe('diff');
+    expect(layer.meta.dynamic?.updateable).toBe(true);
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector');
+    expect(layer.data.runtimeDiff).toMatchObject({
+      remove: ['b'],
+    });
+    expect(layer.data.geojson.features.map((f) => f.id).sort()).toEqual(['a', 'c']);
+    const updated = layer.data.geojson.features.find((f) => f.id === 'a')!;
+    expect(updated.geometry.coordinates).toEqual([117, 41]);
+    expect(updated.properties).toEqual({ value: 10 });
+  });
+
+  it('accepts full GeoJSON Features in diff.update using properties.id', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'full',
+        layer_id: 'live_vehicles',
+        name: 'Live Vehicles',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.47, 31.23] },
+              properties: { id: 'ind_0099', speed: 12, status: 'old' },
+            },
+          ],
+        },
+        sequence: 1,
+      }),
+    );
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'diff',
+        layer_id: 'live_vehicles',
+        diff: {
+          update: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.5, 31.25] },
+              properties: { id: 'ind_0099', speed: 18, status: 'moving' },
+            },
+          ],
+        },
+        sequence: 2,
+        schema_changed: false,
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_vehicles',
+        feature_count: 1,
+        mode: 'diff',
+        updateable: true,
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('live_vehicles')!;
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector');
+    expect(layer.data.geojson.features).toHaveLength(1);
+    expect(layer.data.geojson.features[0].id).toBe('ind_0099');
+    expect(layer.data.geojson.features[0].geometry.coordinates).toEqual([121.5, 31.25]);
+    expect(layer.data.geojson.features[0].properties).toEqual({
+      id: 'ind_0099',
+      speed: 18,
+      status: 'moving',
+    });
+    expect(layer.data.runtimeDiff?.update?.[0]).toMatchObject({
+      id: 'ind_0099',
+      newGeometry: { type: 'Point', coordinates: [121.5, 31.25] },
+      removeAllProperties: true,
+    });
+  });
+
+  it('upserts missing full GeoJSON Features from diff.update as adds', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'full',
+        layer_id: 'live_vehicles',
+        name: 'Live Vehicles',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.47, 31.23] },
+              properties: { id: 'ind_0001', speed: 8 },
+            },
+          ],
+        },
+        sequence: 1,
+      }),
+    );
+
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        mode: 'diff',
+        layer_id: 'live_vehicles',
+        diff: {
+          update: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.51, 31.26] },
+              properties: { id: 'ind_0002', speed: 21 },
+            },
+          ],
+        },
+        sequence: 2,
+        schema_changed: false,
+      }),
+    );
+
+    const layer = useMapStore.getState().getLayerById('live_vehicles')!;
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector');
+    expect(layer.data.geojson.features.map((feature) => feature.id).sort()).toEqual(['ind_0001', 'ind_0002']);
+    expect(layer.data.runtimeDiff?.add?.[0]).toMatchObject({
+      id: 'ind_0002',
+      geometry: { type: 'Point', coordinates: [121.51, 31.26] },
+    });
   });
 });
 
@@ -637,6 +975,52 @@ describe('rpc.ui.map.add_layer', () => {
     const layers = useMapStore.getState().layers;
     expect(layers).toHaveLength(1);
     expect(layers[0].name).toBe('landmarks');
+
+    // @ts-expect-error clean up
+    delete globalThis.window;
+  });
+
+  it('stores a sample for >20MB file-backed vectors while query_features resolves full data', async () => {
+    const features = Array.from({ length: 6000 }, (_, index) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [index % 180, index % 80] },
+      properties: { index },
+    }));
+    const fileContent = JSON.stringify({ type: 'FeatureCollection', features });
+    const readFile = vi.fn();
+    const readFileAsBuffer = vi.fn().mockResolvedValue({
+      success: true,
+      buffer: new TextEncoder().encode(fileContent).buffer,
+    });
+    const getFileInfo = vi.fn().mockResolvedValue({
+      success: true,
+      info: { size: 21 * 1024 * 1024 },
+    });
+    (globalThis as unknown as {
+      window: { electronAPI: { readFile: typeof readFile; readFileAsBuffer: typeof readFileAsBuffer; getFileInfo: typeof getFileInfo } }
+    }).window = {
+      electronAPI: { readFile, readFileAsBuffer, getFileInfo },
+    };
+
+    const d = makeDispatcher();
+    const addResp = await d.handleRequest(
+      req('rpc.ui.map.add_layer', { path: 'E:/data/big.geojson' }),
+    );
+    const layerId = (addResp as { result: { layer_id: string } }).result.layer_id;
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(readFileAsBuffer).toHaveBeenCalledWith('E:/data/big.geojson');
+    const layer = useMapStore.getState().getLayerById(layerId)!;
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector layer');
+    expect(layer.data.sampled).toBe(true);
+    expect(layer.data.geojson.features).toHaveLength(5000);
+    expect(layer.data.featureCount).toBe(6000);
+
+    const queryResp = await d.handleRequest(
+      req('rpc.ui.map.query_features', { layer_id: layerId, limit: 6000 }),
+    );
+    expect((queryResp as { result: { total_matched: number } }).result.total_matched).toBe(6000);
 
     // @ts-expect-error clean up
     delete globalThis.window;

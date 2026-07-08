@@ -1,3 +1,3 @@
-"""Datasource skill — load GeoJSON from user-configured datasource catalog."""
+"""Datasource tool — load GeoJSON from user-configured datasource catalog."""
 
-from opengis_backend.datasource.skills import datasource_call  # noqa: F401
+from opengis_backend.datasource.tools import datasource_call  # noqa: F401

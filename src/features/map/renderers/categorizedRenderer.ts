@@ -14,6 +14,7 @@ import type {
   GeoJSONFeatureCollection,
   MapLayerDefinition,
 } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   type LayerRenderer,
   renderLayerId,
@@ -292,7 +293,7 @@ function autoCategorize(
   maxCategories: number,
 ): Record<string, string> {
   if (def.data.kind !== 'vector') return {}
-  const fc = def.data.geojson as GeoJSONFeatureCollection
+  const fc = resolveVectorGeoJSON(def.data) as GeoJSONFeatureCollection
   const counts = new Map<string, number>()
 
   for (const f of fc.features) {

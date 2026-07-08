@@ -1,3 +1,3 @@
-"""OSM integration — Overpass API client and unified skill."""
+"""OSM integration — Overpass API client and unified tool."""
 
-import opengis_backend.osm.skills  # noqa: F401 — triggers @skill registration
+import opengis_backend.osm.tools  # noqa: F401 — triggers @tool registration

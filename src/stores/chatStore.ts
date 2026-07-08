@@ -9,6 +9,7 @@ import {
   deleteConversationFile,
   flushAllPendingWrites,
 } from '@/services/chatPersistence'
+import { withProjectedMessageParts } from '@/services/chatMessageParts'
 
 // ─── 附件类型定义 ──────────────────────────────────────────────
 export interface ChatAttachment {
@@ -17,11 +18,11 @@ export interface ChatAttachment {
   /** 磁盘绝对路径 */
   path: string
   /** 文件类型提示 */
-  type: 'file' | 'workflow' | 'skill'
+  type: 'file' | 'workflow' | 'tool_group'
   /** 文件大小（字节，用于显示） */
   size?: number
-  /** 技能组列表（仅 type='skill' 时使用） */
-  skill_groups?: string[]
+  /** 工具组列表（仅 type='tool_group' 时使用） */
+  tool_groups?: string[]
 }
 
 // ─── 对话类型定义 ──────────────────────────────────────────────
@@ -68,17 +69,28 @@ interface ChatStore {
 }
 
 const STREAM_TEXT_FLUSH_MS = 48
+const MAX_LIVE_TOOL_OUTPUT_CHARS = 64 * 1024
 let pendingTextAppends = new Map<number, string>()
+let pendingTextCaps = new Map<number, number>()
 let pendingTextFlushTimer: number | null = null
+
+function appendBoundedText(current: string, append: string, maxChars?: number): string {
+  const next = current + append
+  if (!maxChars || next.length <= maxChars) return next
+  const omitted = next.length - maxChars
+  return `[live output truncated: ${omitted.toLocaleString()} chars omitted]\n` + next.slice(-maxChars)
+}
 
 function queueTextAppend(
   set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
   get: () => ChatStore,
   ts: number,
   piece: string,
+  maxChars?: number,
 ): void {
   if (!piece) return
   pendingTextAppends.set(ts, (pendingTextAppends.get(ts) || '') + piece)
+  if (maxChars) pendingTextCaps.set(ts, maxChars)
   if (pendingTextFlushTimer != null) return
   pendingTextFlushTimer = window.setTimeout(() => {
     flushPendingTextAppends(set, get)
@@ -96,6 +108,8 @@ function flushPendingTextAppends(
   if (pendingTextAppends.size === 0) return
   const appends = pendingTextAppends
   pendingTextAppends = new Map()
+  const caps = pendingTextCaps
+  pendingTextCaps = new Map()
   set((state) => ({
     conversations: state.conversations.map((c) => {
       if (c.id !== state.activeConversationId) return c
@@ -104,7 +118,10 @@ function flushPendingTextAppends(
         const append = appends.get(m.ts)
         if (!append) return m
         changed = true
-        return { ...m, text: (m.text || '') + append }
+        return withProjectedMessageParts({
+          ...m,
+          text: appendBoundedText(m.text || '', append, caps.get(m.ts)),
+        })
       })
       return changed ? { ...c, messages, updatedAt: Date.now() } : c
     }),
@@ -470,7 +487,7 @@ function installNotificationBridge(
         for (let i = conv.messages.length - 1; i >= 0; i--) {
           const m = conv.messages[i]
           if (m.say === 'tool' && m.toolCallId === callId) {
-            queueTextAppend(set, get, m.ts, piece)
+            queueTextAppend(set, get, m.ts, piece, MAX_LIVE_TOOL_OUTPUT_CHARS)
             break
           }
         }
@@ -756,13 +773,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // Mark pending screenshot cards as expired — the backend session
         // that created them is gone, so they can never be captured.
         for (const conv of loaded) {
-          for (const msg of conv.messages) {
+          conv.messages = conv.messages.map((msg) => {
             if (msg.say === 'screenshot' && msg.screenshotData) {
-              msg.say = 'text'
-              msg.text = '📸 [截图已过期]'
-              msg.screenshotData = undefined
+              return withProjectedMessageParts({
+                ...msg,
+                say: 'text',
+                text: '📸 [截图已过期]',
+                screenshotData: undefined,
+              })
             }
-          }
+            return withProjectedMessageParts(msg)
+          })
         }
         set({
           conversations: loaded,
@@ -847,12 +868,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
           conversation_id: conversationId,
           workspace_path: workspacePath || undefined,
           generate_title: isFirstUserMessage,
-          attachments: attachments?.map((a) => ({
-            name: a.name,
-            path: a.path,
-            type: a.type,
-            ...(a.skill_groups ? { skill_groups: a.skill_groups } : {}),
-          })) || undefined,
+          attachments: attachments?.map((a) => {
+            const groups = a.tool_groups
+            return {
+              name: a.name,
+              path: a.path,
+              type: a.type,
+              ...(groups ? { tool_groups: groups } : {}),
+            }
+          }) || undefined,
           user_instructions: userInstructions,
         })
       } catch (error: any) {
@@ -917,7 +941,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (c.id === state.activeConversationId) {
             return {
               ...c,
-              messages: [...c.messages, message],
+              messages: [...c.messages, withProjectedMessageParts(message)],
               updatedAt: Date.now(),
             }
           }
@@ -934,7 +958,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return {
               ...c,
               messages: c.messages.map((m) =>
-                m.ts === ts ? { ...m, ...updates } : m
+                m.ts === ts ? withProjectedMessageParts({ ...m, ...updates }) : m
               ),
             }
           }

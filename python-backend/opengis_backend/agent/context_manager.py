@@ -42,11 +42,10 @@ _CJK_PATTERN = re.compile(
 )
 
 # Tool names whose outputs MUST NEVER be pruned (reference: opencode).
-# Skills are user-invoked first-class capabilities; their outputs often
-# carry artifacts (file paths, layer ids, snapshot ids) that the agent
-# refers back to many turns later. Replacing them with a placeholder
-# would break that causal chain.
-_PRUNE_PROTECTED_TOOLS: tuple[str, ...] = ("skill",)
+# `load_skill` injects user-provided instructions and resource paths that the
+# agent may need many turns later. Replacing them with a placeholder would
+# break that causal chain.
+_PRUNE_PROTECTED_TOOLS: tuple[str, ...] = ("load_skill",)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -344,22 +343,32 @@ class ContextManager:
                 meta.setdefault("kind", kind)
             count -= 1
 
-    def add_tool_result(self, tool_call_id: str, tool_name: str, content: str) -> None:
+    def add_tool_result(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        content: str,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> None:
         """Append a tool execution result.
 
         This is the ``role: "tool"`` message that the OpenAI protocol requires
         after the assistant emits tool_calls. The ``tool_call_id`` must match
         the id from the corresponding tool_call.
         """
+        message_meta = {
+            "kind": "tool_result",
+            "tool_name": tool_name,
+        }
+        if meta:
+            message_meta.update(meta)
+
         self.messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
             "name": tool_name,
             "content": content,
-            "_meta": {
-                "kind": "tool_result",
-                "tool_name": tool_name,
-            },
+            "_meta": message_meta,
         })
 
     def add_code_output(
@@ -373,15 +382,13 @@ class ContextManager:
     ) -> None:
         """Append a code execution result as a system/observation message.
 
-        This is the "Observation" in the ReAct/CodeAct loop — the result
-        of executing the LLM's code block.
+        This is the observation for Python execution through execute_code.
 
         Args:
-            tool_name: Optional name of the primary skill/tool invoked
-                (e.g. ``"skill"`` for skill calls). When set to one of
-                :py:data:`_PRUNE_PROTECTED_TOOLS`, this message will be
-                exempt from output pruning. Pass ``None`` for plain
-                Python code without a recognized skill call.
+            tool_name: Optional name of the primary tool invoked. When set
+                to one of :py:data:`_PRUNE_PROTECTED_TOOLS`, this message
+                will be exempt from output pruning. Pass ``None`` for plain
+                Python code without a recognized tool call.
 
         Note: We stash a small ``_meta`` dict on the message so that
         :py:meth:`_prune_outputs` can later replace the bulky body with a
@@ -671,7 +678,7 @@ class ContextManager:
         Why: when the LLM later wonders "what did step 5 do?", a totally
         opaque placeholder forces it to re-derive context. Keeping the
         skeleton (~50–80 chars) costs almost nothing yet preserves the
-        causal chain that CodeAct depends on.
+        causal chain that later tool calls depend on.
         """
         meta = msg.get("_meta") or {}
         step = meta.get("step")
@@ -693,8 +700,25 @@ class ContextManager:
         head = f"[Step {step} pruned]" if step is not None else "[Old tool result pruned]"
         status = "error" if had_error else "ok"
         if code_summary:
-            return f"{head} ({status}) — code: `{code_summary}` — body removed to save tokens"
-        return f"{head} ({status}) — body removed to save tokens"
+            base = f"{head} ({status}) — code: `{code_summary}`"
+        else:
+            base = f"{head} ({status})"
+
+        refs: list[str] = []
+        for key in (
+            "artifact_layer_id",
+            "artifact_layer_name",
+            "artifact_path",
+            "script_path",
+            "script_abs_path",
+            "retained_output_path",
+        ):
+            value = meta.get(key) if isinstance(meta, dict) else None
+            if isinstance(value, str) and value:
+                refs.append(f"{key}={value}")
+        if refs:
+            base += " — refs: " + "; ".join(refs[:6])
+        return base + " — body removed to save tokens"
 
     def prune_tool_results(self) -> int:
         """Public, idempotent entry point for tool-result pruning.
@@ -744,7 +768,7 @@ class ContextManager:
             if not self._is_tool_result(msg):
                 continue
 
-            # Gap #5: skip protected tools (e.g. "skill")
+            # Gap #5: skip protected tools (e.g. load_skill)
             meta = msg.get("_meta") or {}
             tool_name = meta.get("tool_name") if isinstance(meta, dict) else None
             if tool_name in _PRUNE_PROTECTED_TOOLS:

@@ -15,6 +15,7 @@ import { categorizedRenderer } from './categorizedRenderer'
 import { clusterRenderer } from './clusterRenderer'
 import { extrusionRenderer } from './extrusionRenderer'
 import { rasterRenderer } from './rasterRenderer'
+import { symbolRenderer } from './symbolRenderer'
 import type { LayerRenderer } from './types'
 
 export const ALL_RENDERERS: LayerRenderer[] = [
@@ -27,6 +28,7 @@ export const ALL_RENDERERS: LayerRenderer[] = [
   clusterRenderer,
   extrusionRenderer,
   rasterRenderer,
+  symbolRenderer,
 ]
 
 const REGISTRY: Record<string, LayerRenderer> = Object.fromEntries(

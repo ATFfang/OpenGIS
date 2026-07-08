@@ -30,11 +30,15 @@ from opengis_backend.constants import (  # noqa: E402 module-level import
 )
 from opengis_backend.runs import RunArchive
 from opengis_backend.sandbox.script_runner import ScriptRunner
-from opengis_backend.skills.context import SkillContext
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.tools.context import ToolContext
+from opengis_backend.skills.discovery import UserSkillDiscovery, add_source_path
+from opengis_backend.tools.registry import ToolRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
 
 logger = logging.getLogger(__name__)
+
+DYNAMIC_LAYER_UPDATE_METHOD = "rpc.ui.map.dynamic_layer_update"
+DYNAMIC_LAYER_BACKEND_FLUSH_SECONDS = 0.05
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -171,11 +175,11 @@ class RpcHandler:
     """
 
     def __init__(
-        self, websocket: WebSocket, skill_registry: SkillRegistry
+        self, websocket: WebSocket, tool_registry: ToolRegistry
     ):
         self.ws = websocket
         self._ws_write_lock = asyncio.Lock()  # Protect concurrent send_text
-        self.skills = skill_registry
+        self.tool_registry = tool_registry
         # Reusable agent instance — built lazily once we know the LLM config.
         self._agent: GISAgent | None = None
         self._current_agent_task: asyncio.Task | None = None
@@ -198,19 +202,28 @@ class RpcHandler:
         self._current_script_task: asyncio.Task | None = None
         # Capture the event loop the websocket lives on; sandbox-thread
         # callbacks need it to schedule notifications.
-        self._loop: asyncio.AbstractEventLoop | None = None
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         self._pending_client_requests: dict[str, asyncio.Future] = {}
         self._permission_requests = PermissionRequestStore()
         self._agent_queue = AgentQueue()
         self._queue_processors: dict[str, asyncio.Task] = {}
         self._closed = False
+        self._worker_event_unsubscribe = None
+        self._worker_dynamic_events: dict[str, list[dict[str, Any]]] = {}
+        self._worker_dynamic_flush_handle: asyncio.TimerHandle | None = None
         self._method_handlers = {
             # Canonical v3.0 three-channel method names (Stage 3.6 — sole wire).
             # rpc.* channel: synchronous command / query
             "rpc.fs.load_file": self._handle_load_file,
             "rpc.fs.get_file_info": self._handle_get_file_info,
-            "rpc.skill.list": self._handle_skill_list,
-            "rpc.skill.execute": self._handle_skill_execute,
+            "rpc.tool.list": self._handle_tool_list,
+            "rpc.tool.execute": self._handle_tool_execute,
+            "rpc.user_skill.list": self._handle_user_skill_list,
+            "rpc.user_skill.load": self._handle_user_skill_load,
+            "rpc.user_skill.add_source": self._handle_user_skill_add_source,
             "rpc.code.run_script": self._handle_run_script,
             "rpc.code.cancel_script": self._handle_cancel_script,
             "rpc.agent.interrupt": self._handle_agent_cancel,
@@ -241,6 +254,11 @@ class RpcHandler:
             "rpc.agent.permissions.rules.list": self._handle_agent_permission_rules_list,
             "rpc.agent.permissions.rules.add": self._handle_agent_permission_rules_add,
             "rpc.agent.permissions.rules.remove": self._handle_agent_permission_rules_remove,
+            "rpc.worker.list": self._handle_worker_list,
+            "rpc.worker.get": self._handle_worker_get,
+            "rpc.worker.restart": self._handle_worker_restart,
+            "rpc.worker.pause": self._handle_worker_pause,
+            "rpc.worker.delete": self._handle_worker_delete,
             # chat.* channel: long-running conversation turn (streams via notifications)
             "chat.user_message": self._handle_agent_chat,
             # debug channel: runtime log level control
@@ -249,14 +267,87 @@ class RpcHandler:
             # workspace channel: template management
             "rpc.workspace.install_templates": self._handle_install_templates,
         }
+        from opengis_backend.worker import get_worker_manager
+
+        self._worker_event_unsubscribe = get_worker_manager().subscribe_events(
+            self._notify_worker_event
+        )
 
     def mark_closed(self) -> None:
         """Mark this websocket handler as closed and unblock pending UI requests."""
         self._closed = True
+        if self._worker_dynamic_flush_handle is not None:
+            self._worker_dynamic_flush_handle.cancel()
+            self._worker_dynamic_flush_handle = None
+        self._worker_dynamic_events.clear()
+        if self._worker_event_unsubscribe is not None:
+            try:
+                self._worker_event_unsubscribe()
+            except Exception:
+                logger.debug("worker event unsubscribe failed", exc_info=True)
+            self._worker_event_unsubscribe = None
         for fut in list(self._pending_client_requests.values()):
             if not fut.done():
                 fut.cancel()
         self._pending_client_requests.clear()
+
+    def _notify_worker_event(self, method: str, params: dict) -> None:
+        if self._closed:
+            return
+        if self._loop and self._loop.is_running():
+            if method == DYNAMIC_LAYER_UPDATE_METHOD:
+                self._loop.call_soon_threadsafe(
+                    self._enqueue_worker_dynamic_event,
+                    dict(params or {}),
+                )
+                return
+            fut = asyncio.run_coroutine_threadsafe(
+                self._safe_notify(method, params),
+                self._loop,
+            )
+            fut.add_done_callback(self._log_worker_event_notify_result)
+
+    def _enqueue_worker_dynamic_event(self, params: dict[str, Any]) -> None:
+        if self._closed:
+            return
+        layer_id = params.get("layer_id")
+        key = layer_id if isinstance(layer_id, str) and layer_id else f"__unknown__:{len(self._worker_dynamic_events)}"
+        existing = self._worker_dynamic_events.get(key) or []
+        mode = params.get("mode")
+        has_full_payload = mode == "full" or ("geojson" in params and "diff" not in params)
+        self._worker_dynamic_events[key] = [params] if has_full_payload else [*existing, params]
+        if self._worker_dynamic_flush_handle is not None:
+            return
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        self._worker_dynamic_flush_handle = loop.call_later(
+            DYNAMIC_LAYER_BACKEND_FLUSH_SECONDS,
+            lambda: asyncio.create_task(self._flush_worker_dynamic_events()),
+        )
+
+    async def _flush_worker_dynamic_events(self) -> None:
+        self._worker_dynamic_flush_handle = None
+        if self._closed or not self._worker_dynamic_events:
+            return
+        pending = [
+            params
+            for frames in self._worker_dynamic_events.values()
+            for params in frames
+        ]
+        self._worker_dynamic_events.clear()
+        for params in pending:
+            await self._send_notification(DYNAMIC_LAYER_UPDATE_METHOD, params)
+
+    @staticmethod
+    def _log_worker_event_notify_result(done: Any) -> None:
+        try:
+            exc = done.exception()
+        except Exception:
+            logger.debug("worker event notify was cancelled", exc_info=True)
+            return
+        if exc:
+            logger.debug("worker event notify failed", exc_info=(type(exc), exc, exc.__traceback__))
 
     async def shutdown(self) -> None:
         """Best-effort cleanup for websocket disconnect/app shutdown."""
@@ -348,40 +439,149 @@ class RpcHandler:
             "message": f"File info not yet implemented for: {path}",
         }
 
-    async def _handle_skill_list(self, params: dict) -> Any:
-        return {"skills": [s.to_dict() for s in self.skills.list_all()]}
+    async def _handle_tool_list(self, params: dict) -> Any:
+        tools = [s.to_dict() for s in self.tool_registry.list_all()]
+        return {"tools": tools}
 
-    async def _handle_skill_execute(self, params: dict) -> Any:
+    async def _handle_tool_execute(self, params: dict) -> Any:
         name = params.get("name")
         args = params.get("args", {})
         if not name:
             raise ValueError("Missing required parameter: name")
 
-        skill_timeout = 50.0
-        # Skills triggered directly (not via agent) still get a SkillContext
-        # so context-aware display skills work end-to-end.
-        ctx = SkillContext(notify_fn=self._safe_notify, request_fn=self._safe_request)
+        tool_timeout = 50.0
+        # Tools triggered directly (not via agent) still get a ToolContext
+        # so context-aware display tools work end-to-end.
+        workspace_path = params.get("workspace_path") or params.get("workspace")
+        ctx = ToolContext(
+            notify_fn=self._safe_notify,
+            request_fn=self._safe_request,
+            meta={"workspace_path": workspace_path} if workspace_path else {},
+        )
         try:
             result = await asyncio.wait_for(
-                self.skills.execute(name, args, context=ctx),
-                timeout=skill_timeout,
+                self.tool_registry.execute(name, args, context=ctx),
+                timeout=tool_timeout,
             )
             return result
         except TimeoutError:
             return {
                 "success": False,
                 "error": (
-                    f"Skill '{name}' timed out after {skill_timeout}s. "
-                    "The operation may be too complex for the skill."
+                    f"Tool '{name}' timed out after {tool_timeout}s. "
+                    "The operation may be too complex for the tool."
                 ),
             }
+
+    async def _handle_worker_list(self, params: dict) -> Any:
+        include_logs = bool(params.get("include_logs", True))
+        workspace_path = params.get("workspace_path") or None
+        from opengis_backend.worker import get_worker_manager
+
+        return {
+            "workers": get_worker_manager().list_workers(
+                include_logs=include_logs,
+                workspace_path=str(workspace_path) if workspace_path else None,
+            )
+        }
+
+    async def _handle_worker_get(self, params: dict) -> Any:
+        worker_id = params.get("worker_id")
+        if not worker_id:
+            raise ValueError("Missing required parameter: worker_id")
+        include_logs = bool(params.get("include_logs", True))
+        workspace_path = params.get("workspace_path") or None
+        from opengis_backend.worker import get_worker_manager
+
+        return {
+            "worker": get_worker_manager().get_worker(
+                str(worker_id),
+                include_logs=include_logs,
+                workspace_path=str(workspace_path) if workspace_path else None,
+            )
+        }
+
+    async def _handle_worker_pause(self, params: dict) -> Any:
+        worker_id = params.get("worker_id")
+        if not worker_id:
+            raise ValueError("Missing required parameter: worker_id")
+        reason = str(params.get("reason") or "ui_pause")
+        workspace_path = params.get("workspace_path") or None
+        from opengis_backend.worker import get_worker_manager
+
+        return {
+            "worker": get_worker_manager().pause_worker(
+                str(worker_id),
+                reason=reason,
+                workspace_path=str(workspace_path) if workspace_path else None,
+            )
+        }
+
+    async def _handle_worker_restart(self, params: dict) -> Any:
+        worker_id = params.get("worker_id")
+        if not worker_id:
+            raise ValueError("Missing required parameter: worker_id")
+        code = params.get("code")
+        if code is not None:
+            code = str(code)
+        reason = str(params.get("reason") or "ui_restart")
+        initial_health_timeout = float(params.get("initial_health_timeout") or 1.5)
+        workspace_path = params.get("workspace_path") or None
+        from opengis_backend.worker import get_worker_manager
+
+        return {
+            "worker": get_worker_manager().restart_worker(
+                str(worker_id),
+                code=code,
+                reason=reason,
+                initial_health_timeout=initial_health_timeout,
+                workspace_path=str(workspace_path) if workspace_path else None,
+            )
+        }
+
+    async def _handle_worker_delete(self, params: dict) -> Any:
+        worker_id = params.get("worker_id")
+        if not worker_id:
+            raise ValueError("Missing required parameter: worker_id")
+        workspace_path = params.get("workspace_path") or None
+        from opengis_backend.worker import get_worker_manager
+
+        return {
+            "worker": get_worker_manager().delete_worker(
+                str(worker_id),
+                workspace_path=str(workspace_path) if workspace_path else None,
+            )
+        }
+
+    async def _handle_user_skill_list(self, params: dict) -> Any:
+        workspace_path = params.get("workspace_path") or None
+        skills = UserSkillDiscovery(workspace_path=workspace_path).list()
+        return {"skills": [item.to_dict() for item in skills]}
+
+    async def _handle_user_skill_load(self, params: dict) -> Any:
+        name = params.get("name")
+        if not name:
+            raise ValueError("Missing required parameter: name")
+        workspace_path = params.get("workspace_path") or None
+        info = UserSkillDiscovery(workspace_path=workspace_path).require(str(name))
+        return {"skill": info.to_dict(include_content=True)}
+
+    async def _handle_user_skill_add_source(self, params: dict) -> Any:
+        source_path = params.get("path") or params.get("source_path")
+        if not source_path:
+            raise ValueError("Missing required parameter: path")
+        workspace_path = params.get("workspace_path") or None
+        scope = str(params.get("scope") or "workspace")
+        result = add_source_path(str(source_path), workspace_path=workspace_path, scope=scope)
+        skills = UserSkillDiscovery(workspace_path=workspace_path).list()
+        return {**result, "skills": [item.to_dict() for item in skills]}
 
     # ─── Script Runner (user-authored scripts in the agent's sandbox) ───
 
     def _ensure_script_runner(self) -> ScriptRunner:
         if self._script_runner is None:
             self._script_runner = ScriptRunner(
-                skill_registry=self.skills,
+                tool_registry=self.tool_registry,
                 notify_fn=self._safe_notify,
             )
         return self._script_runner
@@ -567,11 +767,11 @@ class RpcHandler:
         workspace_path = params.get("workspace_path") or None
         profile_name = params.get("agent_profile") or params.get("profile_name") or None
 
-        # Process attachments: detect workflow vs regular files vs skills.
+        # Process attachments: detect workflow vs regular files vs tool groups.
         attachments = params.get("attachments") or []
         workflow_doc: WorkflowDocument | None = None
         regular_attachments: list[dict] = []
-        skill_groups: list[str] | None = None
+        tool_groups: list[str] | None = None
 
         for att in attachments:
             if att.get("type") == "workflow":
@@ -582,12 +782,12 @@ class RpcHandler:
                     logger.warning("Failed to parse workflow attachment: %s", e)
                     # Fall back to treating it as a regular file.
                     regular_attachments.append(att)
-            elif att.get("type") == "skill":
-                # Extract skill groups to activate.
-                groups = att.get("skill_groups") or []
+            elif att.get("type") == "tool_group":
+                # Extract tool groups to activate.
+                groups = att.get("tool_groups") or []
                 if groups:
                     # Merge: keep "core" always available.
-                    skill_groups = list(set(groups + ["core"]))
+                    tool_groups = list(set(groups + ["core"]))
             else:
                 regular_attachments.append(att)
 
@@ -611,7 +811,7 @@ class RpcHandler:
             metadata={
                 "workspace_path": workspace_path,
                 "has_workflow": workflow_doc is not None,
-                "skill_groups": skill_groups,
+                "tool_groups": tool_groups,
                 "generate_title": bool(params.get("generate_title", False)),
                 **workflow_meta,
             },
@@ -624,13 +824,13 @@ class RpcHandler:
                 message=message,
                 workspace_path=workspace_path,
                 workflow=workflow_doc,
-                skill_groups=skill_groups,
+                tool_groups=tool_groups,
                 user_instructions=user_instructions,
                 profile_name=profile_name,
                 conversation_id=params.get("conversation_id"),
                 metadata={
                     "has_workflow": workflow_doc is not None,
-                    "skill_groups": skill_groups,
+                    "tool_groups": tool_groups,
                     "workspace_path": workspace_path,
                     "generate_title": bool(params.get("generate_title", False)),
                     **workflow_meta,
@@ -696,7 +896,7 @@ class RpcHandler:
         """Execute one queued agent item using the current streaming RPC contract."""
         agent = self._ensure_agent()
         session_store = session_store or SessionStore(queue_item.workspace_path)
-        ctx = SkillContext(
+        ctx = ToolContext(
             notify_fn=self._safe_notify,
             request_fn=self._safe_request,
             conversation_id=queue_item.conversation_id,
@@ -723,7 +923,7 @@ class RpcHandler:
                     queue_item.message,
                     context=ctx,
                     workflow=queue_item.workflow,
-                    active_skill_groups=queue_item.skill_groups,
+                    active_tool_groups=queue_item.tool_groups,
                     user_instructions=queue_item.user_instructions,
                 ):
                     # Promote the lock owner now that we know the run_id.
@@ -1090,6 +1290,8 @@ class RpcHandler:
             "tool_calls": ra.read_tool_calls(),
             "tool_call_events": ra.read_tool_call_events(),
             "artifacts": ra.read_artifacts(),
+            "events": ra.read_events(),
+            "message_parts": ra.read_message_parts(),
         }
 
     async def _handle_agent_profiles_list(self, params: dict) -> Any:
@@ -1362,7 +1564,7 @@ class RpcHandler:
     def _ensure_agent(self) -> GISAgent:
         if self._agent is None:
             self._agent = GISAgent(
-                skill_registry=self.skills,
+                tool_registry=self.tool_registry,
                 protocol=settings.llm_protocol,
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
@@ -1631,9 +1833,9 @@ class RpcHandler:
 
     async def _safe_notify(self, method: str, params: dict) -> None:
         """
-        Notify callback that the SkillContext hands to skills.
+        Notify callback that the ToolContext hands to tools.
 
-        Sandbox-side skill code may run in a worker thread, so we route
+        Sandbox-side tool code may run in a worker thread, so we route
         the websocket send back to the original event loop to avoid
         cross-thread `ws.send_text` issues.
         """
@@ -1689,6 +1891,12 @@ class RpcHandler:
             )
         code = str(arguments.get("code") or "")
         detail = decision.reason or f"Agent requests permission for {tool_name}."
+        try:
+            arguments_preview = json.dumps(arguments, ensure_ascii=False, default=str)
+            if len(arguments_preview) > 2000:
+                arguments_preview = arguments_preview[:2000] + "...(truncated)"
+        except Exception:
+            arguments_preview = repr(arguments)[:2000]
         request = self._permission_requests.create(
             tool_name=tool_name,
             arguments=arguments,
@@ -1699,6 +1907,8 @@ class RpcHandler:
             "tool_name": tool_name,
             "question": f"Allow agent tool call: {tool_name}?",
             "reason": detail,
+            "arguments_preview": arguments_preview,
+            "rule": decision.rule,
             "danger": True,
             "timeout_seconds": 120,
         }

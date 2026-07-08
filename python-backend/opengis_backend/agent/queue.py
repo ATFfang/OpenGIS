@@ -33,7 +33,7 @@ class AgentQueueItem:
     message: str
     workspace_path: str | None = None
     workflow: WorkflowDocument | None = None
-    skill_groups: list[str] | None = None
+    tool_groups: list[str] | None = None
     user_instructions: str | None = None
     profile_name: str | None = None
     conversation_id: str | None = None
@@ -52,7 +52,7 @@ class AgentQueueItem:
         message: str,
         workspace_path: str | None = None,
         workflow: WorkflowDocument | None = None,
-        skill_groups: list[str] | None = None,
+        tool_groups: list[str] | None = None,
         user_instructions: str | None = None,
         profile_name: str | None = None,
         conversation_id: str | None = None,
@@ -64,7 +64,7 @@ class AgentQueueItem:
             message=message,
             workspace_path=workspace_path,
             workflow=workflow,
-            skill_groups=skill_groups,
+            tool_groups=tool_groups,
             user_instructions=user_instructions,
             profile_name=profile_name,
             conversation_id=conversation_id,
@@ -174,7 +174,7 @@ class AgentQueue:
                 workflow_id=metadata.get("workflow_id"),
                 workflow_path=metadata.get("workflow_path"),
             ),
-            skill_groups=metadata.get("skill_groups") if isinstance(metadata.get("skill_groups"), list) else None,
+            tool_groups=metadata.get("tool_groups") if isinstance(metadata.get("tool_groups"), list) else None,
             profile_name=inbox.profile_name,
             conversation_id=inbox.conversation_id,
             metadata={**metadata, "restored_from_inbox": True},

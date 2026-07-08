@@ -21,6 +21,7 @@
  */
 import maplibregl from 'maplibre-gl'
 import type { MapLayerDefinition, BasemapSource, ParsedVectorData } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   getRenderer,
   type RendererContext,
@@ -343,10 +344,15 @@ export class MapEngine {
     const savedBearing = this.map.getBearing()
     const savedPitch = this.map.getPitch()
 
-    this.map.setStyle(style)
+    const map = this.map
+    let styleReloadHandled = false
 
-    // 样式加载后恢复 camera 并重新添加用户图层
-    this.map.once('style.load', () => {
+    // 样式加载后恢复 camera 并重新添加用户图层。监听必须在 setStyle
+    // 之前注册：内联 raster style 可能很快完成加载，先 setStyle 再 once
+    // 会错过 style.load，导致用户图层没有重挂。
+    const handleStyleReload = () => {
+      if (styleReloadHandled || this.map !== map) return
+      styleReloadHandled = true
       // 恢复 camera
       this.map?.jumpTo({
         center: savedCenter,
@@ -378,6 +384,15 @@ export class MapEngine {
       // 通知 MapView 将所有用户图层重新同步到新样式
       if (this.onStyleReload) {
         this.onStyleReload()
+      }
+    }
+
+    map.once('style.load', handleStyleReload)
+    map.setStyle(style)
+
+    queueMicrotask(() => {
+      if (this.map === map && map.isStyleLoaded()) {
+        handleStyleReload()
       }
     })
   }
@@ -695,9 +710,13 @@ export class MapEngine {
 
     const sourceId = sourceIdFor(layer.id)
     const existingSource = this.map.getSource(sourceId) as
-      | (maplibregl.GeoJSONSource & { _options?: { cluster?: boolean } })
+      | (maplibregl.GeoJSONSource & {
+        _options?: { cluster?: boolean }
+        updateData?: (diff: NonNullable<ParsedVectorData['runtimeDiff']>) => maplibregl.GeoJSONSource
+      })
       | undefined
     const vectorData = layer.data as ParsedVectorData
+    const sourceData = resolveVectorGeoJSON(vectorData)
 
     if (existingSource) {
       // MapLibre 的 GeoJSONSource 实例把原始 options 存在 _options 上
@@ -708,17 +727,25 @@ export class MapEngine {
         this.managedSourceIds.delete(sourceId)
         this.map.addSource(sourceId, {
           type: 'geojson',
-          data: vectorData.geojson as any,
+          data: sourceData as any,
           generateId: true,
         })
         this.managedSourceIds.add(sourceId)
         return
       }
-      existingSource.setData(vectorData.geojson as any)
+      if (vectorData.runtimeDiff && vectorData.runtimeDiffUpdateable && typeof existingSource.updateData === 'function') {
+        try {
+          existingSource.updateData(vectorData.runtimeDiff)
+          return
+        } catch (err) {
+          console.warn('[MapEngine] GeoJSONSource.updateData failed, falling back to setData:', err)
+        }
+      }
+      existingSource.setData(sourceData as any)
     } else {
       this.map.addSource(sourceId, {
         type: 'geojson',
-        data: vectorData.geojson as any,
+        data: sourceData as any,
         generateId: true,
       })
       this.managedSourceIds.add(sourceId)

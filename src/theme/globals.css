@@ -72,6 +72,16 @@
   --chat-plan-border: #343b49;
   --chat-subagent-bg: #182832;
   --chat-subagent-border: #2b4652;
+
+  --approval-bg: #242a33;
+  --approval-bg-strong: #2b323d;
+  --approval-bg-muted: #1f252d;
+  --approval-border: #3a424f;
+  --approval-shadow: rgba(0, 0, 0, 0.36);
+
+  --worker-surface: #1f2630;
+  --worker-surface-soft: #252d38;
+  --worker-surface-muted: #18202a;
 }
 
 .light {
@@ -79,6 +89,16 @@
   --chat-plan-border: #d9dee7;
   --chat-subagent-bg: #eaf4f6;
   --chat-subagent-border: #cfe2e7;
+
+  --approval-bg: #e5e7ec;
+  --approval-bg-strong: #dce0e7;
+  --approval-bg-muted: #eef0f4;
+  --approval-border: #c8ced8;
+  --approval-shadow: rgba(31, 41, 55, 0.18);
+
+  --worker-surface: #e9edf3;
+  --worker-surface-soft: #f3f5f8;
+  --worker-surface-muted: #dde3eb;
 }
 
 /* ============================================
@@ -206,6 +226,24 @@ body {
   border-color: var(--chat-subagent-border);
 }
 
+.approval-card {
+  background: var(--approval-bg);
+  border-color: var(--approval-border);
+  box-shadow: 0 20px 60px var(--approval-shadow);
+}
+
+.approval-muted {
+  background: var(--approval-bg-muted);
+}
+
+.approval-strong {
+  background: var(--approval-bg-strong);
+}
+
+.approval-border {
+  border-color: var(--approval-border);
+}
+
 /* ============================================
    Cline-style Chat Animations
    ============================================ */
@@ -238,6 +276,37 @@ body {
 @keyframes scaleIn {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes board-orb-halo {
+  0%, 100% { transform: rotate(0deg) scale(0.96); opacity: 0.55; }
+  50% { transform: rotate(180deg) scale(1.08); opacity: 0.85; }
+}
+
+@keyframes board-orb-glow {
+  0%, 100% { transform: scale(0.9); opacity: 0.34; }
+  45% { transform: scale(1.18); opacity: 0.62; }
+}
+
+@keyframes board-shell-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes board-shell-conceal {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes board-stage-enter {
+  0% { transform: scale(0.92) translate3d(0, 18px, 0); opacity: 0.62; }
+  72% { transform: scale(1.006) translate3d(0, 0, 0); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes board-stage-exit {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.94) translate3d(0, 14px, 0); opacity: 0; }
 }
 
 /* ─── Siri-like orb keyframes ─── */
@@ -488,5 +557,69 @@ body {
 
   .animate-scale-in {
     animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .board-mode-shell {
+    animation: board-shell-reveal 180ms ease-out both;
+  }
+
+  .board-mode-shell--exit {
+    animation: board-shell-conceal 220ms ease-in both;
+  }
+
+  .board-mode-shell__stage {
+    animation: board-stage-enter 420ms cubic-bezier(0.2, 0.86, 0.22, 1) both;
+    transform-origin: calc(100% - 58px) calc(100% - 58px);
+    will-change: transform, opacity;
+  }
+
+  .board-mode-shell--exit .board-mode-shell__stage {
+    animation: board-stage-exit 220ms cubic-bezier(0.32, 0, 0.67, 0) both;
+  }
+
+  .board-mode-shell__map {
+    contain: layout paint;
+  }
+
+  .board-agent-orb__halo {
+    position: absolute;
+    inset: -12px;
+    border-radius: 30px;
+    background:
+      conic-gradient(
+        from 120deg,
+        rgba(59, 130, 246, 0.0),
+        rgba(59, 130, 246, 0.58),
+        rgba(6, 182, 212, 0.36),
+        rgba(168, 85, 247, 0.48),
+        rgba(59, 130, 246, 0.0)
+      );
+    filter: blur(10px);
+    animation: board-orb-halo 7.5s linear infinite;
+  }
+
+  .board-agent-orb__glow {
+    position: absolute;
+    inset: -18px;
+    border-radius: 34px;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.38), transparent 64%);
+    filter: blur(14px);
+    animation: board-orb-glow 3.8s ease-in-out infinite;
+  }
+
+  .light .board-agent-orb__halo {
+    background:
+      conic-gradient(
+        from 120deg,
+        rgba(37, 99, 235, 0.0),
+        rgba(37, 99, 235, 0.42),
+        rgba(8, 145, 178, 0.3),
+        rgba(124, 58, 237, 0.32),
+        rgba(37, 99, 235, 0.0)
+      );
+  }
+
+  .light .board-agent-orb__glow {
+    background: radial-gradient(circle, rgba(37, 99, 235, 0.24), transparent 66%);
   }
 }

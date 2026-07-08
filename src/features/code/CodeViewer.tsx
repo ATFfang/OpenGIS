@@ -32,7 +32,6 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
 import MarkdownRenderer from '@/features/chat/components/MarkdownBlock'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // ─── Syntax highlighter themes ──────────────────────────────────
 
@@ -101,23 +100,6 @@ export function CodeViewer({ tab }: CodeViewerProps) {
     const normalized = tab.filePath.replace(/\\/g, '/')
     return normalized.substring(0, normalized.lastIndexOf('/'))
   }, [tab.filePath])
-
-  const resolveMarkdownImage = useCallback((imagePath: string) => {
-    if (/^(https?:|data:|blob:)/i.test(imagePath)) return Promise.resolve(imagePath)
-
-    let localPath = imagePath
-    if (/^file:\/\//i.test(localPath)) {
-      try {
-        localPath = decodeURIComponent(new URL(localPath).pathname)
-      } catch {
-        localPath = localPath.replace(/^file:\/\//i, '')
-      }
-    } else if (!localPath.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(localPath)) {
-      localPath = mdDir ? `${mdDir}/${localPath}` : localPath
-    }
-
-    return pathToImageUrl(localPath)
-  }, [mdDir])
 
   // Auto-show result when it arrives
   useEffect(() => {
@@ -239,7 +221,6 @@ export function CodeViewer({ tab }: CodeViewerProps) {
               <MarkdownRenderer
                 markdown={tab.content || ''}
                 baseDir={mdDir}
-                resolveImageSrc={resolveMarkdownImage}
               />
             </div>
           ) : (

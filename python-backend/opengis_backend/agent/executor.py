@@ -544,10 +544,9 @@ class SubprocessPythonExecutor:
 
         t0 = _time.monotonic()
         try:
-            # Tool is callable: tool(*args, **kwargs) invokes the skill.
+            # Tool is callable: tool(*args, **kwargs) invokes the tool.
             value = tool(*args, **kwargs)
-            # Defensive: if the skill is `async def` (it shouldn't be —
-            # see docs/ARCHITECTURE.md §Skill Invocation), unwrap the
+            # Defensive: if the tool is `async def`, unwrap the
             # coroutine on a private loop. Without this guard, we'd hand
             # back a `<coroutine object>` to the child and the LLM would
             # be very confused.

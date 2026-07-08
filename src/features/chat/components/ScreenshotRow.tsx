@@ -1,10 +1,10 @@
 /**
  * ScreenshotRow — interactive map capture card in the chat.
  *
- * Shown when the backend calls interactive_snapshot skill.
+ * Shown when the backend calls interactive_snapshot tool.
  * User can adjust the map, then click "Capture" to take a screenshot.
  * The screenshot is saved to disk and a result marker is written
- * so the backend skill can unblock.
+ * so the backend tool can unblock.
  */
 
 import { memo, useState, useCallback } from 'react'
@@ -50,7 +50,7 @@ export const ScreenshotRow = memo(({ requestId, savePath, prompt }: ScreenshotRo
         await api.writeFileBinary(savePath, bytes.buffer)
       }
 
-      // Write result marker so the backend skill can unblock
+      // Write result marker so the backend tool can unblock
       const parentDir = savePath.substring(0, savePath.lastIndexOf('/'))
       const resultPath = `${parentDir}/.snapshot_${requestId}.result`
       if (api?.writeFile) {

@@ -5,7 +5,7 @@ import { useT } from '@/i18n'
 
 /**
  * PlanRow — renders a TODO / plan checklist emitted by the backend
- * `update_plan` skill (say='plan'). The card is upserted in place by
+ * `update_plan` tool (say='plan'). The card is upserted in place by
  * plan_id, so as the agent marks steps done the same card animates.
  */
 const PlanRow = memo(({ planData }: { planData?: PlanData }) => {

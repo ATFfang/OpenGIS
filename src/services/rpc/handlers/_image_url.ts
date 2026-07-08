@@ -13,7 +13,13 @@
  * to the map doesn't allocate more memory.
  */
 
-const _urlCache = new Map<string, string>();
+interface CachedImageUrl {
+  url: string;
+  refs: number;
+  lastUsed: number;
+}
+
+const _urlCache = new Map<string, CachedImageUrl>();
 
 const EXT_MIME: Record<string, string> = {
   '.png': 'image/png',
@@ -73,7 +79,11 @@ function toArrayBuffer(buffer: unknown): ArrayBuffer | null {
 export async function pathToImageUrl(path: string): Promise<string> {
   const normalizedPath = normalizeLocalImagePath(path);
   const cached = _urlCache.get(normalizedPath);
-  if (cached) return cached;
+  if (cached) {
+    cached.refs += 1;
+    cached.lastUsed = Date.now();
+    return cached.url;
+  }
 
   const api = (globalThis as any).window?.electronAPI;
   if (api?.readFileAsBuffer) {
@@ -83,7 +93,7 @@ export async function pathToImageUrl(path: string): Promise<string> {
     if (ok && buf) {
       const blob = new Blob([buf], { type: mimeFromPath(normalizedPath) });
       const url = URL.createObjectURL(blob);
-      _urlCache.set(normalizedPath, url);
+      _urlCache.set(normalizedPath, { url, refs: 1, lastUsed: Date.now() });
       return url;
     }
     throw new Error(result?.error || `Unable to read image: ${normalizedPath}`);
@@ -94,16 +104,30 @@ export async function pathToImageUrl(path: string): Promise<string> {
   // blocks file:// images from the localhost app origin.
   const fallback =
     'file:///' + normalizedPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  _urlCache.set(normalizedPath, fallback);
+  _urlCache.set(normalizedPath, { url: fallback, refs: 1, lastUsed: Date.now() });
   return fallback;
 }
 
 /** Drop a cached URL (and revoke it) — call when the image is no longer needed. */
 export function releaseImageUrl(path: string): void {
   const normalizedPath = normalizeLocalImagePath(path);
-  const url = _urlCache.get(normalizedPath);
-  if (url && url.startsWith('blob:')) {
-    URL.revokeObjectURL(url);
+  const cached = _urlCache.get(normalizedPath);
+  if (!cached) return;
+  cached.refs -= 1;
+  cached.lastUsed = Date.now();
+  if (cached.refs > 0) return;
+  if (cached.url.startsWith('blob:')) {
+    URL.revokeObjectURL(cached.url);
   }
   _urlCache.delete(normalizedPath);
+}
+
+/** Release every cached local image URL. Use only when tearing down a workspace/session. */
+export function releaseAllImageUrls(): void {
+  for (const cached of _urlCache.values()) {
+    if (cached.url.startsWith('blob:')) {
+      URL.revokeObjectURL(cached.url);
+    }
+  }
+  _urlCache.clear();
 }

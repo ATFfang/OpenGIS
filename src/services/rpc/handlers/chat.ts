@@ -129,7 +129,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
 
   /**
    * Sub-agent running indicator. The backend run_subagent / run_subagents
-   * skills push a content-free status card (task titles + state) while an
+   * tools push a content-free status card (task titles + state) while an
    * isolated child agent churns — mirroring opencode's collapsed sub-agent
    * affordance. Upserted by `subagent_id` so the running → done transition
    * (and per-task progress in a parallel fan-out) animates the same card.

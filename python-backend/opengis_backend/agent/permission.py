@@ -3,7 +3,7 @@
 The first version is intentionally compatibility-preserving: default build
 agents can continue to run. The architecture is still important because every
 future approval UI, policy setting, and tool safety rule attaches here instead
-of being scattered across individual skills.
+of being scattered across individual tools.
 """
 
 from __future__ import annotations
@@ -16,6 +16,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from opengis_backend.agent.profile import AgentProfile, PermissionLevel
+
+FORCE_ASK_TOOLS = frozenset({
+    "start_worker",
+    "start_dynamic_map_worker",
+    "restart_worker",
+    "pause_worker",
+    "delete_worker",
+})
 
 
 class PermissionAction(str, Enum):
@@ -93,6 +101,7 @@ class PermissionRuntime:
                     "add_layer": PermissionAction.ASK,
                     "remove_layer": PermissionAction.DENY,
                     "update_layer_style": PermissionAction.ASK,
+                    "load_skill": PermissionAction.ASK,
                 },
                 enforce=enforce,
             )
@@ -105,9 +114,12 @@ class PermissionRuntime:
                     "delete_file": PermissionAction.ASK,
                     "bash": PermissionAction.ALLOW,
                     "execute_code": PermissionAction.ALLOW,
+                    "load_skill": PermissionAction.ASK,
                 },
                 enforce=enforce,
             )
+        for worker_tool in ("start_worker", "start_dynamic_map_worker", "restart_worker", "pause_worker", "delete_worker"):
+            policy.tool_overrides[worker_tool] = PermissionAction.ASK
         return PermissionRuntime._apply_profile_metadata(policy, profile.metadata or {})
 
     @staticmethod
@@ -147,6 +159,18 @@ class PermissionRuntime:
 
     def evaluate(self, tool_name: str, arguments: dict[str, Any] | None) -> PermissionDecision:
         args = arguments or {}
+        if tool_name in FORCE_ASK_TOOLS:
+            decision = PermissionDecision(
+                PermissionAction.ASK,
+                "Resident worker operations require explicit approval.",
+                f"tool:{tool_name}:force_ask",
+            )
+            if (
+                self.approval_callback is not None
+                and self.policy.enforce
+            ):
+                return self.approval_callback(tool_name, args, decision)
+            return decision
         persisted = self._persisted_rule_decision(tool_name)
         if persisted is not None:
             return persisted

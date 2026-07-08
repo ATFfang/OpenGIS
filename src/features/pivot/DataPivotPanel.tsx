@@ -6,7 +6,7 @@ import { useAssetStore } from '@/stores/assetStore'
 import { usePivotStore } from '@/stores/pivotStore'
 import { loadPivotData } from './pivotData'
 import { computePivotAnalysis, runPivotAgent, type PivotAgentLog } from './pivotAnalysis'
-import type { PivotAgentResult, PivotData, PivotFieldDistribution, PivotFieldStat } from './types'
+import type { PivotAgentResult, PivotData, PivotFieldDistribution, PivotFieldStat, PivotTarget } from './types'
 
 const PANEL_WIDTH = 760
 const PANEL_HEIGHT = 620
@@ -243,14 +243,14 @@ export function DataPivotPanel() {
         ) : mode === 'agent' ? (
           <AgentPivotView loading={agentLoading} result={agentResult} logs={agentLogs} />
         ) : (
-          <DataPivotView data={data} />
+          <DataPivotView data={data} target={target} />
         )}
       </div>
     </div>
   )
 }
 
-function DataPivotView({ data }: { data: PivotData }) {
+function DataPivotView({ data, target }: { data: PivotData; target: PivotTarget }) {
   if (data.raster) {
     return (
       <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3">
@@ -280,6 +280,9 @@ function DataPivotView({ data }: { data: PivotData }) {
         </div>
       )}
       <div className="h-8 shrink-0 border-b border-border bg-bg-secondary flex items-center gap-3 px-3 text-2xs text-text-muted">
+        {target.kind === 'file' && target.size > 0 && (
+          <span>{formatFileSize(target.size)}</span>
+        )}
         <span>{data.table.totalRows?.toLocaleString() ?? '?'} 行</span>
         <span>{data.table.columns.length} 列</span>
         {data.table.sampled && <span className="text-accent-warning">已抽样显示</span>}
@@ -717,4 +720,11 @@ function formatLogTime(ts: number): string {
   const mm = String(date.getMinutes()).padStart(2, '0')
   const ss = String(date.getSeconds()).padStart(2, '0')
   return `[${hh}:${mm}:${ss}]`
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }

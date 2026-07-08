@@ -12,7 +12,7 @@
  *
  * The workflow is executed by the WorkflowLoop in the backend:
  * the LLM receives each step's description as a constrained prompt
- * and must produce code to accomplish it.
+ * and must call tools, using execute_code only when Python is needed.
  *
  * Design: Guided / wizard-style UI that makes it easy for non-
  * programmers to define repeatable GIS pipelines.

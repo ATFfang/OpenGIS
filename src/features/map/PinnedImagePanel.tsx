@@ -13,7 +13,7 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
 import { X, Maximize2, GripHorizontal, Pencil, Check } from 'lucide-react'
 import { useT } from '@/i18n'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
+import { pathToImageUrl, releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -60,10 +60,19 @@ export const PinnedImagePanel = memo(({ image, onClose, onRename }: PinnedImageP
   useEffect(() => {
     if (!image.path) return
     let cancelled = false
+    let acquired = false
     pathToImageUrl(image.path).then((url) => {
-      if (!cancelled) setResolvedUrl(url)
+      acquired = true
+      if (cancelled) {
+        releaseImageUrl(image.path)
+        return
+      }
+      setResolvedUrl(url)
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (acquired) releaseImageUrl(image.path)
+    }
   }, [image.path])
 
   const dragging = useRef(false)

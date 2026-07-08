@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -34,12 +34,28 @@ interface ToolCallRowProps {
   onToggleExpand: () => void
 }
 
+interface EditFileResult {
+  path?: string
+  diff: string
+  matchStrategy?: string
+  replacements?: number
+  additions?: number
+  deletions?: number
+}
+
 /**
  * ToolCallRow — Cline-inspired tool call renderer.
  * Shows tool calls with icons, collapsible content, and status indicators.
  */
 export const ToolCallRow = memo(({ message, isExpanded, onToggleExpand }: ToolCallRowProps) => {
+  const [editDiffExpanded, setEditDiffExpanded] = useState(true)
   const tool = parseTool(message)
+  const editResult = tool && isEditFileTool(tool.tool) ? getEditFileResult(message, tool) : null
+
+  useEffect(() => {
+    if (editResult?.diff) setEditDiffExpanded(true)
+  }, [message.toolCallId, editResult?.diff])
+
   if (!tool) return null
 
   const isRunning = message.toolStatus === 'running'
@@ -49,12 +65,22 @@ export const ToolCallRow = memo(({ message, isExpanded, onToggleExpand }: ToolCa
   const codeExecution = isCodeTool ? getCodeExecutionContent(message) : null
 
   const { icon, title, content } = getToolDisplay(tool, message)
-  const showDetails = shouldShowToolDetails(tool.tool, message)
+  const showDetails = shouldShowToolDetails(tool.tool, message, editResult)
   const detailLabel = getDetailLabel(tool.tool, tool)
   const durationLabel = formatDuration(message.durationMs ?? 0)
-  const effectiveExpanded = isCodeTool && isRunning && !!codeExecution?.output.trim()
-    ? true
-    : isExpanded
+  const effectiveExpanded = editResult
+    ? editDiffExpanded
+    : isCodeTool && isRunning && !!codeExecution?.output.trim()
+      ? true
+      : isExpanded
+
+  const handleToggleDetails = () => {
+    if (editResult) {
+      setEditDiffExpanded((value) => !value)
+      return
+    }
+    onToggleExpand()
+  }
 
   return (
     <div className="group">
@@ -89,7 +115,7 @@ export const ToolCallRow = memo(({ message, isExpanded, onToggleExpand }: ToolCa
       {showDetails && content && (
         <div className="bg-bg-tertiary/50 rounded-xl overflow-hidden border border-border/30 ml-[30px]">
           <button
-            onClick={onToggleExpand}
+            onClick={handleToggleDetails}
             className="w-full flex items-center text-text-muted py-2 px-3 cursor-pointer select-none bg-transparent border-none text-left text-[12px] hover:text-text-secondary hover:bg-bg-hover/50 transition-all duration-150"
           >
             <span className="whitespace-nowrap overflow-hidden text-ellipsis mr-2 flex-1 text-left font-mono [direction:rtl]">
@@ -114,6 +140,8 @@ export const ToolCallRow = memo(({ message, isExpanded, onToggleExpand }: ToolCa
                     </pre>
                   )}
                 </div>
+              ) : editResult ? (
+                <EditFileDiff result={editResult} />
               ) : (
                 <pre className="text-[12px] text-text-secondary p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto scrollbar-thin font-mono leading-relaxed">
                   <code>{content}</code>
@@ -143,10 +171,12 @@ function parseTool(message: UIMessage): ToolInfo | null {
   if (!message.toolName && !message.text) return null
 
   if (message.toolName) {
+    const result = isEditFileTool(message.toolName) ? parseEditFileOutput(message.text) : null
     return {
       tool: message.toolName,
-      path: message.toolArgs?.path as string | undefined,
+      path: result?.path || (message.toolArgs?.path as string | undefined),
       content: buildToolContent(message),
+      diff: result?.diff,
     }
   }
 
@@ -163,6 +193,10 @@ function buildToolContent(message: UIMessage): string {
   const output = message.text || ''
   if (isCodeExecutionTool(name)) {
     return output
+  }
+  if (isEditFileTool(name)) {
+    const result = parseEditFileOutput(output)
+    if (result?.diff) return result.diff
   }
   if (message.toolStatus === 'failed') {
     return output || JSON.stringify(args, null, 2)
@@ -182,16 +216,154 @@ function isCodeExecutionTool(toolName: string): boolean {
   return toolName === 'execute_code' || toolName === 'gis_execute_python'
 }
 
-function shouldShowToolDetails(toolName: string, message: UIMessage): boolean {
+function isEditFileTool(toolName: string): boolean {
+  return toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'editedExistingFile'
+}
+
+function shouldShowToolDetails(toolName: string, message: UIMessage, editResult?: EditFileResult | null): boolean {
   if (isCodeExecutionTool(toolName)) {
     return !!message.text?.trim()
+  }
+  if (isEditFileTool(toolName)) {
+    return !!editResult?.diff || message.toolStatus === 'failed'
   }
   return message.toolStatus === 'failed'
 }
 
 function getDetailLabel(toolName: string, tool: ToolInfo): string {
   if (isCodeExecutionTool(toolName)) return 'Python output'
+  if (isEditFileTool(toolName)) {
+    return 'File changes'
+  }
   return tool.path ? `${tool.path}\u200E` : 'Error details'
+}
+
+function getEditFileResult(message: UIMessage, tool: ToolInfo): EditFileResult | null {
+  const parsed = parseEditFileOutput(message.text)
+  if (parsed) return parsed
+  if (tool.diff) {
+    return {
+      path: tool.path,
+      diff: tool.diff,
+    }
+  }
+  return null
+}
+
+function parseEditFileOutput(output?: string): EditFileResult | null {
+  const data = parseJsonObject(output)
+  if (!data) return null
+  const diff = typeof data.diff === 'string' ? data.diff : ''
+  if (!diff.trim()) return null
+  return {
+    path: typeof data.path === 'string' ? data.path : undefined,
+    diff,
+    matchStrategy: typeof data.match_strategy === 'string' ? data.match_strategy : undefined,
+    replacements: numberOrUndefined(data.replacements),
+    additions: numberOrUndefined(data.additions),
+    deletions: numberOrUndefined(data.deletions),
+  }
+}
+
+function parseJsonObject(text?: string): Record<string, unknown> | null {
+  if (!text?.trim()) return null
+  try {
+    const value = JSON.parse(text)
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+const EditFileDiff = memo(({ result }: { result: EditFileResult }) => {
+  const lines = result.diff
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.length > 0)
+  const additions = result.additions ?? lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
+  const deletions = result.deletions ?? lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+
+  return (
+    <div className="bg-bg-secondary/40">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/20 text-[11px]">
+        <span className="font-mono text-accent-success">+{additions}</span>
+        <span className="font-mono text-accent-danger">-{deletions}</span>
+        {result.replacements != null && (
+          <span className="text-text-muted">
+            {result.replacements} {result.replacements === 1 ? 'replacement' : 'replacements'}
+          </span>
+        )}
+        {result.matchStrategy && (
+          <span className="ml-auto text-text-muted/75 font-mono">
+            {result.matchStrategy}
+          </span>
+        )}
+      </div>
+      <div className="max-h-[420px] overflow-auto scrollbar-thin">
+        <div className="min-w-max font-mono text-[12px] leading-[1.55]">
+          {lines.map((line, index) => {
+            const style = diffLineStyle(line)
+            return (
+              <div
+                key={`${index}:${line.slice(0, 24)}`}
+                className={`grid grid-cols-[46px_1fr] ${style.bg}`}
+              >
+                <span className={`select-none px-2 py-0.5 text-right border-r border-border/15 ${style.gutter}`}>
+                  {index + 1}
+                </span>
+                <span className={`px-3 py-0.5 whitespace-pre ${style.text}`}>
+                  {line || ' '}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+})
+EditFileDiff.displayName = 'EditFileDiff'
+
+function diffLineStyle(line: string): { bg: string; text: string; gutter: string } {
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
+    return {
+      bg: 'bg-transparent',
+      text: 'text-text-primary/80 font-semibold',
+      gutter: 'text-text-muted/45 bg-transparent',
+    }
+  }
+  if (line.startsWith('@@')) {
+    return {
+      bg: 'bg-accent-primary/6',
+      text: 'text-accent-primary/85',
+      gutter: 'text-accent-primary/50 bg-accent-primary/6',
+    }
+  }
+  if (line.startsWith('+')) {
+    return {
+      bg: 'bg-green-500/10',
+      text: 'text-accent-success',
+      gutter: 'text-accent-success/65 bg-green-500/10',
+    }
+  }
+  if (line.startsWith('-')) {
+    return {
+      bg: 'bg-red-500/10',
+      text: 'text-accent-danger',
+      gutter: 'text-accent-danger/65 bg-red-500/10',
+    }
+  }
+  return {
+    bg: 'bg-transparent',
+    text: 'text-text-secondary',
+    gutter: 'text-text-muted/30 bg-transparent',
+  }
 }
 
 function getToolDisplay(
@@ -265,14 +437,6 @@ function getToolDisplay(
         title: `Running ${tool.tool.replace('gis_', '').replace('_', ' ')}`,
         content: tool.content || null,
       }
-    case 'use_skill': {
-      const skillName = message.toolArgs?.skill_name as string || 'skill'
-      return {
-        icon: <Code2 className={iconSize} />,
-        title: `Running Python skill: ${skillName}`,
-        content: tool.content || null,
-      }
-    }
     case 'gis_render_map':
       return {
         icon: <Globe className={iconSize} />,

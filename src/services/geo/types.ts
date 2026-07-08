@@ -31,6 +31,23 @@ export interface GeoJSONFeatureCollection {
   features: GeoJSONFeature[]
 }
 
+export type GeoJSONFeatureId = string | number
+
+export interface GeoJSONFeatureDiff {
+  id: GeoJSONFeatureId
+  newGeometry?: GeoJSONFeature['geometry']
+  removeAllProperties?: boolean
+  removeProperties?: string[]
+  addOrUpdateProperties?: Array<{ key: string; value: any }>
+}
+
+export interface GeoJSONSourceDiff {
+  removeAll?: boolean
+  remove?: GeoJSONFeatureId[]
+  add?: GeoJSONFeature[]
+  update?: GeoJSONFeatureDiff[]
+}
+
 // ─── Data Source Descriptor ───────────────────────────────────────
 
 export type DataSourceType = 'geojson' | 'csv' | 'shapefile' | 'geopackage' | 'kml' | 'geotiff'
@@ -53,6 +70,17 @@ export interface DataSourceMeta {
    * ambiguous across directories).
    */
   filePath?: string
+  /** Runtime-only dynamic layer metadata, usually driven by a resident worker. */
+  dynamic?: {
+    workerId?: string
+    workerName?: string
+    workerStartedAt?: number
+    sequence?: number
+    updatedAt?: number
+    schemaChanged?: boolean
+    mode?: 'full' | 'diff'
+    updateable?: boolean
+  }
 }
 
 // ─── Parsed Layer Data ────────────────────────────────────────────
@@ -67,6 +95,21 @@ export interface ParsedVectorData {
   crs: string
   /** Attribute field names */
   fields: FieldDescriptor[]
+  /**
+   * Large file-backed layers keep only a lightweight sample in `geojson` and
+   * store the full FeatureCollection in the renderer-session registry.
+   */
+  dataHandle?: string
+  /** True when `geojson` is a bounded sample rather than the full dataset. */
+  sampled?: boolean
+  /** Number of features retained in the sample `geojson`. */
+  sampleFeatureCount?: number
+  /** Original full-data byte size used when the handle was created. */
+  handleSizeBytes?: number
+  /** Runtime-only MapLibre GeoJSONSource.updateData diff hint. */
+  runtimeDiff?: GeoJSONSourceDiff
+  /** True when runtimeDiff can safely be passed to MapLibre updateData. */
+  runtimeDiffUpdateable?: boolean
 }
 
 export interface ParsedRasterData {
@@ -241,6 +284,17 @@ export interface LayerStyle {
   cluster?: ClusterSettings
   /** `renderType='extrusion'` 时必填 heightField */
   extrusion?: ExtrusionSettings
+  /** `renderType='symbol'` 时可选 — 图标配置 */
+  icon?: string  // 'circle' | 'emoji:📍' | 'svg:pin' | 'path:/abs/icon.svg'
+  /** `renderType='symbol'` 时可选 — 文字标注配置 */
+  label?: {
+    field: string
+    fontSize?: number
+    color?: string
+    offset?: [number, number]
+    haloColor?: string
+    haloWidth?: number
+  }
 }
 
 export interface MapLayerDefinition {

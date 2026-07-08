@@ -10,6 +10,9 @@ import {
 type JsonRpcCallback = (result: any, error?: any) => void
 type NotificationHandler = (method: string, params: any) => void
 
+const DYNAMIC_LAYER_UPDATE_METHOD = 'rpc.ui.map.dynamic_layer_update'
+const DYNAMIC_LAYER_FRAME_MS = 100
+
 /**
  * Minimal surface of the Dispatcher that the client needs. Avoids a hard
  * import cycle with `src/services/rpc/dispatcher.ts`.
@@ -45,6 +48,8 @@ export class PythonClient {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 10
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private dynamicLayerNotifications: Map<string, JsonRpcNotification[]> = new Map()
+  private dynamicLayerFlushTimer: ReturnType<typeof setTimeout> | null = null
   private _isConnected = false
 
   get isConnected(): boolean {
@@ -113,6 +118,7 @@ export class PythonClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    this.clearDynamicLayerQueue()
     this.reconnectAttempts = this.maxReconnectAttempts // Prevent reconnect
     
     this.rejectPendingRequests(new Error('WebSocket disconnected'))
@@ -199,10 +205,10 @@ export class PythonClient {
       //    minutes. Match chat's 10-min ceiling so the TS side doesn't
       //    time out before the Python-side executor's own exec_timeout
       //    kicks in.
-      //  - rpc.skill.execute can run heavy GIS ops; give it a generous budget.
+      //  - rpc.tool.execute can run heavy GIS ops; give it a generous budget.
       //  - everything else (config, ping, metadata lookups) is fast.
       const isChat = method === 'chat.user_message'
-      const isSkill = method.startsWith('rpc.skill.')
+      const isTool = method.startsWith('rpc.tool.')
       const isScriptRun = method === 'rpc.code.run_script'
       const effectiveTimeout =
         timeoutMs ??
@@ -210,7 +216,7 @@ export class PythonClient {
           ? 10 * 60 * 1000 // 10 min
           : isScriptRun
           ? 10 * 60 * 1000 // 10 min
-          : isSkill
+          : isTool
           ? 5 * 60 * 1000 // 5 min
           : 60 * 1000) // 60 sec
 
@@ -341,30 +347,73 @@ export class PythonClient {
     // (e.g. the `map.addLayer` fallback during dev) have no dispatcher
     // handler and go straight to the notification fan-out.
     if (data.method) {
-      const channel = getMethodChannel(data.method)
-      if (this.dispatcher && channel !== null) {
-        const notif: JsonRpcNotification = {
+      if (data.method === DYNAMIC_LAYER_UPDATE_METHOD && data.id === undefined) {
+        this.enqueueDynamicLayerNotification({
           jsonrpc: '2.0',
           method: data.method,
           params: data.params ?? {},
-        }
-        this.dispatcher.handleNotification(notif).catch((err) => {
-          // Dispatcher is supposed to swallow handler errors internally;
-          // this is purely defensive so a rogue reject does not break
-          // the message pump.
-          console.error(
-            '[PythonClient] Dispatcher.handleNotification rejected unexpectedly:',
-            err,
-          )
         })
+        return
       }
+      this.routeNotification({
+        jsonrpc: '2.0',
+        method: data.method,
+        params: data.params ?? {},
+      })
+    }
+  }
 
-      for (const handler of this.notificationHandlers) {
-        try {
-          handler(data.method, data.params)
-        } catch (error) {
-          console.error('[PythonClient] Notification handler error:', error)
-        }
+  private enqueueDynamicLayerNotification(notif: JsonRpcNotification): void {
+    const params = (notif.params ?? {}) as Record<string, any>
+    const layerId = typeof params.layer_id === 'string' && params.layer_id
+      ? params.layer_id
+      : `__unknown__:${this.dynamicLayerNotifications.size}`
+    const existing = this.dynamicLayerNotifications.get(layerId) ?? []
+    const mode = typeof params.mode === 'string' ? params.mode : undefined
+    const hasFullPayload = mode === 'full' || (params.geojson != null && params.diff == null)
+    // A full frame supersedes prior queued frames for the same layer. Diff
+    // frames are incremental and must keep order; dropping them can turn a
+    // valid full+diff burst into an empty/no-op layer on the frontend.
+    this.dynamicLayerNotifications.set(layerId, hasFullPayload ? [notif] : [...existing, notif])
+    if (this.dynamicLayerFlushTimer !== null) return
+    this.dynamicLayerFlushTimer = setTimeout(() => {
+      this.dynamicLayerFlushTimer = null
+      this.flushDynamicLayerNotifications()
+    }, DYNAMIC_LAYER_FRAME_MS)
+  }
+
+  private flushDynamicLayerNotifications(): void {
+    const pending = [...this.dynamicLayerNotifications.values()].flat()
+    this.dynamicLayerNotifications.clear()
+    for (const notif of pending) {
+      this.routeNotification(notif)
+    }
+  }
+
+  private clearDynamicLayerQueue(): void {
+    if (this.dynamicLayerFlushTimer !== null) {
+      clearTimeout(this.dynamicLayerFlushTimer)
+      this.dynamicLayerFlushTimer = null
+    }
+    this.dynamicLayerNotifications.clear()
+  }
+
+  private routeNotification(notif: JsonRpcNotification): void {
+    const channel = getMethodChannel(notif.method)
+    if (this.dispatcher && channel !== null) {
+      this.dispatcher.handleNotification(notif).catch((err) => {
+        console.error(
+          '[PythonClient] Dispatcher.handleNotification rejected unexpectedly:',
+          err,
+        )
+      })
+    }
+
+    for (const handler of this.notificationHandlers) {
+      try {
+        handler(notif.method, notif.params)
+      } catch (error) {
+        console.error('[PythonClient] Notification handler error:', error)
       }
     }
   }

@@ -26,6 +26,7 @@ import {
   sourceIdFor,
 } from './types'
 import type { MapLayerDefinition, ParsedVectorData } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 
 export const clusterRenderer: LayerRenderer = {
   renderType: 'cluster',
@@ -217,7 +218,7 @@ function ensureClusterSource(
   const vec = def.data as ParsedVectorData
   ctx.map.addSource(sourceId, {
     type: 'geojson',
-    data: vec.geojson as any,
+    data: resolveVectorGeoJSON(vec) as any,
     cluster: true,
     clusterRadius: radius,
     clusterMaxZoom: maxZoom,

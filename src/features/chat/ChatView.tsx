@@ -12,8 +12,6 @@ import {
   Zap,
   History,
   Trash2,
-  Undo2,
-  RefreshCw,
   X,
   FileText,
   GitBranch,
@@ -28,9 +26,7 @@ import {
 } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
 import { useAssetStore } from '@/stores/assetStore'
-import { useRunsStore } from '@/stores/runsStore'
 import { useWorkflowStore } from '@/stores/workflowStore'
-import { useDialog } from '@/components/Dialog'
 import { useT } from '@/i18n'
 import appIconImg from '../../../resources/icons/app-icon.png'
 import ChatRow from './components/ChatRow'
@@ -39,6 +35,7 @@ import { ApprovalInline } from '@/features/approval/ApprovalGate'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
 import type { UIMessage } from '@/types/chat'
 import { groupMessages, type MessageRole } from './groupMessages'
+import { messagePartsForRender } from '@/services/chatMessageParts'
 
 // Stable empty reference so the `messages` selector fallback doesn't create a
 // new array each render (which would defeat memoization downstream).
@@ -52,7 +49,11 @@ const EMPTY_MESSAGES: UIMessage[] = []
  * 2. Scrollable messages area (virtualized via react-virtuoso)
  * 3. Sticky input footer with rich controls
  */
-export function ChatView() {
+export function ChatView({
+  variant = 'default',
+}: {
+  variant?: 'default' | 'floating'
+} = {}) {
   const t = useT()
   const [inputValue, setInputValue] = useState('')
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
@@ -323,13 +324,13 @@ export function ChatView() {
     setShowAttachPanel(false)
   }, [])
 
-  const handleAttachSkill = useCallback((name: string, groups: string[]) => {
+  const handleAttachToolGroup = useCallback((name: string, groups: string[]) => {
     setAttachments((prev) => {
-      // Remove existing skill attachment with same name (toggle behavior)
-      const filtered = prev.filter(a => !(a.type === 'skill' && a.name === name))
+      // Remove existing tool-group attachment with same name (toggle behavior).
+      const filtered = prev.filter(a => !(a.type === 'tool_group' && a.name === name))
       // If already attached, just remove (toggle off)
-      if (prev.some(a => a.type === 'skill' && a.name === name)) return filtered
-      return [...filtered, { name, path: name.toLowerCase(), type: 'skill' as const, skill_groups: groups }]
+      if (prev.some(a => a.type === 'tool_group' && a.name === name)) return filtered
+      return [...filtered, { name, path: name.toLowerCase(), type: 'tool_group' as const, tool_groups: groups }]
     })
   }, [])
 
@@ -547,9 +548,15 @@ export function ChatView() {
   }, [messages])
 
   return (
-    <div className="w-full h-full flex flex-col bg-bg-primary overflow-hidden">
+    <div className={`w-full h-full flex flex-col bg-bg-primary overflow-hidden ${
+      variant === 'floating'
+        ? 'rounded-2xl shadow-2xl'
+        : ''
+    }`}>
       {/* === Header === */}
-<header className="shrink-0 border-b border-border bg-bg-primary/80 backdrop-blur-sm relative z-50">
+<header className={`shrink-0 bg-bg-primary/80 backdrop-blur-sm relative z-50 ${
+        variant === 'floating' ? 'rounded-t-2xl' : 'border-b border-border'
+      }`}>
         <div className="px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="relative">
@@ -705,16 +712,10 @@ export function ChatView() {
           components={{ Header: ListSpacer, Footer: TypingFooter }}
           context={activeWorkState}
           itemContent={(_index, group) => {
-            // Find the first item in this group that carries a run_id.
-            // Only assistant groups will have code/code_result/max_steps
-            // messages with this field populated — user / system groups
-            // will produce `undefined` and therefore hide the revert button.
-            const runId = group.items.find((m) => m.runId)?.runId
             const groupKey = group.items[0]?.ts ?? _index
             return (
               <MessageGroup
                 role={group.role}
-                runId={runId}
                 items={group.items}
                 onEditUser={handleEditUserMessage}
                 highlighted={currentSearchMatch?.groupKey === groupKey}
@@ -785,7 +786,7 @@ export function ChatView() {
                   >
                     {att.type === 'workflow' ? (
                       <GitBranch className="w-3 h-3 text-accent-primary shrink-0" />
-                    ) : att.type === 'skill' ? (
+                    ) : att.type === 'tool_group' ? (
                       <Wrench className="w-3 h-3 text-amber-400 shrink-0" />
                     ) : (
                       <FileText className="w-3 h-3 text-text-muted shrink-0" />
@@ -868,8 +869,8 @@ export function ChatView() {
             <AttachPanel
               onAttachFile={handleAttachFile}
               onAttachWorkflow={handleAttachWorkflow}
-              onAttachSkill={handleAttachSkill}
-              attachedSkills={attachments.filter(a => a.type === 'skill').map(a => a.name)}
+              onAttachToolGroup={handleAttachToolGroup}
+              attachedToolGroups={attachments.filter(a => a.type === 'tool_group').map(a => a.name)}
               onClose={() => setShowAttachPanel(false)}
             />
           )}
@@ -1073,6 +1074,19 @@ function progressLabelForStage(
 function extractGroupText(items: UIMessage[]): string {
   const parts: string[] = []
   for (const m of items) {
+    const messageParts = messagePartsForRender(m)
+    if (messageParts.length > 0) {
+      for (const part of messageParts) {
+        if (part.type === 'text' && part.text?.trim()) {
+          parts.push(part.text.trim())
+        } else if (part.type === 'code' && part.text?.trim()) {
+          parts.push('```python\n' + part.text.trim() + '\n```')
+        } else if (part.type === 'tool_output' && part.text?.trim()) {
+          parts.push(part.text.trim())
+        }
+      }
+      continue
+    }
     const say = m.say
     if (say === 'text' || say === 'completion_result' || say === 'user_feedback') {
       if (m.text?.trim()) parts.push(m.text.trim())
@@ -1089,6 +1103,11 @@ function extractGroupText(items: UIMessage[]): string {
 function extractSearchText(items: UIMessage[]): string {
   const parts: string[] = []
   for (const m of items) {
+    for (const part of messagePartsForRender(m)) {
+      if (part.text) parts.push(part.text)
+      if (part.tool) parts.push(part.tool)
+      if (part.data) parts.push(safeJsonForSearch(part.data))
+    }
     if (m.text) parts.push(m.text)
     if (m.toolName) parts.push(m.toolName)
     if (m.progressDetail) parts.push(m.progressDetail)
@@ -1126,14 +1145,12 @@ function safeJsonForSearch(value: unknown): string {
 
 function MessageGroup({
   role,
-  runId,
   items,
   onEditUser,
   highlighted = false,
   children,
 }: {
   role: MessageRole
-  runId?: string
   items: UIMessage[]
   onEditUser?: (text: string) => void
   highlighted?: boolean
@@ -1170,8 +1187,6 @@ function MessageGroup({
 
   // assistant：一组里可能有多条子消息（thought / code / code_result / text ...），
   // 全部堆在同一个头像右边，子消息之间留一点竖向间距。
-  // 若整组涉及到过 code 执行（runId 非空），在头像下方挂一个 "Revert" 小按钮，
-  // 一键把 workspace reset 到这次 run 开始前的 git SHA。
   const groupText = extractGroupText(items)
   return (
     <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
@@ -1180,7 +1195,6 @@ function MessageGroup({
           <div className="w-6 h-6 rounded-lg overflow-hidden">
             <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
           </div>
-          {runId && <RevertRunButton runId={runId} />}
         </div>
         <div className="min-w-0 space-y-2.5">
           {children}
@@ -1232,59 +1246,6 @@ function CopyActionButton({ text }: { text: string }) {
       onClick={handleCopy}
       icon={copied ? <Check className="w-3 h-3 text-accent-success" /> : <Copy className="w-3 h-3" />}
     />
-  )
-}
-
-/**
- * Small revert-run button under the assistant avatar.
- *
- * Only rendered when the group has at least one message with a runId
- * (i.e. the agent actually executed code / had a recorded run). It
- * confirms with the user via DialogHost and then calls
- * `runsStore.revertRun(runId)` which shells out to git reset on the
- * backend.
- */
-function RevertRunButton({ runId }: { runId: string }) {
-  const t = useT()
-  const { confirm, alert } = useDialog()
-  const [busy, setBusy] = useState(false)
-
-  const handleClick = useCallback(async () => {
-    if (busy) return
-    const ok = await confirm({
-      title: t.chat.revertRun,
-      message: t.chat.revertMessage,
-      okLabel: t.chat.revertButton,
-      danger: true,
-    })
-    if (!ok) return
-
-    setBusy(true)
-    try {
-      await useRunsStore.getState().revertRun(runId)
-    } catch (err: any) {
-      await alert({
-        title: t.chat.revertFailed,
-        message: err?.message || String(err),
-      })
-    } finally {
-      setBusy(false)
-    }
-  }, [busy, confirm, alert, runId])
-
-  return (
-    <button
-      onClick={handleClick}
-      disabled={busy}
-      className="mt-1 w-5 h-5 rounded flex items-center justify-center text-text-muted/60 hover:text-accent-danger hover:bg-accent-danger/10 transition-colors disabled:opacity-40"
-      title={t.chat.revertTooltip}
-    >
-      {busy ? (
-        <RefreshCw className="w-3 h-3 animate-spin" />
-      ) : (
-        <Undo2 className="w-3 h-3" />
-      )}
-    </button>
   )
 }
 
@@ -1531,14 +1492,14 @@ function ConversationListDropdown({
 function AttachPanel({
   onAttachFile,
   onAttachWorkflow,
-  onAttachSkill,
-  attachedSkills,
+  onAttachToolGroup,
+  attachedToolGroups,
   onClose,
 }: {
   onAttachFile: () => void
   onAttachWorkflow: (entry: { path: string; name: string }) => void
-  onAttachSkill: (name: string, groups: string[]) => void
-  attachedSkills: string[]
+  onAttachToolGroup: (name: string, groups: string[]) => void
+  attachedToolGroups: string[]
   onClose: () => void
 }) {
   const t = useT()
@@ -1616,21 +1577,21 @@ function AttachPanel({
           </>
         )}
 
-        {/* Skills section */}
+        {/* Tool groups section */}
         <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5 mt-1 flex items-center gap-1">
           <Wrench className="w-3 h-3" />
-          Attach Skills
+          {t.chat.attachTools}
         </div>
         <button
-          onClick={() => onAttachSkill('QGIS4+', ['qgis'])}
+          onClick={() => onAttachToolGroup('QGIS4+', ['qgis'])}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedSkills.includes('QGIS4+')
+            attachedToolGroups.includes('QGIS4+')
               ? 'bg-amber-500/10 text-amber-300 ring-1 ring-amber-500/30'
               : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
           }`}
         >
           <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedSkills.includes('QGIS4+')
+            attachedToolGroups.includes('QGIS4+')
               ? 'bg-amber-500/20 ring-amber-500/30'
               : 'bg-amber-500/10 ring-amber-500/20'
           }`}>
@@ -1639,20 +1600,20 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">QGIS4+</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('QGIS4+') ? t.chat.attachedClickDetach : t.chat.qgisMcpCommands}
+              {attachedToolGroups.includes('QGIS4+') ? t.chat.attachedClickDetach : t.chat.qgisMcpCommands}
             </p>
           </div>
         </button>
         <button
-          onClick={() => onAttachSkill('OSM', ['osm'])}
+          onClick={() => onAttachToolGroup('OSM', ['osm'])}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedSkills.includes('OSM')
+            attachedToolGroups.includes('OSM')
               ? 'bg-green-500/10 text-green-300 ring-1 ring-green-500/30'
               : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
           }`}
         >
           <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedSkills.includes('OSM')
+            attachedToolGroups.includes('OSM')
               ? 'bg-green-500/20 ring-green-500/30'
               : 'bg-green-500/10 ring-green-500/20'
           }`}>
@@ -1661,20 +1622,20 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">OSM</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('OSM') ? t.chat.attachedClickDetach : t.chat.osmDataDownload}
+              {attachedToolGroups.includes('OSM') ? t.chat.attachedClickDetach : t.chat.osmDataDownload}
             </p>
           </div>
         </button>
         <button
-          onClick={() => onAttachSkill('DataSources', ['datasource'])}
+          onClick={() => onAttachToolGroup('DataSources', ['datasource'])}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedSkills.includes('DataSources')
+            attachedToolGroups.includes('DataSources')
               ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
               : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
           }`}
         >
           <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedSkills.includes('DataSources')
+            attachedToolGroups.includes('DataSources')
               ? 'bg-cyan-500/20 ring-cyan-500/30'
               : 'bg-cyan-500/10 ring-cyan-500/20'
           }`}>
@@ -1683,7 +1644,7 @@ function AttachPanel({
           <div className="text-left flex-1 min-w-0">
             <p className="text-[12px] font-medium leading-tight">{t.chat.dataSources}</p>
             <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedSkills.includes('DataSources') ? t.chat.attachedClickDetach : t.chat.dataSourcesGuide}
+              {attachedToolGroups.includes('DataSources') ? t.chat.attachedClickDetach : t.chat.dataSourcesGuide}
             </p>
           </div>
         </button>

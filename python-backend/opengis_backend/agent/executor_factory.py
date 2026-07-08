@@ -15,7 +15,7 @@ the agent loop itself:
    Phase 1 installed. Without this, long-running scripts (pip install,
    GNNWR training) look silent to the user.
 
-Both concerns need to know ``SkillContext`` (for the workspace path)
+Both concerns need to know ``ToolContext`` (for the workspace path)
 but nothing else — keeping them out of :mod:`code_agent` lets the agent
 shell stay a thin orchestrator, and lets tests pin the executor-wiring
 contract independently of LLM/tool/prompt plumbing.
@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from opengis_backend.skills.context import SkillContext
+from opengis_backend.tools.context import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,8 @@ def _default_stdout_listener(text: str) -> None:
         pass
 
 
-def resolve_working_dir(ctx: SkillContext) -> Optional[str]:
-    """Pull ``workspace_path`` out of the SkillContext metadata.
+def resolve_working_dir(ctx: ToolContext) -> Optional[str]:
+    """Pull ``workspace_path`` out of the ToolContext metadata.
 
     Returned value is handed straight to ``SubprocessExecutorConfig``;
     ``None`` means "inherit the parent process cwd" which is the
@@ -67,7 +67,7 @@ subprocess default.
 
 
 def build_subprocess_executor(
-    ctx: SkillContext,
+    ctx: ToolContext,
     *,
     exec_timeout: float = DEFAULT_EXEC_TIMEOUT_SEC,
     stdout_listener: Optional[Callable[[str], None]] = None,
@@ -79,7 +79,7 @@ def build_subprocess_executor(
     Parameters
     ----------
     ctx:
-        The per-run SkillContext. Only ``ctx.meta['workspace_path']`` is
+        The per-run ToolContext. Only ``ctx.meta['workspace_path']`` is
         read here; nothing else is touched.
     exec_timeout:
         Seconds allotted to a single ``exec`` round-trip in the child.

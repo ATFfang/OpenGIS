@@ -1,11 +1,10 @@
 """
 GISCodeAgent — the brain of OpenGIS.
 
-This implements the Hybrid CodeAct paradigm:
-- The LLM decides at each step whether to reply with text or code.
-- Code is executed in a real Python subprocess sandbox.
-- Tool calls are *normal Python function calls* — no schema gymnastics.
-- Plain text replies (greetings, explanations) don't require code.
+This implements the OpenGIS function-call agent:
+- The LLM calls structured tools for actions.
+- Python is executed only through the execute_code tool in a subprocess.
+- Plain text replies (greetings, explanations, summaries) are never executed.
 
 v3.1 (2026-04): Replaced smolagents CodeAgent with custom AgentLoop.
 No more smolagents dependency. The agent loop is fully self-contained,
@@ -29,92 +28,68 @@ from opengis_backend.agent.agent_loop import AgentStep
 from opengis_backend.agent.artifacts import ArtifactIndex, artifacts_from_tool_result
 from opengis_backend.agent.context_manager import ContextManager
 from opengis_backend.agent.context_persistence import save_context, load_context
-from opengis_backend.workspace.memory import append as memory_append
+from opengis_backend.agent.event_log import event_to_message_part
 from opengis_backend.agent.events import (
     AgentEvent,
     AgentEventType,
 )
+from opengis_backend.agent.knowledge_extractor import KnowledgeExtractor
 from opengis_backend.agent.llm import LLMConfig
 from opengis_backend.agent.profile import AgentProfile
 from opengis_backend.agent.runner import AgentRunner
 from opengis_backend.agent.script_archive import ScriptArchive
 from opengis_backend.agent.session import AgentSession, SessionKind, SessionStatus, SessionStore
+from opengis_backend.agent.session_coordinator import SessionBusyError, SessionCoordinator
 from opengis_backend.agent.step_recorder import StepRecorder
 from opengis_backend.agent.workflow_factory import build_workflow_loop
 from opengis_backend.agent.workflow_loop import WorkflowDocument
 from opengis_backend.runs import RunArchive
-from opengis_backend.skills.context import (
-    SkillContext,
+from opengis_backend.tools.context import (
+    ToolContext,
     reset_current_context,
     run_async_from_sync,
     set_current_context,
 )
-from opengis_backend.skills.builtin._asset_refresh import notify_asset_refresh
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.tools.builtin._asset_refresh import notify_asset_refresh
+from opengis_backend.tools.registry import ToolRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
 
 
-def _extract_memory(workspace: str, user_message: str, final_answer: str) -> None:
-    """Extract key facts from a completed run and save to project memory.
-
-    Heuristic extraction — no extra LLM call. Extracts:
-    - Task summary (what was asked)
-    - File paths mentioned in the answer
-    - Key numbers/statistics
-    - Brief result summary
-    """
-    import re
-
-    task_summary = (user_message or "").strip()[:200]
-    answer = (final_answer or "").strip()
-
-    if not task_summary:
-        return
-
-    # Extract file paths from the answer
-    path_pattern = re.compile(
-        r"(/[\w./\-]+\.(?:geojson|shp|gpkg|csv|json|tif|tiff|png|jpg|pdf|md))"
-    )
-    paths = list(set(path_pattern.findall(answer)))[:5]
-
-    # Extract key numbers (feature counts, statistics, percentages)
-    number_pattern = re.compile(r"(\d[\d,]+(?:\.\d+)?)\s*(?:条|个|家|features?|rows?|%)")
-    numbers = number_pattern.findall(answer)[:3]
-
-    visual_style_pattern = re.compile(
-        r"(颜色|色彩|分类设色|按类别|类别分|分一下颜色|样式|渲染|符号|图层|color|colour|style|symbol|renderer)",
-        re.IGNORECASE,
-    )
-    durable_task_pattern = re.compile(
-        r"(报告|学术|论文|分析|统计|workflow|工作流|数据|文件|csv|geojson|shp|gpkg|report|analysis)",
-        re.IGNORECASE,
-    )
-    if (
-        len(task_summary) <= 80
-        and visual_style_pattern.search(task_summary)
-        and not durable_task_pattern.search(task_summary)
-        and not paths
-        and not numbers
-    ):
-        logger.debug("Skipping project memory for transient visual styling request")
-        return
-
-    # Build structured entry
-    entry = f"任务: {task_summary}"
-    if paths:
-        entry += f"\n  产出: {', '.join(paths)}"
-    if numbers:
-        entry += f"\n  数据: {', '.join(numbers)}"
-    # Brief result (first meaningful sentence)
-    for sentence in answer.split("。"):
-        s = sentence.strip()
-        if len(s) > 15 and not s.startswith("#"):
-            entry += f"\n  摘要: {s[:150]}"
-            break
-
-    memory_append(workspace, "Run History", entry)
-
 logger = logging.getLogger(__name__)
+
+
+_DISCLOSURE_KEEP_ARG_KEYS = {
+    "path",
+    "file_path",
+    "src",
+    "dst",
+    "layer_id",
+    "name",
+    "query",
+    "url",
+    "workflow_name",
+    "element_id",
+}
+_DISCLOSURE_MAX_ARG_CHARS = 500
+
+
+def _event_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Return UI-safe tool args while preserving execute_code source display."""
+    if name == "execute_code":
+        return args
+    slim: dict[str, Any] = {}
+    for key, value in (args or {}).items():
+        if key not in _DISCLOSURE_KEEP_ARG_KEYS:
+            continue
+        if isinstance(value, str) and len(value) > _DISCLOSURE_MAX_ARG_CHARS:
+            slim[key] = value[:_DISCLOSURE_MAX_ARG_CHARS] + "...(truncated)"
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            slim[key] = value
+        else:
+            slim[key] = str(value)[:_DISCLOSURE_MAX_ARG_CHARS]
+    if not slim and args:
+        slim["_summary"] = f"{len(args)} argument(s) hidden"
+    return slim
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -123,8 +98,8 @@ logger = logging.getLogger(__name__)
 class GISCodeAgent:
     """
     Orchestrator for the OpenGIS agent loop:
-      1. Builds tools from our SkillRegistry
-      2. Installs the per-run SkillContext (for IPC notifications)
+      1. Builds tools from our ToolRegistry
+      2. Installs the per-run ToolContext (for IPC notifications)
       3. Streams events back as AgentEvent
       4. Routes to AgentLoop or WorkflowLoop based on attachments
 
@@ -134,14 +109,14 @@ class GISCodeAgent:
 
     def __init__(
         self,
-        skill_registry: SkillRegistry,
+        tool_registry: ToolRegistry,
         protocol: str = "openai",
         model: str = "gpt-4o",
         api_key: str = "",
         base_url: str = "",
         max_iterations: int = 10,
     ):
-        self.skills = skill_registry
+        self.tool_registry = tool_registry
         self.protocol = protocol
         self.model = model
         self.api_key = api_key
@@ -169,25 +144,25 @@ class GISCodeAgent:
     async def run(
         self,
         user_message: str,
-        context: SkillContext | None = None,
+        context: ToolContext | None = None,
         workflow: WorkflowDocument | None = None,
-        active_skill_groups: list[str] | None = None,
+        active_tool_groups: list[str] | None = None,
         user_instructions: str | None = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         """
         Run the agent on a user message. Yields AgentEvents.
 
         If ``workflow`` is provided, routes to WorkflowLoop (DAG-driven).
-        Otherwise, routes to AgentLoop (free-form Hybrid CodeAct).
+        Otherwise, routes to AgentLoop (free-form function-call chat).
 
         Event flow:
-            [for each code step:]
+            [for each execute_code step:]
                 CODE_BLOCK { step, code, script_path, script_abs_path }
                 CODE_RESULT { step, output, error? }
             STREAM_DELTA (final answer)
             STREAM_END
         """
-        ctx = context or SkillContext()
+        ctx = context or ToolContext()
         workspace = (ctx.meta or {}).get("workspace_path") if ctx else None
         conversation_id = getattr(ctx, "conversation_id", None)
 
@@ -268,11 +243,11 @@ class GISCodeAgent:
             except Exception:
                 logger.debug("initial session persistence failed (non-fatal)", exc_info=True)
 
-        # Wire orchestration deps so the Agent-as-Tool sub-agent skills
+        # Wire orchestration deps so the Agent-as-Tool sub-agent tools
         # (run_subagent / run_subagents) can spin up isolated child loops.
         # They read these back from ctx.meta and reuse build_agent_loop().
         ctx.meta.setdefault("_agent_ref", self)  # for subagent cancel propagation
-        ctx.meta.setdefault("_skill_registry", self.skills)
+        ctx.meta.setdefault("_tool_registry", self.tool_registry)
         ctx.meta.setdefault(
             "_llm_config",
             LLMConfig(
@@ -291,6 +266,21 @@ class GISCodeAgent:
             model=self.model,
             scripts_dir=archive.script_dir,
         )
+        lease_key = conversation_id or session.id
+
+        def _record_event(event: AgentEvent) -> None:
+            try:
+                event_type = event.type.value if isinstance(event.type, AgentEventType) else str(event.type)
+                run_archive.record_event(event_type, event.data)
+                part = event_to_message_part(event)
+                if part is not None:
+                    payload = part.to_dict()
+                    payload.setdefault("run_id", archive.run_id)
+                    if not payload.get("run_id"):
+                        payload["run_id"] = archive.run_id
+                    run_archive.record_message_part(payload)
+            except Exception:
+                logger.debug("event log recording failed (non-fatal)", exc_info=True)
 
         # Pre-run snapshot.
         if ws_ready:
@@ -530,7 +520,8 @@ class GISCodeAgent:
                     type=AgentEventType.TOOL_START,
                     data={
                         "name": name,
-                        "args": args,
+                        "args": _event_tool_args(name, args),
+                        "args_hidden": name != "execute_code" and bool(args),
                         "call_id": call_id,
                         "run_id": archive.run_id,
                     },
@@ -544,7 +535,7 @@ class GISCodeAgent:
             duration_ms: float,
             call_id: str,
             metadata: dict[str, Any] | None = None,
-        ) -> None:
+        ) -> dict[str, Any]:
             args = {}
             if ctx.meta is not None:
                 pending = ctx.meta.get("_tool_call_args")
@@ -655,6 +646,7 @@ class GISCodeAgent:
                         index.append(artifact)
             except Exception:
                 logger.debug("tool call archive recording failed (non-fatal)", exc_info=True)
+            return result_metadata
 
         # ── Route: WorkflowLoop or AgentLoop ──────────────────────
         if workflow is not None:
@@ -671,7 +663,7 @@ class GISCodeAgent:
                     logger.debug("plan_callback notify failed", exc_info=True)
 
             agent_loop, executor = build_workflow_loop(
-                skills=self.skills,
+                tools=self.tool_registry,
                 llm_config=LLMConfig(
                     protocol=self.protocol,
                     model=self.model,
@@ -701,9 +693,9 @@ class GISCodeAgent:
                 len(workflow.nodes),
             )
         else:
-            # Free-form Hybrid CodeAct.
+            # Free-form function-call chat.
             agent_loop, executor = build_agent_loop(
-                skills=self.skills,
+                tools=self.tool_registry,
                 llm_config=LLMConfig(
                     protocol=self.protocol,
                     model=self.model,
@@ -726,7 +718,7 @@ class GISCodeAgent:
                 on_reasoning_promote=_on_reasoning_promote,
                 on_tool_start=_on_tool_start,
                 on_tool_result=_on_tool_result,
-                skill_groups=active_skill_groups,
+                tool_groups=active_tool_groups,
                 user_instructions=user_instructions,
                 agent_profile=agent_profile,
             )
@@ -735,7 +727,23 @@ class GISCodeAgent:
         self.current_executor = executor
         self._current_loop = agent_loop
 
-        # Install context for skills that use get_current_context().
+        try:
+            SessionCoordinator.acquire(lease_key, archive.run_id)
+        except SessionBusyError as e:
+            err = str(e)
+            run_archive.record_event(AgentEventType.ERROR.value, {"error": err, "run_id": archive.run_id})
+            run_archive.close(status="error", error=err)
+            try:
+                executor.cleanup()
+            except Exception:
+                logger.debug("executor cleanup after session busy failed", exc_info=True)
+            self.current_executor = None
+            self._current_loop = None
+            yield AgentEvent(type=AgentEventType.ERROR, data=err)
+            yield AgentEvent(type=AgentEventType.STREAM_END)
+            return
+
+        # Install context for tools that use get_current_context().
         token = set_current_context(ctx)
 
         # Track final state for the archive.
@@ -753,9 +761,9 @@ class GISCodeAgent:
                 # generator from a different context than the one that
                 # installed the token. Cleanup must still clear live runner
                 # refs so later runs do not inherit a stale plan/loop.
-                logger.debug("skill context reset skipped: token belongs to another context")
+                logger.debug("tool context reset skipped: token belongs to another context")
             except Exception:
-                logger.debug("skill context reset failed", exc_info=True)
+                logger.debug("tool context reset failed", exc_info=True)
             finally:
                 try:
                     executor.cleanup()
@@ -770,16 +778,19 @@ class GISCodeAgent:
                     save_context(workspace, conversation_id, shared_context)
                 except Exception:
                     logger.exception("context persistence failed")
-            # Auto-extract key facts into project memory for normal chat only.
-            # Workflow runs are already preserved in the run archive, session
-            # index, and workflow script folder. Writing their summaries into
-            # generic Project Memory makes later short chat turns behave as if
-            # the user wanted to continue the workflow.
-            if workspace and workflow is None and final_state.get("final_answer"):
+            # Extract structured facts / recipes / dataset cards into
+            # MemoryStore. ContextProjector will retrieve only task-relevant
+            # records on future turns instead of injecting all memory.
+            if workspace and final_state.get("final_answer"):
                 try:
-                    _extract_memory(workspace, user_message, final_state["final_answer"])
+                    KnowledgeExtractor(workspace).extract_run(
+                        user_message=user_message,
+                        final_answer=final_state["final_answer"],
+                        run_archive=run_archive,
+                        workflow=workflow.to_dict() if workflow is not None else None,
+                    )
                 except Exception:
-                    logger.debug("memory extraction failed (non-fatal)", exc_info=True)
+                    logger.debug("knowledge extraction failed (non-fatal)", exc_info=True)
             try:
                 status_map = {
                     "success": SessionStatus.SUCCESS,
@@ -815,6 +826,10 @@ class GISCodeAgent:
                 )
             except Exception:
                 logger.exception("run_archive.close failed")
+            try:
+                SessionCoordinator.release(lease_key, archive.run_id)
+            except Exception:
+                logger.debug("session lease release failed", exc_info=True)
 
         runner = AgentRunner(
             max_steps=effective_max_steps,
@@ -834,6 +849,7 @@ class GISCodeAgent:
                 queue=event_queue,
                 on_cleanup=_cleanup,
             ):
+                _record_event(event)
                 # Track terminal state for the archive.
                 if event.type == AgentEventType.ERROR:
                     final_state["status"] = "error"

@@ -16,6 +16,7 @@ import type {
   GeoJSONFeatureCollection,
   MapLayerDefinition,
 } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   type LayerRenderer,
   renderLayerId,
@@ -320,7 +321,7 @@ function defaultPalette(n: number): string[] {
  */
 function sampleNumericField(def: MapLayerDefinition, field: string): number[] {
   if (def.data.kind !== 'vector') return []
-  const fc = def.data.geojson as GeoJSONFeatureCollection
+  const fc = resolveVectorGeoJSON(def.data) as GeoJSONFeatureCollection
   const out: number[] = []
   for (const f of fc.features) {
     const v = (f.properties ?? {})[field]

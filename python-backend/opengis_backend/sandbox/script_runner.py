@@ -3,7 +3,7 @@ ScriptRunner — execute a user-authored Python script in the same
 sandbox the CodeAgent uses.
 
 This is the back-end of the Script Runner panel in the UI. It lets
-the user *bypass the LLM* and invoke skills / rpc.* bridges directly,
+the user *bypass the LLM* and invoke tools / rpc.* bridges directly,
 which is the shortest path for:
 
 * Validating a new skill before teaching the agent to use it.
@@ -15,7 +15,7 @@ Design rules (see MEMORY §"OpenGIS 第 1 号产品定位"):
 
 * Re-use ``SubprocessPythonExecutor`` unchanged. Whatever the agent
   runs, the user script runs in the same box.
-* Re-use ``build_tool_callables`` unchanged. Every ``@skill``
+* Re-use ``build_tool_callables`` unchanged. Every ``@tool``
   function becomes a bare Python callable in the child's globals,
   under its own name. So a user script can just do::
 
@@ -60,13 +60,13 @@ from opengis_backend.agent.executor import (
     SubprocessExecutorError,
     SubprocessPythonExecutor,
 )
-from opengis_backend.skills.context import SkillContext
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.tools.context import ToolContext
+from opengis_backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 
-# Async notify callback, same shape as SkillContext.notify_fn.
+# Async notify callback, same shape as ToolContext.notify_fn.
 NotifyFn = Callable[[str, dict], Awaitable[None]]
 
 
@@ -81,10 +81,10 @@ class ScriptRunner:
 
     def __init__(
         self,
-        skill_registry: SkillRegistry,
+        tool_registry: ToolRegistry,
         notify_fn: Optional[NotifyFn] = None,
     ) -> None:
-        self._skills = skill_registry
+        self._tools = tool_registry
         self._notify_fn = notify_fn
         self._current_executor: Optional[SubprocessPythonExecutor] = None
         self._current_run_id: Optional[str] = None
@@ -144,10 +144,10 @@ class ScriptRunner:
         rid = run_id or f"script_{uuid.uuid4().hex[:12]}"
         self._current_run_id = rid
 
-        # Per-run SkillContext — the same object the agent builds for
-        # its CodeAgent runs. Ctx-aware skills (map display, etc.)
+        # Per-run ToolContext — the same object the agent builds for
+        # its CodeAgent runs. Ctx-aware tools (map display, etc.)
         # will call ctx.notify_fn(...) which hops back onto the ws loop.
-        ctx = SkillContext(
+        ctx = ToolContext(
             notify_fn=self._notify_fn,
             conversation_id=None,
             meta={"workspace_path": workspace_path} if workspace_path else {},
@@ -185,15 +185,15 @@ class ScriptRunner:
 
         started_at = time.monotonic()
         try:
-            # Bind skills → callable stubs inside the child.
-            # The ctx_provider closure is what makes ctx-aware skills
-            # see the *right* SkillContext for THIS run.
+            # Bind tools → callable stubs inside the child.
+            # The ctx_provider closure is what makes ctx-aware tools
+            # see the *right* ToolContext for THIS run.
             #
-            # IMPORTANT: use list_registered() — it returns RegisteredSkill
+            # IMPORTANT: use list_registered() — it returns RegisteredTool
             # records (which carry raw_function + needs_context).
-            # list_all() only gives SkillSchema and breaks the wrapper with
-            # "'SkillSchema' object has no attribute 'schema'".
-            registered = self._skills.list_registered()
+            # list_all() only gives ToolSchema and breaks the wrapper with
+            # "'ToolSchema' object has no attribute 'schema'".
+            registered = self._tools.list_registered()
             tool_dict = build_tool_callables(registered, ctx_provider=lambda: ctx)
 
             # send_tools is synchronous (it does a stdin write + expect).

@@ -18,9 +18,10 @@ describe('Handler registration', () => {
   it('registers expected method count', () => {
     const reg = new HandlerRegistry();
     const names = registerAllHandlers(reg);
-    expect(names.length).toBe(33);
+    expect(names.length).toBe(45);
     // 抽样检查关键 method 在册
     expect(names).toContain('rpc.ui.map.add_layer');
+    expect(names).toContain('rpc.ui.map.dynamic_layer_update');
     expect(names).toContain('rpc.ui.map.add_image_overlay');
     expect(names).toContain('rpc.ui.map.query_features');
     expect(names).toContain('rpc.ui.map.set_basemap_visibility');
@@ -29,6 +30,12 @@ describe('Handler registration', () => {
     expect(names).toContain('rpc.ui.ask.approve_code');
     expect(names).toContain('rpc.ui.fs.list_assets');
     expect(names).toContain('rpc.ui.fs.refresh_assets');
+    expect(names).toContain('rpc.ui.layout.get_state');
+    expect(names).toContain('rpc.ui.layout.add_element');
+    expect(names).toContain('rpc.ui.layout.update_frame');
+    expect(names).toContain('rpc.ui.layout.update_style');
+    expect(names).toContain('rpc.ui.layout.update_map_view');
+    expect(names).toContain('rpc.ui.layout.export');
     expect(names).toContain('rpc.agent.hello');
   });
 

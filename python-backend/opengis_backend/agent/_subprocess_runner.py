@@ -6,7 +6,7 @@ over stdin/stdout using newline-delimited JSON.
 
 Design principles
 -----------------
-1.  The parent owns the Tool functions (they close over SkillContext, etc.).
+1.  The parent owns the Tool functions (they close over ToolContext, etc.).
     The child cannot call them directly. Instead each tool becomes a **stub**
     in the child's namespace that RPC-calls back to the parent over the pipe.
 2.  The child's state persists across ``exec`` calls — globals accumulate,
@@ -361,7 +361,7 @@ class _TeeStdout(io.TextIOBase):
 def _make_local_save_plot():
     """Build a subprocess-local ``save_plot`` that saves the figure in-process.
 
-    The parent's ``save_plot`` skill runs in a *different* process and
+    The parent's ``save_plot`` tool runs in a *different* process and
     therefore cannot see the child's matplotlib figures (``plt.gcf()``
     returns an empty figure there).  This local implementation:
 
@@ -447,13 +447,6 @@ def _build_namespace(tool_names: list[str]) -> dict[str, Any]:
             ns[name] = _make_local_save_plot()
         else:
             ns[name] = _make_tool_stub(name)
-    # final_answer is a no-op stub — legacy LLM code may call it.
-    # It just prints the value so the agent loop sees it as stdout.
-    # It does NOT signal completion or unwind execution.
-    def _final_answer_noop(value: Any = None) -> None:
-        if value is not None:
-            print(str(value))
-    ns["final_answer"] = _final_answer_noop
     return ns
 
 

@@ -1,10 +1,9 @@
 """
-WorkflowLoop — DAG-driven agent loop for workflow execution.
+WorkflowLoop — DAG-driven function-call agent loop for workflow execution.
 
-Unlike the free-form AgentLoop (Hybrid CodeAct), the WorkflowLoop
-forces the LLM to follow a predefined DAG of steps. Each node in the
-DAG becomes a constrained LLM call where the model MUST produce code
-to accomplish that specific step.
+Unlike the free-form AgentLoop, the WorkflowLoop forces the LLM to follow a
+predefined DAG of steps. Each node becomes a constrained LLM call where the
+model must use function tools, and Python must go through ``execute_code``.
 
 Key differences from AgentLoop:
 - Execution order is determined by topological sort of the DAG
@@ -28,10 +27,9 @@ from typing import Any, Callable, Optional
 from opengis_backend.agent.agent_loop import (
     AgentStep, CodeExecResult, StreamingParser,
     LLM_MAX_RETRIES, LLM_BASE_DELAY, LLM_RETRYABLE_EXCEPTIONS,
-    extract_code_block, extract_thought,
 )
 from opengis_backend.agent.context_manager import ContextManager
-from opengis_backend.agent.tool_runtime import ToolRuntime, parse_tool_arguments
+from opengis_backend.agent.tool_runtime import ToolRuntime, parse_tool_arguments, validate_execute_code_payload
 
 logger = logging.getLogger(__name__)
 
@@ -254,15 +252,14 @@ def build_step_prompt(
         parts.append("")
 
     parts.append(
-        "**Instructions**: Write Python code to accomplish this step. "
-        "Use the results from previous steps as needed. "
-        "You may write MULTIPLE code blocks for this step — each will be "
-        "executed and the output fed back to you. Keep writing code until "
-        "the step is FULLY complete (files saved, layers displayed, etc.). "
-        "When this step is done, reply with plain text (no code block) to "
-        "signal completion and summarize what was accomplished. If a "
-        "downstream handoff contract is defined, your final text MUST list "
-        "the concrete handoff values.\n"
+        "**Instructions**: Accomplish this step by calling function tools. "
+        "Use `execute_code` for Python work; do not output Markdown code "
+        "blocks as executable work. Use the results from previous steps as "
+        "needed. Keep calling tools until the step is FULLY complete "
+        "(files saved, layers displayed, etc.). When this step is done, "
+        "reply with plain text to signal completion and summarize what was "
+        "accomplished. If a downstream handoff contract is defined, your "
+        "final text MUST list the concrete handoff values.\n"
     )
 
     parts.append(
@@ -284,11 +281,11 @@ def build_step_prompt(
 
 @dataclass
 class WorkflowLoop:
-    """DAG-driven agent loop for workflow execution.
+    """DAG-driven function-call agent loop for workflow execution.
 
     The LLM is guided step-by-step through a predefined workflow DAG.
-    At each node, the LLM receives a focused prompt and must produce
-    code to accomplish that specific task.
+    At each node, the LLM receives a focused prompt and must call
+    structured tools to accomplish that specific task.
 
     Parameters
     ----------
@@ -298,7 +295,7 @@ class WorkflowLoop:
     executor_call:
         Callable that takes a code string and returns a CodeExecResult.
     system_prompt:
-        The base system prompt (with skill signatures).
+        The base system prompt (with tool signatures).
     workflow:
         The parsed WorkflowDocument to execute.
     max_retries_per_node:
@@ -455,26 +452,17 @@ class WorkflowLoop:
         step_index: int,
         step_prompt: str,
     ) -> str:
-        """Execute a single workflow node with a mini agent loop.
+        """Execute a single workflow node with a mini function-call loop.
 
-        Unlike the previous version that returned on the first successful
-        code execution, this version lets the LLM run **multiple code
-        blocks** within a single node — just like the free-form AgentLoop.
-
-        The node is considered complete when:
-        - The LLM replies with pure text (no code block) — implicit done.
-        - The LLM calls final_answer() in code — explicit done.
-        - The iteration limit is reached.
-
-        This is critical because a single workflow node (e.g. "河网提取")
-        may require multiple code executions: load data → compute → save
-        → display on map.
-
-        Returns the node's accumulated output string.
+        The node may call multiple tools, including multiple ``execute_code``
+        calls. Markdown code fences are never executed. A plain-text response
+        is treated as the node completion summary once the model has either
+        done tool work, explicitly indicates completion, or has received one
+        nudge explaining the function-call contract.
         """
         max_iterations = (node.max_retries or self.max_retries_per_node) * 3
         # Allow more iterations than retries: retries are for errors,
-        # but a node may need multiple successful code blocks.
+        # but a node may need multiple successful tool calls.
 
         # Add the step prompt as a user message.
         self.context.add_user_message(
@@ -485,8 +473,8 @@ class WorkflowLoop:
         error_count = 0
         max_errors = node.max_retries or self.max_retries_per_node
         accumulated_output: list[str] = []
-        nudged = False  # Track whether we've nudged the LLM to write code.
-        sub_step = 0    # Incremented per code execution within this node.
+        nudged = False  # Track whether we've nudged the LLM to call tools.
+        tool_steps = 0
 
         for iteration in range(max_iterations):
             # Check for external interruption.
@@ -559,8 +547,13 @@ class WorkflowLoop:
                     return
                 state = streamed_tool_code.setdefault(
                     tool_index,
-                    {"step": step_index * 100 + tool_index + 1, "length": 0, "open": False},
+                    {"step": step_index * 100 + tool_index + 1, "length": 0, "open": False, "invalid": False},
                 )
+                if state.get("invalid"):
+                    return
+                if validate_execute_code_payload(code):
+                    state["invalid"] = True
+                    return
                 if not state["open"]:
                     code_started["v"] = True
                     if self.on_code_start:
@@ -694,7 +687,7 @@ class WorkflowLoop:
 
                     if self.on_tool_result:
                         try:
-                            self.on_tool_result(
+                            updated_metadata = self.on_tool_result(
                                 tool_name,
                                 result_content,
                                 result_error,
@@ -702,6 +695,8 @@ class WorkflowLoop:
                                 tc_id,
                                 result_metadata,
                             )
+                            if isinstance(updated_metadata, dict) and result_metadata is not None:
+                                result_metadata.update(updated_metadata)
                         except Exception:
                             logger.exception("on_tool_result failed")
 
@@ -712,12 +707,17 @@ class WorkflowLoop:
                                 "\n\n[script] Persisted script path: "
                                 f"{script_path}\n"
                                 "If this code failed or needs refinement, read this file and patch it "
-                                "with edit_file, then rerun the same script instead of creating a "
-                                "near-duplicate script."
+                                "with edit_file, then call run_script_file(script_path=...) instead "
+                                "of creating a near-duplicate script."
                             )
                             result_content = f"{result_content}{persisted_note}"
 
-                    self.context.add_tool_result(tc_id, tool_name, result_content)
+                    self.context.add_tool_result(
+                        tc_id,
+                        tool_name,
+                        result_content,
+                        meta=result_metadata,
+                    )
                     self.context.mark_recent_scope(
                         "workflow",
                         count=1,
@@ -725,156 +725,91 @@ class WorkflowLoop:
                     )
                     self.context.prune_tool_results()
                     accumulated_output.append(f"[{tool_name}] {result_content}")
+                    tool_steps += 1
+
+                    if result_error:
+                        error_count += 1
+                        if error_count >= max_errors:
+                            logger.warning(
+                                "Node %s exhausted tool error budget (%d errors).",
+                                node.id, error_count,
+                            )
+                            full_output = "\n".join(accumulated_output)
+                            error_msg = f"(Step '{node.title}' failed after {error_count} tool errors)"
+                            return (
+                                self._finalize_step(node, step_index, full_output + "\n" + error_msg)
+                                if full_output
+                                else error_msg
+                            )
+                        self.context.add_user_message(
+                            (
+                                f"[System] The tool `{tool_name}` failed with error:\n"
+                                f"```\n{result_error}\n```\n"
+                                "Fix the arguments or patch/rerun the persisted script if this was "
+                                "`execute_code`. Continue with function tools only; do not output "
+                                "Markdown code blocks as executable work.\n"
+                                f"(Error {error_count}/{max_errors})"
+                            ),
+                            meta={"kind": "workflow_tool_error_feedback", "scope": "workflow"},
+                        )
 
                 nudged = False
                 continue
 
-            # Parse response.
-            code_block = extract_code_block(response_text)
-            thought = extract_thought(response_text)
-
-            # If no code block, the LLM considers this node DONE.
-            if code_block is None:
-                # Nudge: if the LLM replies with text instead of code,
-                # give it ONE nudge to write actual code. This catches
-                # both "plan explanation before coding" and "premature
-                # completion after one code block" cases.
-                if not nudged:
-                    nudged = True
-                    logger.info(
-                        "Text-only reply at start of node %s (iteration %d) — nudging to write code.",
-                        node.id, iteration,
-                    )
-                    self.context.add_assistant_message(
-                        response_text,
-                        meta={"kind": "workflow_node_response", "scope": "workflow"},
-                    )
-                    self.context.add_user_message(
-                        "[System] This step is not complete yet. Call an appropriate tool "
-                        "or write a ```python code block to accomplish the task. "
-                        "A plain text reply after this nudge will end this step.\n"
-                        "[系统] 此步骤尚未完成。请调用合适的工具或写 ```python 代码块完成任务。"
-                        "本次提醒后的纯文本回复将结束此步骤。",
-                        meta={"kind": "workflow_nudge", "scope": "workflow"},
-                    )
-                    continue
-
-                # Genuine completion: either after code execution or after nudge.
+            # ── No tool_calls: handle as node completion text ──
+            #
+            # Function-call architecture rule: plain text is never executed.
+            # Python must arrive through the execute_code tool. This removes
+            # the old CodeAct path where Markdown code fences were executed.
+            thought = response_text
+            if not self._should_accept_text_completion(
+                response_text,
+                tool_steps=tool_steps,
+                nudged=nudged,
+                node=node,
+            ):
+                nudged = True
+                logger.info(
+                    "Text-only reply before node %s completed (iteration %d) — nudging to call tools.",
+                    node.id, iteration,
+                )
                 self.context.add_assistant_message(
                     response_text,
                     meta={"kind": "workflow_node_response", "scope": "workflow"},
                 )
-                step = AgentStep(
-                    step_num=step_index,
-                    thought=thought,
-                    is_text_reply=True,
-                    text_reply=response_text,
-                    duration_ms=duration_ms,
+                self.context.add_user_message(
+                    "[System] This workflow step is not complete yet. Call an appropriate "
+                    "function tool to do the work; use `execute_code` for Python. "
+                    "Do not output Markdown code blocks as executable work. If no tool is "
+                    "needed, reply with a concise completion summary that satisfies the "
+                    "downstream handoff contract.\n"
+                    "[系统] 此 workflow 步骤尚未完成。请调用 function tool 完成任务；"
+                    "Python 使用 `execute_code`。不要输出待执行的 Markdown 代码块。"
+                    "如果确实不需要工具，请回复满足下游交付契约的简短完成摘要。",
+                    meta={"kind": "workflow_nudge", "scope": "workflow"},
                 )
-                if self.step_callback:
-                    try:
-                        self.step_callback(step)
-                    except Exception:
-                        logger.exception("step_callback failed")
-                # Return accumulated output + final text.
-                accumulated_output.append(response_text)
-                return self._finalize_step(
-                    node, step_index, "\n".join(accumulated_output),
-                )
+                continue
 
-            # Execute the code block.
-            sub_step += 1
             self.context.add_assistant_message(
                 response_text,
                 meta={"kind": "workflow_node_response", "scope": "workflow"},
             )
-
-            # Notify the UI that code is about to execute.
-            if self.progress_callback:
-                try:
-                    self.progress_callback(
-                        "executing_code",
-                        f"Step {step_index}: {node.title} — executing code...",
-                    )
-                except Exception:
-                    pass
-
-            t1 = time.monotonic()
-            try:
-                result = self.executor_call(code_block)
-            except Exception as e:
-                error_msg = f"{type(e).__name__}: {e}"
-                result = CodeExecResult(error=error_msg)
-            exec_duration_ms = (time.monotonic() - t1) * 1000
-
-            # Build step record. Use a unique step number that accounts
-            # for multiple code executions within the same node.
-            unique_step = step_index * 100 + sub_step
-            output_str = result.logs or str(result.output or "")
             step = AgentStep(
-                step_num=unique_step,
+                step_num=step_index,
                 thought=thought,
-                code=code_block,
-                output=output_str,
-                error=result.error,
-                duration_ms=duration_ms + exec_duration_ms,
+                is_text_reply=True,
+                text_reply=response_text,
+                duration_ms=duration_ms,
             )
-
-            # Fire step callback.
             if self.step_callback:
                 try:
                     self.step_callback(step)
                 except Exception:
                     logger.exception("step_callback failed")
-
-            if result.error is None:
-                # Success — feed the output back to the LLM so it can
-                # continue with the next sub-step of this node.
-                self.context.add_code_output(
-                    step=unique_step,
-                    code=code_block,
-                    output=output_str,
-                    error=None,
-                    meta={"kind": "workflow_code_output", "scope": "workflow"},
-                )
-                accumulated_output.append(output_str)
-                # Do NOT return here — let the LLM decide if more code
-                # is needed for this node.
-            else:
-                # Error — feed back to LLM for retry.
-                error_count += 1
-                self.context.add_code_output(
-                    step=unique_step,
-                    code=code_block,
-                    output=result.logs or "",
-                    error=result.error,
-                    meta={"kind": "workflow_code_output", "scope": "workflow"},
-                )
-                if error_count >= max_errors:
-                    logger.warning(
-                        "Node %s exhausted error budget (%d errors).",
-                        node.id, error_count,
-                    )
-                    full_output = "\n".join(accumulated_output) if accumulated_output else ""
-                    error_msg = f"(Step '{node.title}' failed after {error_count} errors)"
-                    return self._finalize_step(node, step_index, full_output + "\n" + error_msg) if full_output else error_msg
-
-                error_feedback = (
-                    f"The code failed with error:\n"
-                    f"```\n{result.error}\n```\n"
-                    f"Please fix the code and try again. "
-                    f"(Error {error_count}/{max_errors})"
-                )
-                self.context.add_user_message(
-                    error_feedback,
-                    meta={"kind": "workflow_error_feedback", "scope": "workflow"},
-                )
-
-                logger.warning(
-                    "Node %s error %d/%d: %s",
-                    node.id, error_count, max_errors,
-                    result.error[:200],
-                )
+            accumulated_output.append(response_text)
+            return self._finalize_step(
+                node, step_index, "\n".join(accumulated_output),
+            )
 
         # Iteration limit reached for this node.
         logger.warning(
@@ -882,6 +817,52 @@ class WorkflowLoop:
         )
         full_output = "\n".join(accumulated_output) if accumulated_output else ""
         return self._finalize_step(node, step_index, full_output) if full_output else f"(Step '{node.title}' reached iteration limit)"
+
+    def _should_accept_text_completion(
+        self,
+        text: str,
+        *,
+        tool_steps: int,
+        nudged: bool,
+        node: WorkflowNode,
+    ) -> bool:
+        """Conservative completion detector for workflow node text replies."""
+        stripped = (text or "").strip()
+        if not stripped:
+            return False
+        if tool_steps > 0 or nudged:
+            return True
+        if node.node_type in {"output", "decision"}:
+            return True
+
+        lowered = stripped.lower()
+        incomplete_markers = (
+            "i will",
+            "i'll",
+            "next i",
+            "接下来",
+            "下一步",
+            "将会",
+            "需要先",
+            "not complete",
+            "need to call",
+            "need to run",
+        )
+        if any(marker in lowered for marker in incomplete_markers):
+            return False
+
+        completion_markers = (
+            "done",
+            "completed",
+            "finished",
+            "successfully",
+            "已完成",
+            "已经完成",
+            "处理完成",
+            "执行完成",
+            "完成了",
+        )
+        return any(marker in lowered for marker in completion_markers)
 
     def _write_step_output(
         self,

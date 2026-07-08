@@ -14,17 +14,19 @@ from typing import Any, Callable, Optional
 
 from opengis_backend.agent.agent_loop import AgentStep, CodeExecResult
 from opengis_backend.agent.context_manager import ContextManager
+from opengis_backend.agent.context_projector import ContextProjector
 from opengis_backend.agent.executor_factory import build_subprocess_executor
 from opengis_backend.agent.llm import LLMConfig, build_llm_caller
 from opengis_backend.agent.permission import PermissionRuntime
 from opengis_backend.agent.profile import AgentProfile
-from opengis_backend.agent.prompts import OPENGIS_SYSTEM_PROMPT, build_skill_signatures
+from opengis_backend.agent.prompts import OPENGIS_SYSTEM_PROMPT, build_tool_signatures
 from opengis_backend.agent.tool_output import ToolOutputRuntime
 from opengis_backend.agent.tool_runtime import ToolRuntime, build_tool_schemas
-from opengis_backend.agent.tools import build_tool_callables
+from opengis_backend.agent.tools import build_tool_callables, filter_agent_tools
 from opengis_backend.agent.workflow_loop import WorkflowDocument, WorkflowLoop
-from opengis_backend.skills.context import SkillContext
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.tools.context import ToolContext
+from opengis_backend.skills.discovery import UserSkillDiscovery, format_available_skills
+from opengis_backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -36,24 +38,30 @@ _WORKFLOW_SYSTEM_SUFFIX = """
 You are currently executing a structured workflow. Follow these rules:
 1. Focus on the CURRENT STEP only — do not skip ahead or combine steps.
 2. Use results from previous steps when they are provided.
-3. Write clear, focused Python code for each step.
-4. If a step fails, analyze the error and fix your code.
-5. You may write MULTIPLE code blocks within a single step — each will
-   be executed and the output shown to you. Keep writing code until the
-   step is FULLY complete.
-6. When a step is done, reply with PLAIN TEXT (no code block) to signal
-   completion. Summarize what was accomplished in that text reply.
+3. Call function tools to do the work. Use `execute_code` for Python.
+4. If a step fails, analyze the tool/code error and fix the arguments or
+   patch/rerun the persisted script instead of creating near-duplicates.
+5. You may call MULTIPLE tools within a single step. Keep using tools until
+   the step is FULLY complete.
+6. When a step is done, reply with PLAIN TEXT to signal completion.
+   Summarize what was accomplished in that text reply.
 7. IMPORTANT: Save all output files to the workspace directory. If the
    step mentions visualization or map display, call `add_layer(...)`.
 8. Do NOT stop after just loading data — complete the ENTIRE task.
+9. Do NOT output Markdown code blocks as executable work. They will not be
+   executed. Python execution must be a structured `execute_code` tool call.
+10. `execute_code.code` must contain raw executable Python only. Do not put
+    hidden reasoning, strategy narration, tool-planning prose, Markdown fences,
+    `<think>` tags, or long comment monologues in code. If another tool is
+    needed, call that function tool directly in the next action.
 """
 
 
 def build_workflow_loop(
     *,
-    skills: SkillRegistry,
+    tools: ToolRegistry,
     llm_config: LLMConfig,
-    ctx: SkillContext,
+    ctx: ToolContext,
     workflow: WorkflowDocument,
     max_retries_per_node: int = 3,
     step_callback: Optional[Callable[[AgentStep], None]] = None,
@@ -74,12 +82,12 @@ def build_workflow_loop(
 
     Parameters
     ----------
-    skills:
-        The SkillRegistry for tool construction and system-prompt rendering.
+    tools:
+        The ToolRegistry for tool construction and system-prompt rendering.
     llm_config:
         Provider-agnostic LLM config.
     ctx:
-        Per-run SkillContext.
+        Per-run ToolContext.
     workflow:
         The parsed WorkflowDocument to execute.
     max_retries_per_node:
@@ -95,9 +103,10 @@ def build_workflow_loop(
         The executor MUST be cleaned up by the caller after the run.
     """
     profile = agent_profile or AgentProfile.workflow_runner()
-    registered = skills.list_registered()
+    registered = tools.list_registered()
     if profile.tool_groups is not None:
         registered = [s for s in registered if s.schema.group in profile.tool_groups]
+    registered = filter_agent_tools(registered)
 
     # Build tool callables.
     tool_callables = build_tool_callables(registered, ctx_provider=lambda: ctx)
@@ -117,7 +126,7 @@ def build_workflow_loop(
         if run_id:
             payload["run_id"] = run_id
         try:
-            from opengis_backend.skills.context import run_async_from_sync
+            from opengis_backend.tools.context import run_async_from_sync
             run_async_from_sync(ctx.notify("rpc.ui.chat.show_image", payload))
         except Exception as e:
             logger.warning("plot_saved_listener notify failed: %s", e)
@@ -134,18 +143,28 @@ def build_workflow_loop(
     executor.send_tools(tool_callables)
 
     # Compose the system prompt with workflow suffix.
+    # Add workspace info if available.
+    workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
+    user_skills = UserSkillDiscovery(workspace_path=workspace).list()
     base_prompt = OPENGIS_SYSTEM_PROMPT.format(
-        skill_signatures=build_skill_signatures(registered)
+        tool_signatures=build_tool_signatures(registered),
+        available_skills=format_available_skills(user_skills),
     )
 
     # Add workspace info if available.
-    workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
     if workspace:
         base_prompt += (
             f"\n## Workspace\n"
             f"Your current working directory is: {workspace}\n"
             "All relative paths in your code resolve against it.\n"
         )
+        try:
+            current_user_message = str(((getattr(ctx, "meta", None) or {}).get("_current_user_message")) or "")
+            projected = ContextProjector(workspace).project(current_user_message)
+            if projected:
+                base_prompt += f"\n## Retrieved Project Memory\n{projected}\n"
+        except Exception:
+            logger.debug("ContextProjector failed for workflow; continuing without project memory", exc_info=True)
 
     system_prompt = base_prompt + _WORKFLOW_SYSTEM_SUFFIX
     if profile.prompt_suffix:
@@ -174,6 +193,7 @@ def build_workflow_loop(
         progress_callback=progress_callback,
         execution_output_callback=execution_output_callback,
         python_executable=executor.config.python_executable,
+        workspace_path=(getattr(ctx, "meta", None) or {}).get("workspace_path"),
     )
 
     # Build the workflow loop. Reuse the shared conversation context if

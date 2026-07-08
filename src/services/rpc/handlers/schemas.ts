@@ -44,6 +44,44 @@ export const AddLayerFromGeoJsonSchema = z.object({
   visible: z.boolean().optional(),
 });
 
+const DynamicFeatureDiffSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  newGeometry: z.unknown().optional(),
+  removeAllProperties: z.boolean().optional(),
+  removeProperties: z.array(z.string()).optional(),
+  addOrUpdateProperties: z.array(z.object({
+    key: z.string(),
+    value: z.unknown(),
+  })).optional(),
+});
+
+const DynamicSourceDiffSchema = z.object({
+  removeAll: z.boolean().optional(),
+  remove: z.array(z.union([z.string(), z.number()])).optional(),
+  add: z.array(z.unknown()).optional(),
+  // Keep validation permissive here: workers may send either compact patch
+  // objects or full GeoJSON Features. The map handler normalizes both forms.
+  update: z.array(z.union([DynamicFeatureDiffSchema, z.unknown()])).optional(),
+});
+
+export const DynamicLayerUpdateSchema = z.object({
+  mode: z.enum(['full', 'diff']).optional(),
+  layer_id: LayerIdSchema,
+  name: z.string().min(1).optional(),
+  geojson: z.unknown().optional(),
+  diff: DynamicSourceDiffSchema.optional(),
+  bbox: BBoxSchema.optional(),
+  style: LayerStyleSchema.optional(),
+  visible: z.boolean().optional(),
+  worker_id: z.string().optional(),
+  worker_name: z.string().optional(),
+  worker_started_at: z.number().optional(),
+  workspace_path: z.string().optional(),
+  sequence: z.number().int().optional(),
+  schema_changed: z.boolean().optional(),
+  size_bytes: z.number().nonnegative().optional(),
+});
+
 export const AddRasterFromUrlSchema = z.object({
   url: z.string().url(),
   name: z.string().min(1),
@@ -218,6 +256,101 @@ export const QueryFeaturesSchema = z.object({
     })
     .optional(),
   limit: z.number().int().positive().optional(),
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// §1.1ter rpc.ui.layout.* — print/layout composer
+// ─────────────────────────────────────────────────────────────────────
+
+export const LayoutElementTypeSchema = z.enum([
+  'map-frame',
+  'scale-bar',
+  'north-arrow',
+  'legend',
+  'text',
+]);
+
+export const LayoutElementVariantSchema = z.enum([
+  'default',
+  'minimal',
+  'boxed',
+  'alternating',
+  'double-line',
+  'classic',
+  'triangle',
+  'compass',
+  'panel',
+]);
+
+export const LayoutFrameSchema = z.object({
+  x: z.number().min(0).max(100).optional(),
+  y: z.number().min(0).max(100).optional(),
+  width: z.number().min(1).max(100).optional(),
+  height: z.number().min(1).max(100).optional(),
+});
+
+export const LayoutStyleSchema = z.object({
+  variant: LayoutElementVariantSchema.optional(),
+  fillColor: z.string().optional(),
+  strokeColor: z.string().optional(),
+  strokeWidth: z.number().min(0).optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  backgroundColor: z.string().optional(),
+  backgroundOpacity: z.number().min(0).max(1).optional(),
+  borderColor: z.string().optional(),
+  borderWidth: z.number().min(0).optional(),
+  borderRadius: z.number().min(0).optional(),
+  textColor: z.string().optional(),
+  fontSize: z.number().min(1).optional(),
+  fontWeight: z.number().min(100).max(1000).optional(),
+  padding: z.number().min(0).optional(),
+});
+
+export const LayoutMapViewSchema = z.object({
+  x: z.number().min(-250).max(250).optional(),
+  y: z.number().min(-250).max(250).optional(),
+  scale: z.number().min(0.12).max(8).optional(),
+});
+
+export const LayoutSetPageSchema = z.object({
+  preset: z.enum(['a4-landscape', 'a4-portrait', 'letter-landscape', 'screen-16-9', 'screen-4-3', 'square-1-1']).optional(),
+  width_mm: z.number().positive().optional(),
+  height_mm: z.number().positive().optional(),
+  name: z.string().optional(),
+  background: z.string().optional(),
+});
+
+export const LayoutAddElementSchema = z.object({
+  type: LayoutElementTypeSchema,
+  id: z.string().min(1).optional(),
+  label: z.string().optional(),
+  frame: LayoutFrameSchema.optional(),
+});
+
+export const LayoutElementIdSchema = z.object({
+  element_id: z.string().min(1),
+});
+
+export const LayoutUpdateElementFrameSchema = LayoutElementIdSchema.extend({
+  frame: LayoutFrameSchema,
+});
+
+export const LayoutUpdateElementStyleSchema = LayoutElementIdSchema.extend({
+  style: LayoutStyleSchema,
+});
+
+export const LayoutUpdateElementPropsSchema = LayoutElementIdSchema.extend({
+  props: z.record(z.unknown()),
+});
+
+export const LayoutUpdateMapViewSchema = LayoutElementIdSchema.extend({
+  map_view: LayoutMapViewSchema,
+});
+
+export const LayoutExportSchema = z.object({
+  pixel_ratio: z.number().min(1).max(4).optional(),
+  file_name: z.string().optional(),
+  save_path: z.string().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────

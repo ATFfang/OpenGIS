@@ -57,6 +57,7 @@ const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.r', '.ipynb', 
 const TEXT_EXTS = new Set(['.json', '.yaml', '.yml', '.toml', '.xml', '.html', '.css', '.scss', '.sh', '.bash', '.sql', '.md', '.rst', '.txt', '.log', '.ini', '.cfg', '.conf', '.env', '.gitignore', '.editorconfig'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.gif', '.bmp', '.webp'])
 const CSV_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
+const LARGE_LAYER_THRESHOLD_BYTES = 20 * 1024 * 1024
 
 /**
  * Extensions that are openable in the tab viewer in addition to code/text:
@@ -1108,7 +1109,7 @@ async function addFileToMap(
 
   // Binary formats: shapefiles and raster (GeoTIFF) must be read as ArrayBuffer
   const BINARY_EXTS = new Set(['.shp', '.dbf', '.shx', '.prj', '.cpg', '.tif', '.tiff'])
-  if (BINARY_EXTS.has(ext)) {
+  if (BINARY_EXTS.has(ext) || node.size > LARGE_LAYER_THRESHOLD_BYTES) {
     const result = await window.electronAPI.readFileAsBuffer(node.path)
     if (!result.success || !result.buffer) {
       throw new Error(result.error || 'Failed to read file.')

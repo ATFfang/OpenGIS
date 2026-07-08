@@ -13,10 +13,6 @@ Two things live here:
 2. ``EventTranslator`` — a pure mapping from ``AgentEvent`` to the
    canonical ``chat.*`` JSON-RPC tuple ``(method, params)``.
 
-v3.1 (2026-04): Removed smolagents MemoryStep introspection helpers
-(_extract_code, _extract_observations, _extract_error). These are no
-longer needed since our custom AgentStep already has parsed fields.
-The helpers are kept as no-op stubs for backward compatibility.
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +42,9 @@ class AgentEventType(str, Enum):
     CODE_DELTA = "code_delta"          # Streaming chunk of code being written
     CODE_BLOCK_END = "code_block_end"  # Streaming code block finished writing
     CODE_RESULT = "code_result"        # Code block executed; observation
-    TOOL_START = "tool_start"          # Skill execution started
+    TOOL_START = "tool_start"          # Tool execution started
     TOOL_OUTPUT_DELTA = "tool_output_delta"  # Live stdout from a running tool
-    TOOL_RESULT = "tool_result"        # Skill execution finished
+    TOOL_RESULT = "tool_result"        # Tool execution finished
     PROGRESS = "progress"              # Execution progress indicator
     THINKING = "thinking"              # LLM is being called (pre-response indicator)
     TITLE_GENERATED = "title_generated" # Auto-generated conversation title
@@ -60,25 +56,6 @@ class AgentEventType(str, Enum):
 class AgentEvent:
     type: AgentEventType
     data: Any = None
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Legacy MemoryStep introspection stubs (kept for backward compat)
-# ──────────────────────────────────────────────────────────────────────
-
-def _extract_code(step: Any) -> str:
-    """Legacy stub — returns code from an AgentStep or empty string."""
-    return getattr(step, "code", "") or ""
-
-
-def _extract_observations(step: Any) -> str:
-    """Legacy stub — returns output from an AgentStep or empty string."""
-    return getattr(step, "output", "") or ""
-
-
-def _extract_error(step: Any) -> Optional[str]:
-    """Legacy stub — returns error from an AgentStep or None."""
-    return getattr(step, "error", None)
 
 
 # ──────────────────────────────────────────────────────────────────────

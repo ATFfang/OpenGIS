@@ -1,6 +1,7 @@
 """Overpass API & Nominatim client for OpenStreetMap data."""
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -11,44 +12,67 @@ logger = logging.getLogger("opengis.osm")
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org"
 _USER_AGENT = {"User-Agent": "OpenGIS/1.0 (opengis-app)"}
+_DEFAULT_OVERPASS_TIMEOUT = 120
+_DEFAULT_NOMINATIM_TIMEOUT = 45
+_DEFAULT_RETRIES = 2
 
 # Rate-limit: Overpass ~2 req/s, Nominatim ~1 req/s
 _last_overpass_call: float = 0.0
 _last_nominatim_call: float = 0.0
 
 
-def _throttle(interval: float, last_call_attr: str) -> None:
-    """Simple rate limiter."""
-    import osm.overpass as mod
-    last = getattr(mod, last_call_attr)
-    wait = interval - (time.time() - last)
-    if wait > 0:
-        time.sleep(wait)
-
-
-def overpass_query(query: str) -> dict[str, Any]:
+def overpass_query(
+    query: str,
+    *,
+    timeout: int = _DEFAULT_OVERPASS_TIMEOUT,
+    retries: int = 1,
+) -> dict[str, Any]:
     """Run an Overpass QL query and return the JSON response.
 
-    The query should be raw Overpass QL WITHOUT the [out:json] header —
-    it is prepended automatically.
+    The query can be either a raw body or a full Overpass QL query. If the
+    caller already supplied an ``[out:*]`` header, normalize it to JSON rather
+    than prepending a second header.
     """
     global _last_overpass_call
     wait = 1.0 - (time.time() - _last_overpass_call)
     if wait > 0:
         time.sleep(wait)
 
-    full_query = f"[out:json][timeout:60];\n{query}"
+    full_query = _normalize_overpass_query(query)
     logger.info("Overpass query: %s", full_query[:200])
 
-    resp = requests.post(
-        OVERPASS_URL,
-        data={"data": full_query},
-        headers=_USER_AGENT,
-        timeout=120,
-    )
-    _last_overpass_call = time.time()
-    resp.raise_for_status()
-    return resp.json()
+    last_exc: Exception | None = None
+    for attempt in range(max(0, int(retries)) + 1):
+        try:
+            resp = requests.post(
+                OVERPASS_URL,
+                data={"data": full_query},
+                headers=_USER_AGENT,
+                timeout=max(5, int(timeout or _DEFAULT_OVERPASS_TIMEOUT)),
+            )
+            _last_overpass_call = time.time()
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            _last_overpass_call = time.time()
+            last_exc = exc
+            if attempt < max(0, int(retries)):
+                time.sleep(min(2.0 * (attempt + 1), 6.0))
+                continue
+            raise
+    raise RuntimeError(f"Overpass request failed: {last_exc}")
+
+
+def _normalize_overpass_query(query: str) -> str:
+    text = str(query or "").strip()
+    if not text:
+        raise ValueError("Overpass query is empty")
+    if re.match(r"^\[\s*out\s*:", text, flags=re.IGNORECASE):
+        text = re.sub(r"^\[\s*out\s*:[^\]]+\]", "[out:json]", text, count=1, flags=re.IGNORECASE)
+        if not re.search(r"\[\s*timeout\s*:", text, flags=re.IGNORECASE):
+            text = "[timeout:60];\n" + text
+        return text
+    return f"[out:json][timeout:60];\n{text}"
 
 
 def osm_to_geojson(data: dict) -> dict[str, Any]:
@@ -97,7 +121,13 @@ def osm_to_geojson(data: dict) -> dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
-def nominatim_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
+def nominatim_search(
+    query: str,
+    limit: int = 5,
+    *,
+    timeout: int = _DEFAULT_NOMINATIM_TIMEOUT,
+    retries: int = _DEFAULT_RETRIES,
+) -> list[dict[str, Any]]:
     """Search for a place by name using Nominatim.
 
     Returns a list of results with display_name, lat, lon, boundingbox.
@@ -107,20 +137,43 @@ def nominatim_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
     if wait > 0:
         time.sleep(wait)
 
-    resp = requests.get(
-        f"{NOMINATIM_URL}/search",
-        params={"q": query, "format": "json", "limit": limit, "addressdetails": 1},
-        headers=_USER_AGENT,
-        timeout=30,
-    )
-    _last_nominatim_call = time.time()
-    resp.raise_for_status()
-    return resp.json()
+    last_exc: Exception | None = None
+    max_attempts = max(0, int(retries)) + 1
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.get(
+                f"{NOMINATIM_URL}/search",
+                params={"q": query, "format": "json", "limit": limit, "addressdetails": 1},
+                headers=_USER_AGENT,
+                timeout=max(5, int(timeout or _DEFAULT_NOMINATIM_TIMEOUT)),
+            )
+            _last_nominatim_call = time.time()
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            _last_nominatim_call = time.time()
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                logger.warning(
+                    "Nominatim request failed (%s), retrying %d/%d",
+                    type(exc).__name__,
+                    attempt + 1,
+                    max_attempts - 1,
+                )
+                time.sleep(min(2.0 * (attempt + 1), 6.0))
+                continue
+            raise
+    raise RuntimeError(f"Nominatim request failed: {last_exc}")
 
 
-def bbox_from_place(place: str) -> list[float] | None:
+def bbox_from_place(
+    place: str,
+    *,
+    timeout: int = _DEFAULT_NOMINATIM_TIMEOUT,
+    retries: int = _DEFAULT_RETRIES,
+) -> list[float] | None:
     """Get bounding box [south, north, west, east] for a place name."""
-    results = nominatim_search(place, limit=1)
+    results = nominatim_search(place, limit=1, timeout=timeout, retries=retries)
     if not results:
         return None
     bb = results[0].get("boundingbox")

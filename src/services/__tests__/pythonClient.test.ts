@@ -314,4 +314,85 @@ describe('PythonClient inbound message routing (Stage 3.4)', () => {
       errSpy.mockRestore();
     }
   });
+
+  it('coalesces repeated dynamic full frames by layer_id before dispatching', async () => {
+    vi.useFakeTimers();
+    try {
+      stubOpenWs(client);
+      const dispatcher = stubDispatcher();
+      client.setDispatcher(dispatcher);
+      const notifSpy = vi.fn();
+      client.onNotification(notifSpy);
+
+      feed(client, {
+        jsonrpc: '2.0',
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'full', geojson: { type: 'FeatureCollection', features: [] }, sequence: 1 },
+      });
+      feed(client, {
+        jsonrpc: '2.0',
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'full', geojson: { type: 'FeatureCollection', features: [] }, sequence: 2 },
+      });
+      feed(client, {
+        jsonrpc: '2.0',
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'full', geojson: { type: 'FeatureCollection', features: [] }, sequence: 3 },
+      });
+
+      expect(dispatcher.handleNotification).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(dispatcher.handleNotification).toHaveBeenCalledTimes(1);
+      expect(dispatcher.handleNotification.mock.calls[0][0]).toMatchObject({
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', sequence: 3 },
+      });
+      expect(notifSpy).toHaveBeenCalledTimes(1);
+      expect(notifSpy).toHaveBeenCalledWith(
+        'rpc.ui.map.dynamic_layer_update',
+        { layer_id: 'live', mode: 'full', geojson: { type: 'FeatureCollection', features: [] }, sequence: 3 },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves full plus diff dynamic layer bursts in order', async () => {
+    vi.useFakeTimers();
+    try {
+      stubOpenWs(client);
+      const dispatcher = stubDispatcher();
+      client.setDispatcher(dispatcher);
+
+      feed(client, {
+        jsonrpc: '2.0',
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'full', geojson: { type: 'FeatureCollection', features: [] }, sequence: 1 },
+      });
+      feed(client, {
+        jsonrpc: '2.0',
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'diff', diff: { add: [] }, sequence: 2 },
+      });
+
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(dispatcher.handleNotification).toHaveBeenCalledTimes(2);
+      expect(dispatcher.handleNotification.mock.calls[0][0]).toMatchObject({
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'full', sequence: 1 },
+      });
+      expect(dispatcher.handleNotification.mock.calls[1][0]).toMatchObject({
+        method: 'rpc.ui.map.dynamic_layer_update',
+        params: { layer_id: 'live', mode: 'diff', sequence: 2 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

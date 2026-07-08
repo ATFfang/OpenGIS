@@ -1,3 +1,3 @@
-"""QGIS integration — TCP client and unified skill."""
+"""QGIS integration — TCP client and unified tool."""
 
-import opengis_backend.qgis.skills  # noqa: F401 — triggers @skill registration
+import opengis_backend.qgis.tools  # noqa: F401 — triggers @tool registration

@@ -14,7 +14,8 @@ into AgentEvents.
 
 v3.2 (2026-04): Made generic — now drives any object with a
 ``run(user_message: str) -> str`` method. This allows the same Runner
-to drive both AgentLoop (free-form CodeAct) and WorkflowLoop (DAG-driven).
+to drive both AgentLoop (free-form function-call chat) and WorkflowLoop
+(DAG-driven).
 """
 
 from __future__ import annotations

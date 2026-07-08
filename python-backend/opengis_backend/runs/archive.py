@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,9 +43,24 @@ from opengis_backend.agent.script_archive import _app_data_base  # reuse same ro
 
 logger = logging.getLogger(__name__)
 
+STALE_RUNNING_SECONDS = 12 * 60 * 60
+
 
 class RunArchiveError(RuntimeError):
     """Raised only for programmer errors (bad paths). IO failures are logged, not raised."""
+
+
+def _created_at_is_stale(raw: Any, *, max_age_seconds: float) -> bool:
+    if not raw:
+        return False
+    try:
+        text = str(raw)
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > max_age_seconds
+    except Exception:
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -141,6 +156,8 @@ class RunArchive:
         (run_dir / "steps.jsonl").touch()
         (run_dir / "tool_calls.jsonl").touch()
         (run_dir / "artifacts.jsonl").touch()
+        (run_dir / "events.jsonl").touch()
+        (run_dir / "message_parts.jsonl").touch()
         logger.info("RunArchive opened at %s", run_dir)
         return archive
 
@@ -240,6 +257,32 @@ class RunArchive:
         except Exception:
             logger.exception("record_artifact failed for run=%s", self.run_id)
 
+    def record_event(self, event_type: str, data: Any = None) -> None:
+        """Append one raw agent event to ``events.jsonl``."""
+        entry = {
+            "type": event_type,
+            "data": data,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        }
+        try:
+            with (self.run_dir / "events.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            self._meta["event_count"] = int(self._meta.get("event_count", 0)) + 1
+        except Exception:
+            logger.exception("record_event failed for run=%s", self.run_id)
+
+    def record_message_part(self, part: dict[str, Any]) -> None:
+        """Append one projected message part to ``message_parts.jsonl``."""
+        try:
+            entry = dict(part)
+            entry.setdefault("run_id", self.run_id)
+            entry.setdefault("ts", datetime.now().isoformat(timespec="seconds"))
+            with (self.run_dir / "message_parts.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            self._meta["message_part_count"] = int(self._meta.get("message_part_count", 0)) + 1
+        except Exception:
+            logger.exception("record_message_part failed for run=%s", self.run_id)
+
     def record_session(self, session: dict[str, Any]) -> None:
         """Store the final session snapshot into ``meta.json``."""
         try:
@@ -316,6 +359,14 @@ class RunArchive:
         """Return run-scoped artifact records. Empty on I/O errors."""
         return self._read_jsonl("artifacts.jsonl")
 
+    def read_events(self) -> list[dict]:
+        """Return raw event-sourced run events."""
+        return self._read_jsonl("events.jsonl")
+
+    def read_message_parts(self) -> list[dict]:
+        """Return projected message parts for this run."""
+        return self._read_jsonl("message_parts.jsonl")
+
     def _read_jsonl(self, filename: str) -> list[dict]:
         path = self.run_dir / filename
         if not path.exists():
@@ -364,9 +415,29 @@ class RunArchive:
             except Exception:
                 logger.warning("unreadable meta.json in %s", child)
                 continue
+            cls._reconcile_stale_running_meta(meta_path, meta)
             entries.append(RunIndex.from_meta(meta))
         entries.sort(key=lambda r: r.created_at, reverse=True)
         return entries[: max(1, limit)]
+
+    @staticmethod
+    def _reconcile_stale_running_meta(meta_path: Path, meta: dict[str, Any]) -> None:
+        if meta.get("status") != "running":
+            return
+        reason = ""
+        if meta.get("finished_at"):
+            reason = "Recovered stale running run: finished_at was already set."
+        elif _created_at_is_stale(meta.get("created_at"), max_age_seconds=STALE_RUNNING_SECONDS):
+            reason = "Recovered stale running run: no active backend runner after restart."
+        if not reason:
+            return
+        meta["status"] = "error"
+        meta["error"] = str(meta.get("error") or reason)
+        meta.setdefault("recovered_from_running", True)
+        try:
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            logger.debug("failed to reconcile stale run meta %s", meta_path, exc_info=True)
 
     @classmethod
     def load(cls, workspace_path: Optional[str], run_id: str) -> Optional["RunArchive"]:

@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { AlertCircle, Check, Cpu, ChevronRight, Hourglass, AlertTriangle } from 'lucide-react'
-import type { UIMessage, ApiReqInfo } from '@/types/chat'
+import type { UIMessage, ApiReqInfo, MessagePart } from '@/types/chat'
 import { useT } from '@/i18n'
 import MarkdownBlock from './MarkdownBlock'
 import { ThinkingRow } from './ThinkingRow'
@@ -11,6 +11,7 @@ import PlanRow from './PlanRow'
 import { SubagentRow } from './SubagentRow'
 import { ScreenshotRow } from './ScreenshotRow'
 import { useChatStore } from '@/stores/chatStore'
+import { messagePartsForRender } from '@/services/chatMessageParts'
 
 interface ChatRowProps {
   message: UIMessage
@@ -57,8 +58,21 @@ function markdownBaseDirFor(message: UIMessage): string | undefined {
 const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowProps) => {
   const t = useT()
   const type = message.type === 'ask' ? message.ask : message.say
+  const parts = messagePartsForRender(message)
 
   const handleToggle = () => onToggleExpand(message.ts)
+
+  if (parts.length > 0) {
+    return (
+      <MessagePartsRenderer
+        message={message}
+        parts={parts}
+        isExpanded={isExpanded}
+        onToggleExpand={handleToggle}
+        isLast={isLast}
+      />
+    )
+  }
 
   // API request started — cost/status indicator
   if (type === 'api_req_started') {
@@ -208,6 +222,271 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
 ChatRowContent.displayName = 'ChatRowContent'
 
 // --- Sub-components ---
+
+function MessagePartsRenderer({
+  message,
+  parts,
+  isExpanded,
+  onToggleExpand,
+  isLast,
+}: {
+  message: UIMessage
+  parts: MessagePart[]
+  isExpanded: boolean
+  onToggleExpand: () => void
+  isLast: boolean
+}) {
+  return (
+    <div className="space-y-2">
+      {parts.map((part, index) => (
+        <MessagePartRow
+          key={part.id || `${message.ts}:${index}`}
+          message={message}
+          part={part}
+          isExpanded={isExpanded}
+          onToggleExpand={onToggleExpand}
+          isLast={isLast}
+        />
+      ))}
+    </div>
+  )
+}
+
+function MessagePartRow({
+  message,
+  part,
+  isExpanded,
+  onToggleExpand,
+  isLast,
+}: {
+  message: UIMessage
+  part: MessagePart
+  isExpanded: boolean
+  onToggleExpand: () => void
+  isLast: boolean
+}) {
+  const t = useT()
+  const data = part.data ?? {}
+  const status = part.status
+  const isStreaming = status === 'streaming' || (status === 'running' && part.type === 'reasoning')
+  const partText = part.text ?? ''
+
+  if (part.type === 'text') {
+    if (data.role === 'user') {
+      return (
+        <UserMessageRow
+          message={{
+            ...message,
+            text: partText,
+            images: Array.isArray(data.images) ? data.images as string[] : message.images,
+            files: Array.isArray(data.files) ? data.files as string[] : message.files,
+          }}
+        />
+      )
+    }
+    if (data.kind === 'completion_result') {
+      return <CompletionRow message={{ ...message, text: partText }} />
+    }
+    return (
+      <div className="w-full min-w-0 overflow-hidden">
+        <MarkdownBlock
+          markdown={partText}
+          showCursor={status === 'streaming' || message.partial}
+          baseDir={typeof data.markdownBaseDir === 'string' ? data.markdownBaseDir : markdownBaseDirFor(message)}
+        />
+      </div>
+    )
+  }
+
+  if (part.type === 'reasoning') {
+    const hasText = !!partText.trim()
+    return (
+      <ThinkingRow
+        isExpanded={isStreaming || isExpanded}
+        isStreaming={isStreaming}
+        isVisible={true}
+        onToggle={isStreaming ? undefined : onToggleExpand}
+        reasoningContent={partText}
+        showChevron={!isStreaming || hasText}
+        showTitle={true}
+        title={isStreaming ? `${t.chat.thinkingLabel}...` : t.chat.thoughtLabel}
+      />
+    )
+  }
+
+  if (part.type === 'tool') {
+    return (
+      <ToolCallRow
+        message={toolMessageFromPart(message, part)}
+        isExpanded={isExpanded}
+        onToggleExpand={onToggleExpand}
+      />
+    )
+  }
+
+  if (part.type === 'tool_output') {
+    if (part.tool === 'execute_code' || data.stepNumber != null || data.error != null) {
+      return <CodeResultRow message={codeResultMessageFromPart(message, part)} />
+    }
+    if (!partText.trim()) return <div className="h-px" aria-hidden />
+    return (
+      <div className="ml-[30px] -mt-1">
+        <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
+          <MarkdownBlock markdown={partText} />
+        </div>
+      </div>
+    )
+  }
+
+  if (part.type === 'code') {
+    return (
+      <CodeStepRow
+        message={codeMessageFromPart(message, part)}
+        isExpanded={isExpanded}
+        onToggleExpand={onToggleExpand}
+      />
+    )
+  }
+
+  if (part.type === 'artifact') {
+    if (data.kind === 'image') {
+      return <ImageRow message={artifactMessageFromPart(message, part)} />
+    }
+    if (!partText.trim()) return <div className="h-px" aria-hidden />
+    return <MarkdownBlock markdown={partText} baseDir={markdownBaseDirFor(message)} />
+  }
+
+  if (part.type === 'plan') {
+    return <PlanRow planData={data.planData as UIMessage['planData']} />
+  }
+
+  if (part.type === 'progress') {
+    if (data.kind === 'subagent') {
+      return <SubagentRow data={data.subagentData as UIMessage['subagentData']} />
+    }
+    if (data.kind === 'max_steps_reached') {
+      return (
+        <MaxStepsReachedRow
+          message={{ ...message, maxStepsInfo: data.maxStepsInfo as UIMessage['maxStepsInfo'] }}
+          isLast={isLast}
+        />
+      )
+    }
+    if (status !== 'running' && !message.partial) return <div className="h-px" aria-hidden />
+    return (
+      <ProgressRow
+        message={{
+          ...message,
+          progressStage: typeof data.stage === 'string' ? data.stage : message.progressStage,
+          progressDetail: partText || (typeof data.detail === 'string' ? data.detail : message.progressDetail),
+          partial: status === 'running' || status === 'streaming',
+        }}
+      />
+    )
+  }
+
+  if (part.type === 'approval') {
+    if (data.kind === 'screenshot') {
+      const screenshotData = data.screenshotData as UIMessage['screenshotData']
+      if (!screenshotData) return <div className="h-px" aria-hidden />
+      return (
+        <ScreenshotRow
+          requestId={screenshotData.requestId}
+          savePath={screenshotData.savePath}
+          prompt={screenshotData.prompt}
+        />
+      )
+    }
+    return (
+      <div className="bg-accent-primary/5 border border-accent-primary/15 rounded-xl p-3.5">
+        <div className="flex items-center gap-2 mb-1.5">
+          <ChevronRight className="w-3.5 h-3.5 text-accent-primary" />
+          <span className="text-accent-primary font-semibold text-xs uppercase tracking-wider">{t.chat.questionLabel}</span>
+        </div>
+        <p className="text-sm text-text-primary leading-relaxed">{partText}</p>
+      </div>
+    )
+  }
+
+  if (part.type === 'error') {
+    return <ErrorRow message={{ ...message, text: partText }} />
+  }
+
+  if (part.type === 'turn') {
+    if (data.kind === 'api_req_started') {
+      return <ApiRequestRow info={parseApiReqInfo({ ...message, text: partText })} isLast={isLast} />
+    }
+    return <div className="h-px" aria-hidden />
+  }
+
+  return <div className="h-px" aria-hidden />
+}
+
+function toolMessageFromPart(message: UIMessage, part: MessagePart): UIMessage {
+  const data = part.data ?? {}
+  return {
+    ...message,
+    say: 'tool',
+    text: part.text || valueToString(data.output),
+    toolName: part.tool || message.toolName,
+    toolCallId: part.callId || part.call_id || message.toolCallId,
+    toolArgs: (data.args as Record<string, unknown> | undefined) ?? (data.input as Record<string, unknown> | undefined) ?? message.toolArgs,
+    toolStatus: part.status === 'failed'
+      ? 'failed'
+      : part.status === 'running' || part.status === 'streaming'
+        ? 'running'
+        : 'completed',
+    durationMs: typeof data.durationMs === 'number' ? data.durationMs : message.durationMs,
+  }
+}
+
+function codeMessageFromPart(message: UIMessage, part: MessagePart): UIMessage {
+  const data = part.data ?? {}
+  return {
+    ...message,
+    say: 'code',
+    text: part.text || message.text || '',
+    partial: part.status === 'running' || part.status === 'streaming',
+    stepNumber: typeof data.stepNumber === 'number' ? data.stepNumber : message.stepNumber,
+    scriptPath: typeof data.scriptPath === 'string' ? data.scriptPath : message.scriptPath,
+    scriptAbsPath: typeof data.scriptAbsPath === 'string' ? data.scriptAbsPath : message.scriptAbsPath,
+    runId: part.runId || part.run_id || message.runId,
+  }
+}
+
+function codeResultMessageFromPart(message: UIMessage, part: MessagePart): UIMessage {
+  const data = part.data ?? {}
+  return {
+    ...message,
+    say: 'code_result',
+    text: part.text || valueToString(data.output),
+    stepNumber: typeof data.stepNumber === 'number' ? data.stepNumber : message.stepNumber,
+    codeError: typeof data.error === 'string' ? data.error : message.codeError,
+    durationMs: typeof data.durationMs === 'number' ? data.durationMs : message.durationMs,
+    runId: part.runId || part.run_id || message.runId,
+  }
+}
+
+function artifactMessageFromPart(message: UIMessage, part: MessagePart): UIMessage {
+  const data = part.data ?? {}
+  return {
+    ...message,
+    say: 'image',
+    text: part.text || message.text,
+    images: Array.isArray(data.images) ? data.images as string[] : message.images,
+    files: Array.isArray(data.files) ? data.files as string[] : message.files,
+  }
+}
+
+function valueToString(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
 
 function UserMessageRow({ message }: { message: UIMessage }) {
   return (

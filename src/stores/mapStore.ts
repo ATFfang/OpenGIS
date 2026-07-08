@@ -272,6 +272,8 @@ export const useMapStore = create<MapStore>((set, get) => ({
 import { useAssetStore } from './assetStore'
 import { loadLayers, persistLayers, flushLayers } from '@/services/layerPersistence'
 import { loadMapView, persistMapView, flushMapView } from '@/services/mapViewPersistence'
+import { releaseVectorGeoJSON } from '@/services/geo'
+import { releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // 加载完成前不要把"空图层"写回磁盘，否则会用空数据覆盖已有持久化。
 let _layerPersistReady = false
@@ -279,7 +281,11 @@ let _viewPersistReady = false
 let _isApplyingPersistedView = false
 
 function _releaseLayerResources(layer: MapLayerDefinition | undefined) {
-  if (!layer || layer.data.kind !== 'raster') return
+  if (!layer) return
+  if (layer.data.kind === 'vector') {
+    releaseVectorGeoJSON(layer.data.dataHandle)
+    return
+  }
   const imageUrl = layer.data.imageUrl
   const ext = layer.meta.extension?.toLowerCase()
   const isOwnedGeoTiffBlob =
@@ -293,6 +299,11 @@ function _releaseLayerResources(layer: MapLayerDefinition | undefined) {
     } catch {
       // Best-effort cleanup only.
     }
+    return
+  }
+  const filePath = layer.meta.filePath
+  if (typeof filePath === 'string' && typeof imageUrl === 'string' && imageUrl.startsWith('blob:')) {
+    releaseImageUrl(filePath)
   }
 }
 
@@ -367,6 +378,7 @@ export async function flushMapStateToDisk(
 useMapStore.subscribe((state, prev) => {
   if (state.layers === prev.layers) return
   if (!_layerPersistReady) return
+  if (!_persistableLayersChanged(state.layers, prev.layers)) return
   const wp = useAssetStore.getState().workspacePath
   persistLayers(wp, state.layers)
 })
@@ -405,3 +417,13 @@ setTimeout(() => {
   const wp = useAssetStore.getState().workspacePath
   void _loadLayersForWorkspace(wp)
 }, 100)
+
+function _persistableLayersChanged(
+  nextLayers: MapLayerDefinition[],
+  prevLayers: MapLayerDefinition[],
+): boolean {
+  const next = nextLayers.filter((layer) => !layer.extension && !layer.meta?.dynamic)
+  const prev = prevLayers.filter((layer) => !layer.extension && !layer.meta?.dynamic)
+  if (next.length !== prev.length) return true
+  return next.some((layer, index) => layer !== prev[index])
+}

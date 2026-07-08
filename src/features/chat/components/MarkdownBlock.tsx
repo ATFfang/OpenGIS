@@ -6,7 +6,7 @@ import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { Copy, Check, X, Download } from 'lucide-react'
 import { useChatCodeTheme } from './useChatCodeTheme'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
+import { pathToImageUrl, releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 import 'katex/dist/katex.min.css'
 
 interface MarkdownBlockProps {
@@ -45,20 +45,24 @@ function joinBasePath(baseDir: string, relativePath: string): string {
   return `${root}/${rel}`
 }
 
-async function defaultResolveImageSrc(src: string, baseDir?: string): Promise<string> {
-  if (URL_LIKE_RE.test(src)) return src
-
+function localImagePathFor(src: string, baseDir?: string): string | null {
+  if (URL_LIKE_RE.test(src)) return null
   const localPath = decodeLocalPath(stripFileProtocol(src).trim())
   const isAbsoluteLocal = localPath.startsWith('/') || WINDOWS_ABS_RE.test(localPath)
   if (isAbsoluteLocal && IMAGE_PATH_RE.test(localPath)) {
-    return pathToImageUrl(localPath)
+    return localPath
   }
 
   if (baseDir && IMAGE_PATH_RE.test(localPath)) {
-    return pathToImageUrl(joinBasePath(baseDir, localPath))
+    return joinBasePath(baseDir, localPath)
   }
 
-  return src
+  return null
+}
+
+async function defaultResolveImageSrc(src: string, baseDir?: string): Promise<string> {
+  const localPath = localImagePathFor(src, baseDir)
+  return localPath ? pathToImageUrl(localPath) : src
 }
 
 /**
@@ -66,10 +70,11 @@ async function defaultResolveImageSrc(src: string, baseDir?: string): Promise<st
  * Uses resolveImageSrc to convert a relative path to a Blob URL via
  * Electron IPC, then renders the image.
  */
-function ResolvedImage({ src, alt, resolveImageSrc, onClick }: {
+function ResolvedImage({ src, alt, resolveImageSrc, releasePath, onClick }: {
   src: string
   alt?: string
   resolveImageSrc: (path: string) => Promise<string>
+  releasePath?: string | null
   onClick?: (resolvedSrc: string) => void
 }) {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null)
@@ -77,15 +82,24 @@ function ResolvedImage({ src, alt, resolveImageSrc, onClick }: {
 
   useEffect(() => {
     let cancelled = false
+    let acquired = false
     setResolvedSrc(null)
     setError(null)
     resolveImageSrc(src).then((url) => {
-      if (!cancelled) setResolvedSrc(url)
+      acquired = true
+      if (cancelled) {
+        if (releasePath) releaseImageUrl(releasePath)
+        return
+      }
+      setResolvedSrc(url)
     }).catch((err) => {
       if (!cancelled) setError((err as Error)?.message || 'Image could not be loaded')
     })
-    return () => { cancelled = true }
-  }, [src, resolveImageSrc])
+    return () => {
+      cancelled = true
+      if (acquired && releasePath) releaseImageUrl(releasePath)
+    }
+  }, [src, resolveImageSrc, releasePath])
 
   if (error) {
     return (
@@ -142,11 +156,13 @@ const MarkdownBlock = memo(({ markdown, showCursor, baseDir, resolveImageSrc }: 
                 setLightboxSrc(resolvedSrc)
               }
               if (src && !URL_LIKE_RE.test(src)) {
+                const releasePath = resolveImageSrc ? null : localImagePathFor(src, baseDir)
                 return (
                   <ResolvedImage
                     src={src}
                     alt={alt}
                     resolveImageSrc={resolveImageSrc ?? defaultImageResolver}
+                    releasePath={releasePath}
                     onClick={handleClick}
                   />
                 )

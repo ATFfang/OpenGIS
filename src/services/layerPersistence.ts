@@ -15,7 +15,12 @@
  * image overlay 仍会被写入但重启后 imageUrl 可能失效（已知限制）。
  */
 
-import type { MapLayerDefinition } from '@/services/geo'
+import {
+  makeSampledVectorData,
+  shouldHandleLayer,
+  stripVectorHandle,
+  type MapLayerDefinition,
+} from '@/services/geo'
 
 const LAYERS_FILE = '.opengis/map-layers.json'
 const DEBOUNCE_MS = 1000
@@ -32,9 +37,22 @@ function getOpengisDir(workspacePath: string): string {
   return `${base}/.opengis`
 }
 
-/** 只持久化非扩展托管的图层。 */
+/** 只持久化非扩展托管、非动态运行态的图层。 */
 function serializableLayers(layers: MapLayerDefinition[]): MapLayerDefinition[] {
-  return layers.filter((l) => !l.extension)
+  return layers.filter((l) => !l.extension && !l.meta?.dynamic).map(serializeLayer)
+}
+
+function serializeLayer(layer: MapLayerDefinition): MapLayerDefinition {
+  if (layer.data.kind !== 'vector') return layer
+  const size = layer.meta?.fileSize ?? layer.data.handleSizeBytes ?? 0
+  if (!shouldHandleLayer(size) && !layer.data.dataHandle) return layer
+  const data = layer.data.sampled
+    ? stripVectorHandle(layer.data)
+    : makeSampledVectorData(layer.data, size)
+  return {
+    ...layer,
+    data,
+  }
 }
 
 /**

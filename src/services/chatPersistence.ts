@@ -13,6 +13,7 @@
 import type { Conversation } from '@/stores/chatStore'
 
 const CONVERSATIONS_DIR = '.opengis/conversations'
+const MAX_PERSISTED_OUTPUT_CHARS = 128 * 1024
 
 // ─── Debounce utility ──────────────────────────────────────────────
 const _pendingWrites = new Map<string, ReturnType<typeof setTimeout>>()
@@ -173,13 +174,14 @@ async function _writeConversation(workspacePath: string, conversation: Conversat
     await window.electronAPI.ensureDirectory(dir)
 
     // Serialize and write
+    const persisted = sanitizeConversationForDisk(conversation)
     const data = JSON.stringify(
       {
-        id: conversation.id,
-        title: conversation.title,
-        messages: conversation.messages,
-        createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt,
+        id: persisted.id,
+        title: persisted.title,
+        messages: persisted.messages,
+        createdAt: persisted.createdAt,
+        updatedAt: persisted.updatedAt,
       },
       null,
       2
@@ -188,5 +190,36 @@ async function _writeConversation(workspacePath: string, conversation: Conversat
     await window.electronAPI.writeFile(filePath, data)
   } catch (e) {
     console.error(`[chatPersistence] Failed to write conversation ${conversation.id}:`, e)
+  }
+}
+
+function truncatePersistedText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const head = Math.floor(maxChars * 0.35)
+  const tail = maxChars - head
+  const omitted = text.length - maxChars
+  return (
+    text.slice(0, head)
+    + `\n\n... [persisted chat output truncated: ${omitted.toLocaleString()} chars omitted] ...\n\n`
+    + text.slice(-tail)
+  )
+}
+
+function sanitizeConversationForDisk(conversation: Conversation): Conversation {
+  return {
+    ...conversation,
+    messages: conversation.messages.map((message) => {
+      if (
+        typeof message.text === 'string'
+        && (message.say === 'tool' || message.say === 'code_result')
+        && message.text.length > MAX_PERSISTED_OUTPUT_CHARS
+      ) {
+        return {
+          ...message,
+          text: truncatePersistedText(message.text, MAX_PERSISTED_OUTPUT_CHARS),
+        }
+      }
+      return message
+    }),
   }
 }

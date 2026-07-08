@@ -24,6 +24,7 @@ import {
   parseGeoTIFF,
 } from './parsers'
 import { getDefaultStyle } from './defaultStyles'
+import { makeHandledVectorData, shouldHandleLayer } from './layerDataRegistry'
 
 /** Supported file extensions and their source types */
 const EXTENSION_MAP: Record<string, DataSourceType> = {
@@ -141,11 +142,13 @@ export async function loadGeoFiles(files: File[]): Promise<MapLayerDefinition[]>
 
       try {
         const parsedData = await parseShapefile(componentFiles, baseName)
+        const totalSize = Array.from(componentFiles.values())
+          .reduce((sum, buffer) => sum + buffer.byteLength, 0)
         const meta: DataSourceMeta = {
           fileName: `${baseName}.shp`,
           extension: '.shp',
           sourceType: 'shapefile',
-          fileSize: componentFiles.get(`${baseName}.shp`)!.byteLength,
+          fileSize: totalSize,
         }
         results.push(buildLayerDefinition(baseName, meta, parsedData))
       } catch (err) {
@@ -193,13 +196,21 @@ function buildLayerDefinition(
         strokeWidth: 0,
       }
 
+  const id = uuidv4()
+  const finalData = data.kind === 'vector' && shouldHandleLayer(meta.fileSize)
+    ? makeHandledVectorData(data, {
+        handleId: `vector:${id}`,
+        sizeBytes: meta.fileSize,
+      })
+    : data
+
   return {
-    id: uuidv4(),
+    id,
     name,
     sourceType: meta.sourceType,
     visible: true,
     style,
-    data,
+    data: finalData,
     meta,
     addedAt: Date.now(),
   }

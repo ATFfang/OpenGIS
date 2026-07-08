@@ -1,24 +1,20 @@
-"""Agent Loop — hybrid tool-calling + CodeAct architecture.
+"""Agent Loop — function-call-first architecture.
 
 The LLM can respond in two ways at each step:
 1. **Tool calls** (primary): structured function calls executed directly.
-2. **Code blocks** (fallback): ```python``` fences executed in sandbox.
+2. **Text replies**: final answer or a short nudge target after tool work.
 
 Termination:
 - Tool calls → loop continues until LLM stops calling tools (finish_reason="stop")
-- Pure text reply → treated as final answer
-- Tool calling → loop continues until LLM stops calling tools
+- Text reply → treated as final answer
 - Max steps exceeded → LLM summarization
-- Claude Code: hybrid text/code agent loop with context compression
-- OpenHands/OpenDevin: CodeAct + browsing in a sandboxed environment
+- OpenCode-style: function-call tools with bounded tool output and context compression
 """
 
 from __future__ import annotations
 
 import logging
-import ast
 import random
-import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -28,8 +24,8 @@ from opengis_backend.agent.context_manager import ContextManager
 from opengis_backend.agent.tool_runtime import (
     ToolRuntime,
     parse_tool_arguments,
+    validate_execute_code_payload,
 )
-from opengis_backend.agent.permission import PermissionAction
 from opengis_backend.constants import (  # noqa: E402 module-level import
     DEFAULT_MAX_ITERATIONS,
     AGENT_LOOP_SAFETY_MULTIPLIER,
@@ -86,82 +82,6 @@ except ImportError:
     pass
 
 # ─────────────────────────────────────────────────────────────────────
-# Code block extraction
-# ─────────────────────────────────────────────────────────────────────
-
-# We execute only explicit Python fences. Older prompts sometimes emitted
-# bare fences, so those are accepted only when the body parses like real
-# Python. Non-Python fences (text/mermaid/json/etc.) must remain text.
-_PY_CODE_FENCE_RE = re.compile(
-    r"```(?:python|py)\s*\n(.*?)```",
-    re.IGNORECASE | re.DOTALL,
-)
-_BARE_CODE_FENCE_RE = re.compile(
-    r"```\s*\n(.*?)```",
-    re.DOTALL,
-)
-_ANY_CODE_FENCE_RE = re.compile(
-    r"```\w*\s*\n(.*?)```",
-    re.DOTALL,
-)
-_CODE_TAG_RE = re.compile(
-    r"<code>\s*\n?(.*?)</code>",
-    re.DOTALL,
-)
-
-
-def _looks_like_python_code(code: str) -> bool:
-    """Return True only for code-shaped Python, not arbitrary fenced text."""
-    text = (code or "").strip()
-    if not text:
-        return False
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return False
-    if not tree.body:
-        return False
-    # A lone name/string/number parses as Python but is usually prose or
-    # a markdown formatting accident. Calls, assignments, imports, control
-    # flow, etc. are code-shaped enough to execute.
-    if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
-        value = tree.body[0].value
-        if isinstance(value, (ast.Name, ast.Constant)):
-            return False
-    return True
-
-
-def extract_code_block(text: str) -> Optional[str]:
-    """Extract the first Python code block from LLM output.
-
-    Only explicit ```python/```py fences are trusted. Bare fences are a
-    compatibility fallback and must parse like Python. This prevents final
-    answers, diagrams, layer trees, mermaid blocks, and JSON snippets from
-    being executed by the legacy CodeAct fallback.
-    """
-    m = _PY_CODE_FENCE_RE.search(text)
-    if m:
-        return m.group(1).strip()
-    m = _BARE_CODE_FENCE_RE.search(text)
-    if m:
-        candidate = m.group(1).strip()
-        return candidate if _looks_like_python_code(candidate) else None
-    m = _CODE_TAG_RE.search(text)
-    if m:
-        candidate = m.group(1).strip()
-        return candidate if _looks_like_python_code(candidate) else None
-    return None
-
-
-def extract_thought(text: str) -> str:
-    """Extract the 'thought' portion -- everything before the code block."""
-    # Remove code blocks to get the thought text.
-    cleaned = _ANY_CODE_FENCE_RE.sub("", text)
-    cleaned = _CODE_TAG_RE.sub("", cleaned)
-    return cleaned.strip()
-
-
-# ─────────────────────────────────────────────────────────────────────
 # Streaming parser — splits token deltas into thought vs code as they arrive
 # ─────────────────────────────────────────────────────────────────────
 
@@ -179,7 +99,8 @@ class StreamingParser:
     """State machine that classifies incoming LLM text as thought or code.
 
     The LLM's response is a single text stream that may contain at most
-    one ```` ```python ... ``` ```` block (per CodeAct conventions).
+    one ```` ```python ... ``` ```` block while the execute_code tool
+    arguments are being streamed.
     We feed each chunk in and emit:
 
     - ``on_thought_delta(text)`` — text outside fences
@@ -428,7 +349,7 @@ class StreamingParser:
 
 @dataclass
 class CodeExecResult:
-    """Result of executing a code block in the subprocess."""
+    """Result of executing Python through the subprocess executor."""
     output: Any = None
     logs: str = ""
     error: Optional[str] = None
@@ -457,16 +378,16 @@ class AgentStep:
 
 @dataclass
 class AgentLoop:
-    """Custom agent loop implementing Hybrid CodeAct.
+    """Custom agent loop implementing function-call tool use.
 
-    The LLM decides at each step whether to respond with text or code.
-    Code is executed in the subprocess sandbox; results feed back as
-    observations for the next step.
+    The LLM decides at each step whether to call a structured tool or reply
+    with text. Python is executed only through the ``execute_code`` tool;
+    Markdown code fences in assistant text are never executed.
 
     Termination uses a layered "nudge" strategy:
     - Tool calling → loop continues until LLM stops calling tools
-    - Pure text reply at code_steps==0 -> immediate exit (conversation)
-    - Pure text reply at code_steps>0 -> nudge once, then accept
+    - Text reply at code_steps==0 -> immediate exit (conversation)
+    - Text reply at code_steps>0 -> nudge once if it does not look complete
     - No extra LLM self-evaluation call (at most one nudge)
 
     Parameters
@@ -479,7 +400,7 @@ class AgentLoop:
         Callable that takes a code string and returns a CodeExecResult.
         Wraps the SubprocessPythonExecutor.
     system_prompt:
-        The full system prompt (with skill signatures baked in).
+        The full system prompt (with tool signatures baked in).
     max_steps:
         Hard cap on reasoning steps. After this many code executions,
         the loop stops and returns a best-effort summary.
@@ -592,9 +513,7 @@ class AgentLoop:
             #   - the on_code_* UI callbacks (text inside ```python```)
             #
             # The full assembled string is still returned by llm_call for
-            # the regex-based extract_code_block fallback below — that
-            # way if the parser ever misclassifies something, the
-            # agent's behaviour is unchanged.
+            # context and final text handling.
             tentative_step = code_steps + 1
             code_started = {"v": False}
             # Each LLM call starts with a fresh reasoning round; if the
@@ -684,8 +603,13 @@ class AgentLoop:
                     return
                 state = streamed_tool_code.setdefault(
                     tool_index,
-                    {"step": tentative_step + tool_index, "length": 0, "open": False},
+                    {"step": tentative_step + tool_index, "length": 0, "open": False, "invalid": False},
                 )
+                if state.get("invalid"):
+                    return
+                if validate_execute_code_payload(code):
+                    state["invalid"] = True
+                    return
                 if not state["open"]:
                     code_started["v"] = True
                     _close_reasoning_if_open()
@@ -841,7 +765,7 @@ class AgentLoop:
 
                     if self.on_tool_result:
                         try:
-                            self.on_tool_result(
+                            updated_metadata = self.on_tool_result(
                                 tool_name,
                                 result_content,
                                 result_error,
@@ -849,6 +773,8 @@ class AgentLoop:
                                 tc_id,
                                 result_metadata,
                             )
+                            if isinstance(updated_metadata, dict):
+                                result_metadata.update(updated_metadata)
                         except Exception:
                             logger.exception("on_tool_result failed")
 
@@ -859,13 +785,18 @@ class AgentLoop:
                                 "\n\n[script] Persisted script path: "
                                 f"{script_path}\n"
                                 "If this code failed or needs refinement, read this file and patch it "
-                                "with edit_file, then rerun the same script instead of creating a "
-                                "near-duplicate script."
+                                "with edit_file, then call run_script_file(script_path=...) instead "
+                                "of creating a near-duplicate script."
                             )
                             result_content = f"{result_content}{persisted_note}"
 
                     # Store tool result in context
-                    self.context.add_tool_result(tc_id, tool_name, result_content)
+                    self.context.add_tool_result(
+                        tc_id,
+                        tool_name,
+                        result_content,
+                        meta=result_metadata,
+                    )
                     self.context.prune_tool_results()
 
                 code_steps += max(1, len(tool_calls))
@@ -875,215 +806,65 @@ class AgentLoop:
                 continue  # Let LLM see the tool results
 
             # ── No tool_calls: handle as text response ──
-
-            # 3. Parse response: extract thought + code block.
+            #
+            # Function-call architecture rule: plain text is never executed.
+            # Custom Python must arrive through the execute_code tool. This
+            # removes the unsafe path where a Markdown code fence in
+            # the assistant reply could accidentally run as Python.
             response = response_text
-            code_block = extract_code_block(response)
-            thought = extract_thought(response)
+            thought = response
 
-            # DEBUG: log LLM response details
-            _has_code = code_block is not None
-            logger.info("LLM response: %d chars, code=%s", len(response) if response else 0, _has_code)
+            logger.info("LLM text response: %d chars", len(response) if response else 0)
             if response:
                 logger.debug("[AGENT] LLM response preview: %.300s", response)
-            if code_block:
-                logger.debug("[AGENT] Code block (%d chars):\n%.2000s", len(code_block), code_block)
 
-            # 4a. Pure text reply -- no code block.
-            #
-            # Termination strategy (layered):
-            #   - code_steps == 0: Simple conversation / greeting. The LLM
-            #     chose not to write code at all -> trust it, exit immediately.
-            #   - code_steps > 0: The agent is mid-task. A text-only reply
-            #     is likely an accidental pause (LLM explaining next steps
-            #     instead of writing code). We give it ONE nudge to continue.
-            #     If it replies with text again, accept that as completion.
-            #   - No extra LLM self-evaluation call -- at most one nudge.
-            if code_block is None:
-                # Mid-task nudge: if we've already executed code and haven't
-                # nudged yet this turn, push the LLM to continue or finish
-                # explicitly. This prevents premature termination when the
-                # LLM emits "Next I will..." without a code block.
-                if code_steps > 0 and self._looks_like_completion(response):
-                    logger.info(
-                        "Text-only completion after %d tool/code steps -- accepting without nudge.",
-                        code_steps,
-                    )
-                elif code_steps > 0 and not getattr(self, '_nudged_this_turn', False):
-                    self._nudged_this_turn = True
-                    logger.info(
-                        "Text-only reply mid-task (code_steps=%d) -- nudging LLM to continue.",
-                        code_steps,
-                    )
-                    # Close reasoning bubble for this intermediate text.
-                    _close_reasoning_if_open()
-                    self.context.add_assistant_message(response)
-                    self.context.add_user_message(
-                        "[System] You are mid-task. Either call a tool "
-                        "to continue, or reply with a summary to finish.\n"
-                        "[系统] 任务尚未完成。请调用工具继续，或回复总结结束任务。"
-                    )
-                    continue
-
-                # Genuine completion: either first-turn text or post-nudge text.
-                self._nudged_this_turn = False  # Reset for next run.
-                # No code arrived this round -> the streamed reasoning IS
-                # the final answer. Ask the UI to convert the reasoning
-                # bubble into a normal text bubble.
-                if reasoning_open["v"] and self.on_reasoning_promote:
-                    try:
-                        self.on_reasoning_promote(current_round["id"])
-                    except Exception:
-                        logger.exception("on_reasoning_promote failed")
-                    reasoning_open["v"] = False
-                self.context.add_assistant_message(response)
-                step = AgentStep(
-                    step_num=code_steps + 1,
-                    thought=thought,
-                    is_text_reply=True,
-                    text_reply=response,
-                    duration_ms=duration_ms,
-                )
-                if self.step_callback:
-                    try:
-                        self.step_callback(step)
-                    except Exception:
-                        logger.exception("step_callback failed")
-
+            if code_steps > 0 and self._looks_like_completion(response):
                 logger.info(
-                    "Pure text reply after %d code steps -- treating as task complete.",
+                    "Text completion after %d tool/code steps -- accepting without nudge.",
                     code_steps,
                 )
-                return response
-
-            # 4b. Code block found -> execute.
-            code_steps += 1
-            # Do not reset _nudged_this_turn here; one nudge per user turn is
-            # enough and prevents scope creep after successful tool work.
-            # If the LLM wrote some text *after* the code fence (post-code
-            # thought / explanation), close that reasoning bubble too \u2014
-            # we don't promote it because the round did contain code.
-            _close_reasoning_if_open()
-            self.context.add_assistant_message(response)
-
-            permission_runtime = getattr(self.tool_runtime, "permission_runtime", None)
-            enforce_permissions = bool(
-                permission_runtime is not None
-                and getattr(permission_runtime.policy, "enforce", False)
-            )
-            if permission_runtime is not None:
-                decision = permission_runtime.evaluate("execute_code", {"code": code_block})
-                if enforce_permissions and decision.action != PermissionAction.ALLOW:
-                    error_msg = decision.reason or decision.action.value
-                    logger.info(
-                        "Code block execution blocked by permission policy: %s (%s)",
-                        decision.action.value,
-                        error_msg,
-                    )
-                    step = AgentStep(
-                        step_num=code_steps,
-                        thought=thought,
-                        code=code_block,
-                        output="",
-                        error=error_msg,
-                        duration_ms=duration_ms,
-                    )
-                    if self.step_callback:
-                        try:
-                            self.step_callback(step)
-                        except Exception:
-                            logger.exception("step_callback failed")
-                    self.context.add_code_output(
-                        step=code_steps,
-                        code=code_block,
-                        output="",
-                        error=error_msg,
-                    )
-                    continue
-
-            # Auto-install missing packages before execution.
-            try:
-                from opengis_backend.agent.auto_install import auto_install_missing
-                auto_install_missing(
-                    code_block,
-                    python_executable=None,  # uses sys.executable (same as subprocess)
-                    progress_callback=self.progress_callback,
-                    permission_runtime=permission_runtime,
+            elif code_steps > 0 and not getattr(self, '_nudged_this_turn', False):
+                self._nudged_this_turn = True
+                logger.info(
+                    "Text reply mid-task (code_steps=%d) -- nudging LLM to continue.",
+                    code_steps,
                 )
-            except Exception:
-                logger.warning("auto_install check failed (non-fatal), code execution may fail if packages are missing", exc_info=True)
+                _close_reasoning_if_open()
+                self.context.add_assistant_message(response)
+                self.context.add_user_message(
+                    "[System] You are mid-task. Call a function tool to continue "
+                    "(use execute_code for Python), or reply with a concise summary to finish.\n"
+                    "[系统] 任务尚未完成。请调用 function tool 继续（Python 使用 execute_code），"
+                    "或回复简短总结结束任务。不要输出待执行的 Markdown 代码块。"
+                )
+                continue
 
-            # Notify the UI that code is about to execute.
-            if self.progress_callback:
+            self._nudged_this_turn = False
+            if reasoning_open["v"] and self.on_reasoning_promote:
                 try:
-                    self.progress_callback(
-                        "executing_code",
-                        f"Executing code (step {code_steps})...",
-                    )
+                    self.on_reasoning_promote(current_round["id"])
                 except Exception:
-                    pass
-
-            t1 = time.monotonic()
-            logger.debug("[AGENT] CODE EXEC START step=%d, _interrupted=%s, code_len=%d",
-                        code_steps, self._interrupted, len(code_block))
-            try:
-                result = self.executor_call(code_block)
-            except Exception as e:
-                # Executor-level failure (child died, timeout, etc.)
-                error_msg = f"{type(e).__name__}: {e}"
-                logger.debug("[AGENT] CODE EXEC EXCEPTION: %s, _interrupted=%s", error_msg, self._interrupted)
-                result = CodeExecResult(error=error_msg)
-            exec_duration_ms = (time.monotonic() - t1) * 1000
-            logger.debug("[AGENT] CODE EXEC END step=%d, duration=%.0fms, error=%s, _interrupted=%s",
-                        code_steps, exec_duration_ms, result.error is not None, self._interrupted)
-
-            # DEBUG: log execution output
-            if result.error:
-                logger.warning("Step %d error: %.500s", code_steps, result.error)
-            _output = result.logs or str(result.output or "")
-            if _output:
-                logger.debug("[AGENT] Step %d output (%d chars):\n%.2000s", code_steps, len(_output), _output)
-
-            # Build the step record.
+                    logger.exception("on_reasoning_promote failed")
+                reasoning_open["v"] = False
+            self.context.add_assistant_message(response)
             step = AgentStep(
-                step_num=code_steps,
+                step_num=code_steps + 1,
                 thought=thought,
-                code=code_block,
-                output=result.logs or str(result.output or ""),
-                error=result.error,
-                duration_ms=duration_ms + exec_duration_ms,
+                is_text_reply=True,
+                text_reply=response,
+                duration_ms=duration_ms,
             )
-
-            # Fire step callback (feeds StepRecorder -> events).
             if self.step_callback:
                 try:
                     self.step_callback(step)
                 except Exception:
                     logger.exception("step_callback failed")
 
-            # Add observation to context.
-            # Detect skill calls so the context manager can flag this
-            # tool result as protected (never pruned). Skills carry
-            # artifacts (layer ids, file paths, snapshot ids) the agent
-            # references many turns later.
-            # Detect skill calls at word boundary to avoid false positives
-            # from comments or strings containing "skill(".
-            tool_name = "skill" if re.search(r'\bskill\s*\(', code_block or "") else None
-            self.context.add_code_output(
-                step=code_steps,
-                code=code_block,
-                output=result.logs or str(result.output or ""),
-                error=result.error,
-                tool_name=tool_name,
+            logger.info(
+                "Text reply after %d tool/code steps -- treating as task complete.",
+                code_steps,
             )
-
-            # Context compression is now checked at the top of the loop
-            # (step 0) before every LLM call, so no per-step check is
-            # needed here.
-
-            # Step limit check.
-            if code_steps >= self.max_steps:
-                return self._generate_max_steps_summary(code_steps)
+            return response
 
         # Should never reach here, but safety net.
         return self._generate_max_steps_summary(code_steps)
@@ -1160,6 +941,4 @@ __all__ = [
     "AgentStep",
     "CodeExecResult",
     "StreamingParser",
-    "extract_code_block",
-    "extract_thought",
 ]

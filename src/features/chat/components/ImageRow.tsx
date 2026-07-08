@@ -3,15 +3,15 @@ import { MapPin, Maximize2, X, Check, Loader2, ImageOff } from 'lucide-react'
 import type { UIMessage } from '@/types/chat'
 import { useMapStore } from '@/stores/mapStore'
 import type { PinnedImage } from '@/features/map/PinnedImagePanel'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
+import { pathToImageUrl, releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 interface ImageRowProps {
   message: UIMessage
 }
 
-/**
+ /**
  * ImageRow — renders an inline image (matplotlib plot etc.) emitted by
- * the backend `save_plot` skill via `rpc.ui.chat.show_image`.
+ * the backend `save_plot` tool via `rpc.ui.chat.show_image`.
  *
  * Wire-up:
  *   - `message.images[0]` is the Blob URL the chat handler created from
@@ -35,10 +35,19 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
   useEffect(() => {
     if (!path) return
     let cancelled = false
+    let acquired = false
     pathToImageUrl(path).then((url) => {
-      if (!cancelled) setResolvedUrl(url)
+      acquired = true
+      if (cancelled) {
+        releaseImageUrl(path)
+        return
+      }
+      setResolvedUrl(url)
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (acquired) releaseImageUrl(path)
+    }
   }, [path])
 
   const url = resolvedUrl

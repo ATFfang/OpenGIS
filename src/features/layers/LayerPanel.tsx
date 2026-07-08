@@ -309,14 +309,13 @@ function LayerItem({
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  const featureCount = layer.data.kind === 'vector' ? layer.data.featureCount : 0
   const geometryType = layer.data.kind === 'vector' ? layer.data.geometryType : 'Raster'
   // Determine geometry-based type (independent of renderType, so graduated/categorized still know the geometry)
   const isPointGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Point' || layer.data.geometryType === 'MultiPoint')
   const isFillGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Polygon' || layer.data.geometryType === 'MultiPolygon')
   const isClassified = layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized'
   // For StylePanel compatibility
-  const isPointLayer = layer.style.renderType === 'circle'
+  const isPointLayer = layer.style.renderType === 'circle' || layer.style.renderType === 'symbol'
   const isFillLayer = layer.style.renderType === 'fill'
 
   const handleRowDragStart = useCallback(
@@ -519,8 +518,6 @@ function LayerItem({
           {/* Info row */}
           <div className="flex items-center gap-3 text-2xs text-text-muted mb-2">
             <span>{geometryType}</span>
-            <span>·</span>
-            <span>{featureCount.toLocaleString()} {t.layers.features}</span>
             <span>·</span>
             <span>{layer.data.crs}</span>
           </div>
@@ -950,6 +947,14 @@ function StylePanel({
           </span>
         </StyleRow>
       )}
+
+      {/* Icon selector — hidden for now, uncomment when ready
+      {isPointLayer && (
+        <details className="group/icon">
+          ...
+        </details>
+      )}
+      */}
 
       {/* Fill-opacity — fills only (separate from layer opacity) */}
       {isFillLayer && (

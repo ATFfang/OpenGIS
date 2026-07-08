@@ -11,6 +11,7 @@ import { agentHandlers } from './agent';
 import { askHandlers } from './ask';
 import { chatHandlers } from './chat';
 import { fsHandlers } from './fs';
+import { layoutHandlers } from './layout';
 import { mapHandlers } from './map';
 
 export const ALL_HANDLER_GROUPS = {
@@ -18,6 +19,7 @@ export const ALL_HANDLER_GROUPS = {
   chat: chatHandlers,
   ask: askHandlers,
   fs: fsHandlers,
+  layout: layoutHandlers,
   agent: agentHandlers,
 };
 

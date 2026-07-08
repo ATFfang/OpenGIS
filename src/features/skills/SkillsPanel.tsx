@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { ChevronDown, ChevronRight, Zap, Search, FileText, Map, HelpCircle, Terminal, BookOpen, Bot, BarChart3 } from 'lucide-react'
 import { pythonClient } from '@/services/pythonClient'
+import { useAssetStore } from '@/stores/assetStore'
 import { useT } from '@/i18n'
 
-// ─── Types matching SkillSchema.to_dict() / SkillParam.to_dict() ───
-interface SkillParamDict {
+// ─── Types matching ToolSchema.to_dict() / ToolParam.to_dict() ───
+interface ToolParamDict {
   name: string
   type: string
   description: string
@@ -13,16 +14,26 @@ interface SkillParamDict {
   options?: string[]
 }
 
-interface SkillSchemaDict {
+interface ToolSchemaDict {
   name: string
   display_name: string
   description: string
   category: string
-  params: SkillParamDict[]
+  params: ToolParamDict[]
   returns: string
   examples: string[]
   tags: string[]
   version: string
+}
+
+interface UserSkillDict {
+  name: string
+  description?: string
+  location: string
+  directory: string
+  source: string
+  tags: string[]
+  version?: string
 }
 
 type CategoryInfo = {
@@ -65,21 +76,28 @@ function getCategoryInfo(cat: string): CategoryInfo {
 
 // ─── Component ───────────────────────────────────────────────────────
 export function SkillsPanel() {
-  const [skills, setSkills] = useState<SkillSchemaDict[]>([])
+  const [skills, setSkills] = useState<ToolSchemaDict[]>([])
+  const [userSkills, setUserSkills] = useState<UserSkillDict[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [mode, setMode] = useState<'tools' | 'skills'>('tools')
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null)
   const t = useT()
+  const workspacePath = useAssetStore((s) => s.workspacePath)
 
   const fetchSkills = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const resp = await pythonClient.send('rpc.skill.list', {})
-      const list: SkillSchemaDict[] = (resp as any)?.skills ?? []
+      const [toolResp, userSkillResp] = await Promise.all([
+        pythonClient.send('rpc.tool.list', {}),
+        pythonClient.send('rpc.user_skill.list', { workspace_path: workspacePath || undefined }),
+      ])
+      const list: ToolSchemaDict[] = (toolResp as any)?.tools ?? []
       setSkills(list)
+      setUserSkills((userSkillResp as any)?.skills ?? [])
       // Auto-expand the first category
       const cats = [...new Set(list.map(s => s.category))]
       if (cats.length > 0) setExpandedCategory(cats[0]!)
@@ -88,7 +106,7 @@ export function SkillsPanel() {
     } finally {
       setLoading(false)
     }
-  }, [t.common.error])
+  }, [t.common.error, workspacePath])
 
   useEffect(() => {
     fetchSkills()
@@ -106,13 +124,13 @@ export function SkillsPanel() {
 
   // Auto-discover categories from skill data, sort by defined order
   const grouped = useMemo(() => {
-    const map: Record<string, SkillSchemaDict[]> = {}
+    const map: Record<string, ToolSchemaDict[]> = {}
     for (const s of filtered) {
       const cat = s.category || 'other'
       ;(map[cat] ??= []).push(s)
     }
     // Sort categories by order defined in CATEGORY_STYLES
-    const sorted: Record<string, SkillSchemaDict[]> = {}
+    const sorted: Record<string, ToolSchemaDict[]> = {}
     for (const cat of Object.keys(map).sort((a, b) => {
       const oa = getCategoryInfo(a).order
       const ob = getCategoryInfo(b).order
@@ -148,8 +166,17 @@ export function SkillsPanel() {
     )
   }
 
+  const filteredUserSkills = search.trim()
+    ? userSkills.filter(
+        s =>
+          s.name.toLowerCase().includes(search.toLowerCase()) ||
+          (s.description ?? '').toLowerCase().includes(search.toLowerCase()) ||
+          s.tags.some(t => t.toLowerCase().includes(search.toLowerCase())),
+      )
+    : userSkills
+
   // ── Empty state ───────────────────────────────────────────────────
-  if (skills.length === 0) {
+  if (skills.length === 0 && userSkills.length === 0) {
     return (
       <div className="w-full h-full flex items-center justify-center text-xs text-text-muted">
         {t.skills.noSkills}
@@ -165,7 +192,31 @@ export function SkillsPanel() {
         <div className="flex items-center gap-2 mb-2">
           <Zap className="w-4 h-4 text-accent-primary" />
           <span className="text-xs font-semibold text-text-primary">{t.skills.title}</span>
-          <span className="ml-auto text-[10px] text-text-muted">{skills.length}</span>
+          <span className="ml-auto text-[10px] text-text-muted">
+            {mode === 'tools' ? skills.length : userSkills.length}
+          </span>
+        </div>
+        <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-bg-secondary p-1">
+          <button
+            onClick={() => setMode('tools')}
+            className={`rounded px-2 py-1 text-[11px] transition-colors ${
+              mode === 'tools'
+                ? 'bg-bg-primary text-text-primary shadow-sm'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+          >
+            {t.skills.toolsTab}
+          </button>
+          <button
+            onClick={() => setMode('skills')}
+            className={`rounded px-2 py-1 text-[11px] transition-colors ${
+              mode === 'skills'
+                ? 'bg-bg-primary text-text-primary shadow-sm'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+          >
+            {t.skills.userSkillsTab}
+          </button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
@@ -183,7 +234,29 @@ export function SkillsPanel() {
 
       {/* Skill list */}
       <div className="flex-1 overflow-y-auto">
-        {Object.entries(grouped).map(([cat, items]) => {
+        {mode === 'skills' ? (
+          <div className="p-2">
+            {filteredUserSkills.length === 0 ? (
+              <div className="px-2 py-8 text-center text-xs text-text-muted">
+                {t.skills.noUserSkills}
+              </div>
+            ) : (
+              filteredUserSkills.map(skill => (
+                <div key={skill.name} className="mb-2 rounded-md border border-border/50 bg-bg-secondary/40 p-2">
+                  <div className="mb-1 flex items-center gap-2">
+                    <BookOpen className="h-3.5 w-3.5 text-accent-primary" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-primary">{skill.name}</span>
+                    <span className="rounded bg-bg-tertiary px-1.5 py-0.5 text-[9px] text-text-muted">{skill.source}</span>
+                  </div>
+                  {skill.description && (
+                    <p className="mb-1 line-clamp-3 text-[11px] leading-relaxed text-text-secondary">{skill.description}</p>
+                  )}
+                  <div className="truncate text-[10px] text-text-muted">{skill.directory}</div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : Object.entries(grouped).map(([cat, items]) => {
           const info = getCategoryInfo(cat)
           const Icon = info.icon
           const isOpen = expandedCategory === cat

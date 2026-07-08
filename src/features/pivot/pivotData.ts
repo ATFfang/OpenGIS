@@ -1,5 +1,6 @@
 import type { FileNode } from '@/stores/assetStore'
 import type { MapLayerDefinition, ParsedRasterData, ParsedVectorData } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import { parseGeoJSON, parseGeoTIFF, parseKML, parseShapefile } from '@/services/geo/parsers'
 import type { PivotData, PivotRasterStats, PivotTable, PivotTarget } from './types'
 
@@ -204,13 +205,14 @@ async function readFirstExistingBuffer(
 }
 
 function tableFromVector(vector: ParsedVectorData, name: string): PivotTable {
+  const geojson = resolveVectorGeoJSON(vector)
   const fieldSet = new Set<string>()
   for (const field of vector.fields ?? []) fieldSet.add(field.name)
-  for (const feature of vector.geojson.features.slice(0, MAX_DISPLAY_ROWS)) {
+  for (const feature of geojson.features.slice(0, MAX_DISPLAY_ROWS)) {
     for (const key of Object.keys(feature.properties ?? {})) fieldSet.add(key)
   }
   const columns = [...fieldSet].slice(0, MAX_COLUMNS)
-  const rows = vector.geojson.features.slice(0, MAX_DISPLAY_ROWS).map((feature, index) => {
+  const rows = geojson.features.slice(0, MAX_DISPLAY_ROWS).map((feature, index) => {
     const row: Record<string, unknown> = {}
     for (const column of columns) row[column] = feature.properties?.[column] ?? null
     if (!columns.includes('__geometry')) row.__geometry = feature.geometry?.type ?? null

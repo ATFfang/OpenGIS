@@ -46,7 +46,7 @@ import { useScriptRunner, type OutputChunk } from './useScriptRunner'
 const DEFAULT_SCRIPT = `# OpenGIS Script Runner
 # ----------------------------------------------------------------------
 # This script runs in the same subprocess sandbox that the AI agent uses.
-# All registered skills are available as top-level functions.
+# All registered tools are available as top-level functions.
 #
 # Example: load a CSV-derived GeoJSON and add it to the map.
 #

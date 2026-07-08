@@ -26,6 +26,32 @@ logger = logging.getLogger(__name__)
 
 CODE_ONLY_TOOLS = {"save_plot"}
 
+_THINK_TAG_RE = re.compile(r"</?\s*think\s*>", re.IGNORECASE)
+_MARKDOWN_FENCE_RE = re.compile(r"```")
+_TOOL_CONFUSION_RE = re.compile(
+    r"execute_code\s*中.*?(不能|无法|不行)|"
+    r"(不能|无法|不行).*?execute_code\s*中|"
+    r"standalone tool calls.*?cannot access|"
+    r"无法在\s*execute_code",
+    re.IGNORECASE,
+)
+_REASONING_COMMENT_MARKERS = (
+    "我们需要",
+    "我们将",
+    "我们可以",
+    "让我们",
+    "相反",
+    "因此",
+    "由于",
+    "但这样",
+    "实际上",
+    "考虑到",
+    "改变策略",
+    "更好的方法",
+    "需要先",
+    "但不行",
+)
+
 
 EXECUTE_CODE_SCHEMA = {
     "type": "function",
@@ -35,16 +61,22 @@ EXECUTE_CODE_SCHEMA = {
             "Execute Python code in a sandbox. Use ONLY when no other tool matches "
             "the task. The code runs with access to numpy, pandas, geopandas, "
             "shapely, rasterio, matplotlib, seaborn, and the registered OpenGIS "
-            "skills as top-level functions. Missing imported packages are "
+            "tools as top-level functions. Missing imported packages are "
             "auto-installed before execution when permitted; do not switch to a "
-            "weaker method just because a package may be absent."
+            "weaker method just because a package may be absent. The code "
+            "argument must be code-only Python: no chain-of-thought, no strategy "
+            "narration in comments, no Markdown fences, and no <think> tags."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": "Python code to execute.",
+                    "description": (
+                        "Raw executable Python source only. Do not include "
+                        "Markdown fences, hidden reasoning, planning prose, or "
+                        "long comments explaining tool strategy."
+                    ),
                 },
                 "persist": {
                     "type": "boolean",
@@ -63,6 +95,29 @@ EXECUTE_CODE_SCHEMA = {
                 },
             },
             "required": ["code"],
+        },
+    },
+}
+
+
+RUN_SCRIPT_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_script_file",
+        "description": (
+            "Run an existing persisted Python script file from the workspace script/ directory. "
+            "Use after read_script/edit_file to rerun the same reusable code asset instead of "
+            "copying it into a new execute_code call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "script_path": {
+                    "type": "string",
+                    "description": "Path or id of a .py script under the workspace script/ directory.",
+                },
+            },
+            "required": ["script_path"],
         },
     },
 }
@@ -87,8 +142,75 @@ class ToolExecutionResult:
         return self.error is None
 
 
+def validate_execute_code_payload(code: str) -> str | None:
+    """Return an error message when an execute_code payload is not code-only.
+
+    Tool-calling providers sometimes leak hidden reasoning text into a
+    function argument, especially after a long multi-tool chain. Python may
+    still accept that leaked text when it is wrapped as comments, so syntax
+    validation alone is insufficient. This validator is intentionally narrow:
+    normal comments are fine, but chain-of-thought tags, Markdown fences, and
+    long strategy monologues inside comments are rejected before permission
+    prompts or subprocess execution.
+    """
+    if _THINK_TAG_RE.search(code):
+        return (
+            "execute_code.code contains a <think> tag. Send only executable "
+            "Python code in the code argument; put no hidden reasoning, "
+            "strategy narration, or XML-style thinking tags in code."
+        )
+    if _MARKDOWN_FENCE_RE.search(code):
+        return (
+            "execute_code.code contains Markdown code fences. Send the raw "
+            "Python source only, without ``` fences or surrounding prose."
+        )
+
+    lines = code.splitlines()
+    suspicious_total = 0
+    suspicious_run = 0
+    max_suspicious_run = 0
+    comment_total = 0
+    scanned = 0
+    for raw_line in lines[:100]:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        scanned += 1
+        is_comment = stripped.startswith("#")
+        if not is_comment:
+            suspicious_run = 0
+            continue
+        comment_total += 1
+        text = stripped.lstrip("#").strip()
+        if _TOOL_CONFUSION_RE.search(text):
+            return (
+                "execute_code.code contains tool-planning commentary inside "
+                "Python comments. If another tool is needed, call that tool "
+                "directly as a function call in the next step. The code "
+                "argument must contain executable Python only."
+            )
+        if any(marker in text for marker in _REASONING_COMMENT_MARKERS):
+            suspicious_total += 1
+            suspicious_run += 1
+            max_suspicious_run = max(max_suspicious_run, suspicious_run)
+        else:
+            suspicious_run = 0
+
+    if (
+        scanned >= 12
+        and comment_total >= 8
+        and (max_suspicious_run >= 5 or suspicious_total >= 8)
+    ):
+        return (
+            "execute_code.code appears to contain a chain-of-thought or "
+            "strategy monologue in comments. Keep comments short and factual; "
+            "send only the Python needed to perform the action."
+        )
+    return None
+
+
 class ToolRuntime:
-    """Execute LLM tool calls against skills and the code sandbox."""
+    """Execute LLM tool calls against executable tools and the code sandbox."""
 
     def __init__(
         self,
@@ -101,6 +223,7 @@ class ToolRuntime:
         progress_callback: Optional[Callable[[str, str], None]] = None,
         execution_output_callback: Optional[Callable[[str], None]] = None,
         python_executable: str | None = None,
+        workspace_path: str | None = None,
     ) -> None:
         self.tool_schemas = tool_schemas
         self.tool_callables = tool_callables
@@ -110,12 +233,37 @@ class ToolRuntime:
         self.progress_callback = progress_callback
         self.execution_output_callback = execution_output_callback
         self.python_executable = python_executable
+        self.workspace_path = workspace_path
         self._async_loop: asyncio.AbstractEventLoop | None = None
 
     def execute(self, tool_name: str, arguments: dict[str, Any] | None) -> ToolExecutionResult:
         """Execute a tool call and return a string payload for the LLM."""
         args = arguments or {}
         t0 = time.monotonic()
+        if tool_name == "execute_code":
+            validation_error = validate_execute_code_payload(str(args.get("code") or ""))
+            if validation_error:
+                content = json.dumps(
+                    {
+                        "success": False,
+                        "error": "invalid_execute_code_payload",
+                        "message": validation_error,
+                        "retry": (
+                            "Call execute_code again with code-only Python, "
+                            "or call the needed non-Python tool directly."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                return ToolExecutionResult(
+                    name=tool_name,
+                    arguments=args,
+                    content=content,
+                    error="invalid_execute_code_payload",
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    title="Execute Python rejected",
+                    metadata={"validation": "code_only"},
+                )
         decision = (
             self.permission_runtime.evaluate(tool_name, args)
             if self.permission_runtime is not None
@@ -150,10 +298,12 @@ class ToolRuntime:
         try:
             if tool_name == "execute_code":
                 content = self._execute_code(args)
+            elif tool_name == "run_script_file":
+                return self._execute_script_file(args, t0, decision, enforce_permissions)
             elif tool_name in CODE_ONLY_TOOLS:
                 content = self._execute_code_only_tool(tool_name, args)
             else:
-                content = self._execute_skill(tool_name, args)
+                content = self._execute_tool(tool_name, args)
             raw_artifacts = self._artifact_hints(content)
             bounded = self._bound_output(tool_name, content)
             duration_ms = (time.monotonic() - t0) * 1000
@@ -184,10 +334,129 @@ class ToolRuntime:
                 title=f"{tool_name} failed",
             )
 
+    def _execute_script_file(
+        self,
+        arguments: dict[str, Any],
+        t0: float,
+        decision: Any,
+        enforce_permissions: bool,
+    ) -> ToolExecutionResult:
+        script_path = str(arguments.get("script_path") or "").strip()
+        if not script_path:
+            return ToolExecutionResult(
+                name="run_script_file",
+                arguments=arguments,
+                content=json.dumps({"success": False, "error": "script_path is required"}, ensure_ascii=False),
+                error="script_path is required",
+                duration_ms=(time.monotonic() - t0) * 1000,
+                title="Run Script File failed",
+            )
+
+        try:
+            path = self._resolve_script_file(script_path)
+            code = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            return ToolExecutionResult(
+                name="run_script_file",
+                arguments=arguments,
+                content=json.dumps({"success": False, "error": error}, ensure_ascii=False),
+                error=error,
+                duration_ms=(time.monotonic() - t0) * 1000,
+                title="Run Script File failed",
+            )
+
+        if self.permission_runtime is not None:
+            code_decision = self.permission_runtime.evaluate("execute_code", {"code": code})
+            if code_decision.action != PermissionAction.ALLOW and enforce_permissions:
+                content = json.dumps(
+                    {
+                        "success": False,
+                        "error": "permission_required" if code_decision.action == PermissionAction.ASK else "permission_denied",
+                        "permission": {
+                            "action": code_decision.action.value,
+                            "reason": code_decision.reason,
+                            "rule": code_decision.rule,
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                return ToolExecutionResult(
+                    name="run_script_file",
+                    arguments=arguments,
+                    content=content,
+                    error=code_decision.reason or code_decision.action.value,
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    title="Run Script File blocked",
+                    metadata={"permission": code_decision.action.value, "rule": code_decision.rule},
+                )
+
+        content = self._execute_code({"code": code})
+        raw_artifacts = self._artifact_hints(content)
+        bounded = self._bound_output("run_script_file", content)
+        duration_ms = (time.monotonic() - t0) * 1000
+        logger.info("TOOL OK: run_script_file — %.0fms", duration_ms)
+        return ToolExecutionResult(
+            name="run_script_file",
+            arguments=arguments,
+            content=bounded.content,
+            duration_ms=duration_ms,
+            title="Run Script File",
+            metadata=self._merge_metadata(
+                self._permission_metadata(decision),
+                raw_artifacts,
+                bounded.metadata,
+                {
+                    "script_path": self._relative_script_path(path),
+                    "script_abs_path": str(path),
+                    "rerun_script": True,
+                },
+            ),
+            truncated=bounded.truncated,
+        )
+
+    def _resolve_script_file(self, script_path: str):
+        from pathlib import Path
+
+        if not self.workspace_path:
+            raise RuntimeError("workspace_path is required to run a persisted script file")
+        workspace = Path(self.workspace_path).expanduser().resolve()
+        raw = Path(script_path).expanduser()
+        path = raw.resolve() if raw.is_absolute() else (workspace / raw).resolve()
+        script_root = (workspace / "script").resolve()
+        if path.suffix.lower() != ".py":
+            raise ValueError(f"script_path must point to a .py file: {script_path}")
+        if script_root != path and script_root not in path.parents:
+            raise ValueError(f"script_path must be under workspace script/: {script_path}")
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"script not found: {script_path}")
+        return path
+
+    def _relative_script_path(self, path: Any) -> str:
+        try:
+            from pathlib import Path
+
+            if self.workspace_path:
+                return str(Path(path).resolve().relative_to(Path(self.workspace_path).expanduser().resolve()))
+        except Exception:
+            pass
+        return str(path)
+
     def _execute_code(self, arguments: dict[str, Any]) -> str:
         code = str(arguments.get("code") or "")
         if not code.strip():
             return json.dumps({"success": False, "error": "No code provided"}, ensure_ascii=False)
+        resident_warning = self._resident_dynamic_script_warning(code)
+        if resident_warning:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "resident_worker_required",
+                    "message": resident_warning,
+                    "recommended_tool": "start_dynamic_map_worker",
+                },
+                ensure_ascii=False,
+            )
 
         install_notes: list[str] = []
         installed = self._auto_install_for_code(code)
@@ -215,11 +484,43 @@ class ToolRuntime:
             parts.append(f"Error: {error}")
         return "\n".join(parts).strip() or "(no output)"
 
+    @staticmethod
+    def _resident_dynamic_script_warning(code: str) -> str | None:
+        """Block obvious live-map loops from execute_code.
+
+        Dynamic map loops must survive the agent response lifecycle. Running
+        them through execute_code ties refreshes to the current run and makes
+        the map stop when the answer stops streaming.
+        """
+        compact = code.lower()
+        emits_dynamic_map = (
+            "dynamic_layer_update" in compact
+            or "emit_dynamic_layer" in compact
+            or "emit_dynamic_points" in compact
+            or "emit_dynamic_tracks" in compact
+            or "emit_moving_objects" in compact
+            or "rpc.ui.map.dynamic_layer_update" in compact
+        )
+        has_resident_loop = (
+            re.search(r"\bwhile\s+true\s*:", compact) is not None
+            or re.search(r"\bwhile\s+1\s*:", compact) is not None
+            or "time.sleep(" in compact
+            or "asyncio.sleep(" in compact
+        )
+        if emits_dynamic_map and has_resident_loop:
+            return (
+                "This code looks like a resident dynamic-map refresh loop. "
+                "Do not run it with execute_code/run_script_file: it will stop "
+                "when the agent run stops. Start a resident worker instead, "
+                "preferably with start_dynamic_map_worker, and put the loop in main.py."
+            )
+        return None
+
     def _auto_install_for_code(self, code: str) -> str | None:
         """Install imports required by a code block before execution.
 
         Function-call execution goes through this runtime, so keeping the
-        policy here makes `execute_code` match the legacy CodeAct path and
+        policy here makes `execute_code` the single Python execution path and
         prevents the model from burning turns on manual pip installs or
         weaker fallback algorithms.
         """
@@ -284,7 +585,7 @@ class ToolRuntime:
         )
         return self._execute_code({"code": f"save_plot({rendered_kwargs})"})
 
-    def _execute_skill(self, tool_name: str, arguments: dict[str, Any]) -> str:
+    def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         callable_fn = self.tool_callables.get(tool_name)
         if callable_fn is None:
             return json.dumps(
@@ -361,13 +662,14 @@ class ToolRuntime:
 
 
 def build_tool_schemas(registered: list[Any]) -> list[dict]:
-    """Build OpenAI-compatible schemas for all skills plus execute_code."""
+    """Build OpenAI-compatible schemas for all executable tools plus execute_code."""
     schemas = [
         rs.schema.to_openai_schema()
         for rs in registered
         if rs.schema.name not in CODE_ONLY_TOOLS
     ]
     schemas.append(EXECUTE_CODE_SCHEMA)
+    schemas.append(RUN_SCRIPT_FILE_SCHEMA)
     return schemas
 
 
@@ -389,6 +691,7 @@ def parse_tool_arguments(raw_args: Any) -> dict[str, Any]:
 
 __all__ = [
     "EXECUTE_CODE_SCHEMA",
+    "RUN_SCRIPT_FILE_SCHEMA",
     "ToolExecutionResult",
     "ToolRuntime",
     "build_tool_schemas",

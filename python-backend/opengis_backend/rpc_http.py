@@ -8,7 +8,7 @@ Usage from server.py:
     @app.post("/api/rpc")
     async def http_rpc(body: dict):
         from opengis_backend.rpc_http import dispatch_http
-        return await dispatch_http(body, skill_registry)
+        return await dispatch_http(body, tool_registry)
 
 For streaming methods (chat.*), only the initial acknowledgement is
 returned; background notifications are silently discarded.
@@ -21,7 +21,7 @@ import logging
 from typing import Any
 
 from opengis_backend.rpc_handler import RpcHandler
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class _DummyWS:
 
 
 async def dispatch_http(
-    body: dict, skill_registry: SkillRegistry
+    body: dict, tool_registry: ToolRegistry
 ) -> dict:
     """Route a single JSON-RPC 2.0 request and return the response dict.
 
@@ -55,8 +55,8 @@ async def dispatch_http(
     ----------
     body:
         Raw JSON-RPC 2.0 request: ``{"jsonrpc":"2.0","method":"...","params":{},"id":1}``
-    skill_registry:
-        Shared skill registry instance.
+    tool_registry:
+        Shared tool registry instance.
 
     Returns
     -------
@@ -81,7 +81,7 @@ async def dispatch_http(
         }
 
     ws = _DummyWS()
-    handler = RpcHandler(ws, skill_registry)  # type: ignore[arg-type]
+    handler = RpcHandler(ws, tool_registry)  # type: ignore[arg-type]
 
     # RpcHandler expects a raw JSON string — feed it directly.
     await handler.handle_message(json.dumps(body))

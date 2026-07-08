@@ -136,7 +136,7 @@ def find_missing_packages(
         # Skip stdlib
         if pkg in _STDLIB_MODULES:
             continue
-        # Skip packages that are injected as skills (not real modules)
+        # Skip names that are injected as Python-callable tools (not real modules)
         # These will be in the subprocess namespace but not importable normally
         # We'll let them fail at runtime if truly missing.
 

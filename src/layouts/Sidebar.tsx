@@ -7,6 +7,9 @@ import {
   GitBranch,
   ListRestart,
   FolderSync,
+  LayoutTemplate,
+  Monitor,
+  Activity,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 
@@ -16,18 +19,30 @@ interface SidebarProps {
   onTabChange: (tab: string) => void
   showChat: boolean
   onToggleChat: () => void
+  boardMode: boolean
+  onToggleBoardMode: () => void
 }
 
 /**
  * Left sidebar with icon-based navigation tabs.
  * Compact mode: 52px wide, icon only.
  */
-export function Sidebar({ activeTab, isContentVisible = true, onTabChange, showChat, onToggleChat }: SidebarProps) {
+export function Sidebar({
+  activeTab,
+  isContentVisible = true,
+  onTabChange,
+  showChat,
+  onToggleChat,
+  boardMode,
+  onToggleBoardMode,
+}: SidebarProps) {
   const t = useT()
 
   const sidebarTabs = [
     { id: 'files', icon: FolderOpen, label: t.sidebar.files },
     { id: 'layers', icon: Layers, label: t.sidebar.layers },
+    { id: 'canvas', icon: LayoutTemplate, label: t.sidebar.canvas },
+    { id: 'workers', icon: Activity, label: t.sidebar.workers },
     { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
     { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
     { id: 'skills', icon: Wrench, label: t.sidebar.skills },
@@ -77,6 +92,17 @@ export function Sidebar({ activeTab, isContentVisible = true, onTabChange, showC
         title={t.sidebar.switchProject}
       >
         <FolderSync className="w-[18px] h-[18px]" strokeWidth={1.8} />
+      </button>
+      <button
+        onClick={onToggleBoardMode}
+        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150 mb-1 ${
+          boardMode
+            ? 'text-accent-primary bg-accent-primary/10'
+            : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
+        }`}
+        title={boardMode ? t.sidebar.exitBoard : t.sidebar.board}
+      >
+        <Monitor className="w-[18px] h-[18px]" strokeWidth={boardMode ? 2.2 : 1.8} />
       </button>
       <button
         onClick={onToggleChat}

@@ -110,6 +110,42 @@ export interface SubagentData {
   updatedAt?: number
 }
 
+export type MessagePartType =
+  | 'text'
+  | 'reasoning'
+  | 'tool'
+  | 'tool_output'
+  | 'code'
+  | 'artifact'
+  | 'approval'
+  | 'plan'
+  | 'progress'
+  | 'error'
+  | 'turn'
+
+export type MessagePartStatus =
+  | 'pending'
+  | 'running'
+  | 'streaming'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface MessagePart {
+  id: string
+  type: MessagePartType
+  status: MessagePartStatus
+  text?: string
+  tool?: string
+  callId?: string
+  call_id?: string
+  runId?: string
+  run_id?: string
+  data?: Record<string, unknown>
+  createdAt?: number
+  created_at?: number
+}
+
 export interface UIMessage {
   ts: number
   type: 'say' | 'ask'
@@ -179,6 +215,12 @@ export interface UIMessage {
     providerId?: string
     mode?: string
   }
+
+  /**
+   * Event-sourced v2 projection. Existing ChatView still renders legacy
+   * fields; new views can render this stable part list directly.
+   */
+  parts?: MessagePart[]
 }
 
 // API-request metadata stored as JSON inside an `api_req_started` say message.
