@@ -314,7 +314,7 @@ function LayerItem({
   const isPointGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Point' || layer.data.geometryType === 'MultiPoint')
   const isFillGeom = layer.data.kind === 'vector' && (layer.data.geometryType === 'Polygon' || layer.data.geometryType === 'MultiPolygon')
   const isClassified = layer.style.renderType === 'graduated' || layer.style.renderType === 'categorized'
-  // For StylePanel compatibility
+  // Geometry flags consumed by style controls.
   const isPointLayer = layer.style.renderType === 'circle' || layer.style.renderType === 'symbol'
   const isFillLayer = layer.style.renderType === 'fill'
 

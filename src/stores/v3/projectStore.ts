@@ -1,7 +1,5 @@
 /**
- * ProjectStore (v3) — 当前工程（workspace + 元数据）
- *
- * Stage 4 会把它序列化到 `.opengis/project.json`；Stage 1 只管内存状态。
+ * ProjectStore — 当前工程（workspace + 元数据）
  *
  * workspace 和 project 是一体的：打开一个 workspace 目录就是打开一个 project。
  */
@@ -15,7 +13,7 @@ export interface ProjectMeta {
   /** 工程名，默认取目录名。 */
   project_name: string;
   opened_at: number;
-  /** Stage 4 git snapshot 的当前 HEAD commit（可选）。 */
+  /** 当前 workspace git snapshot 的 HEAD commit（可选）。 */
   head_commit?: string;
 }
 

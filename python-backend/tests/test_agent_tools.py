@@ -1,6 +1,7 @@
 import base64
 import json
 import shutil
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -24,13 +25,13 @@ from opengis_backend.tools.builtin.web_tools import webfetch as webfetch_tool
 from opengis_backend.tools.builtin.write_file_tool import write_file as write_file_tool
 from opengis_backend.tools.builtin.script_tools import list_scripts as list_scripts_tool
 from opengis_backend.tools.builtin.script_tools import read_script as read_script_tool
-from opengis_backend.agent.agent_factory import _compose_system_prompt
+from opengis_backend.agent.factory_common import compose_system_prompt
 from opengis_backend.agent.tools import filter_agent_tools
-from opengis_backend.agent.tool_runtime import ToolRuntime, build_tool_schemas, validate_execute_code_payload
-from opengis_backend.agent.session import SessionStore
-from opengis_backend.osm.overpass import _normalize_overpass_query
-from opengis_backend.osm.tools import osm_call as osm_call_tool
-from opengis_backend.datasource.tools import datasource_call as datasource_call_tool
+from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas, validate_execute_code_payload
+from opengis_backend.agent.session.session import SessionStore
+from opengis_backend.integrations.osm.overpass import _normalize_overpass_query
+from opengis_backend.integrations.osm.tools import osm_call as osm_call_tool
+from opengis_backend.integrations.datasource.tools import datasource_call as datasource_call_tool
 from opengis_backend.runs.archive import RunArchive
 from opengis_backend.worker.manager import ResidentWorkerManager
 
@@ -54,7 +55,7 @@ class AgentToolUpgradeTests(unittest.TestCase):
     def test_system_prompt_renders_literal_edit_file_batch_example(self) -> None:
         with TemporaryDirectory() as tmp:
             ctx = ToolContext(meta={"workspace_path": tmp})
-            prompt = _compose_system_prompt([], ctx)
+            prompt = compose_system_prompt([], ctx, include_workspace_write_note=True)
 
             self.assertIn('{"old_string": "...", "new_string": "..."}', prompt)
             self.assertIn("## Executable Tools", prompt)
@@ -74,6 +75,15 @@ class AgentToolUpgradeTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("disabled", result["error"])
+
+    def test_bash_prefers_backend_python_on_path(self) -> None:
+        result = _bash_sync(
+            "python -c 'import sys; print(sys.executable)'",
+            timeout=30_000,
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(Path(str(result["output"]).strip()).resolve(), Path(sys.executable).resolve())
 
     def test_execute_code_rejects_think_tag_before_execution(self) -> None:
         calls: list[str] = []
@@ -109,6 +119,14 @@ class AgentToolUpgradeTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(validate_execute_code_payload(code))
+
+    def test_execute_code_rejects_long_worker_wait_sleep(self) -> None:
+        code = "import time\nprint('等待60秒，让worker完成更新...')\ntime.sleep(60)\nprint('done')\n"
+
+        message = validate_execute_code_payload(code)
+
+        self.assertIsNotNone(message)
+        self.assertIn("wait_worker_update", message or "")
 
     def test_execute_code_allows_short_factual_comments(self) -> None:
         calls: list[str] = []
@@ -283,7 +301,7 @@ class AgentToolUpgradeTests(unittest.TestCase):
             ]
         }
         with TemporaryDirectory() as tmp, patch(
-            "opengis_backend.osm.tools.overpass_query",
+            "opengis_backend.integrations.osm.tools.overpass_query",
             return_value=overpass_data,
         ):
             ctx = ToolContext(meta={"workspace_path": tmp})
@@ -319,7 +337,7 @@ class AgentToolUpgradeTests(unittest.TestCase):
             ]
         }
         with TemporaryDirectory() as tmp, patch(
-            "opengis_backend.osm.tools.overpass_query",
+            "opengis_backend.integrations.osm.tools.overpass_query",
             return_value=overpass_data,
         ):
             ctx = ToolContext(meta={"workspace_path": tmp})
@@ -352,9 +370,9 @@ class AgentToolUpgradeTests(unittest.TestCase):
 
     def test_osm_search_timeout_returns_structured_retryable_error(self) -> None:
         with TemporaryDirectory() as tmp, patch(
-            "opengis_backend.osm.overpass.requests.get",
+            "opengis_backend.integrations.osm.overpass.requests.get",
             side_effect=requests.exceptions.ReadTimeout("nominatim timeout"),
-        ) as get_mock, patch("opengis_backend.osm.overpass.time.sleep"):
+        ) as get_mock, patch("opengis_backend.integrations.osm.overpass.time.sleep"):
             ctx = ToolContext(meta={"workspace_path": tmp})
             result = osm_call(
                 ctx,
@@ -391,7 +409,7 @@ class AgentToolUpgradeTests(unittest.TestCase):
                 return json.dumps(payload).encode("utf-8")
 
         with TemporaryDirectory() as tmp, patch(
-            "opengis_backend.datasource.tools._find_source",
+            "opengis_backend.integrations.datasource.tools._find_source",
             return_value={"name": "测试源", "description": "demo", "url": "https://example.com/demo.geojson"},
         ), patch("urllib.request.urlopen", return_value=FakeResponse()):
             ctx = ToolContext(meta={"workspace_path": tmp})
@@ -492,6 +510,34 @@ class AgentToolUpgradeTests(unittest.TestCase):
                 self.assertEqual(result["status"], "running", json.dumps(result, ensure_ascii=False))
                 self.assertEqual(result["health"]["state"], "uncertain")
                 self.assertEqual(result["startup_check"]["state"], "uncertain")
+            finally:
+                manager.pause_all(reason="test_cleanup")
+
+    def test_worker_wait_update_observes_new_output(self) -> None:
+        with TemporaryDirectory() as tmp:
+            manager = ResidentWorkerManager()
+            started = manager.start_worker(
+                workspace_path=tmp,
+                name="waitable worker",
+                code=(
+                    "import time\n"
+                    "print('ready', flush=True)\n"
+                    "time.sleep(0.25)\n"
+                    "print('tick', flush=True)\n"
+                    "time.sleep(1)\n"
+                ),
+                initial_health_timeout=0.15,
+            )
+            try:
+                waited = manager.wait_worker_update(
+                    started["id"],
+                    workspace_path=tmp,
+                    timeout=2.0,
+                    include_logs=True,
+                )
+                self.assertFalse(waited["wait"]["timed_out"], json.dumps(waited, ensure_ascii=False))
+                self.assertTrue(waited["wait"]["changed"], json.dumps(waited, ensure_ascii=False))
+                self.assertIn("tick", "\n".join(item["text"] for item in waited["logs"]))
             finally:
                 manager.pause_all(reason="test_cleanup")
 

@@ -6,14 +6,16 @@ import {
   ExternalLink,
   AlertCircle,
 } from 'lucide-react'
-import type { UIMessage } from '@/types/chat'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { useChatCodeTheme } from './useChatCodeTheme'
 import MarkdownBlock from './MarkdownBlock'
 
 interface CodeStepRowProps {
-  message: UIMessage
-  /** Controlled expanded state (wired from parent). */
+  stepNumber?: number
+  scriptPath?: string
+  scriptAbsPath?: string
+  code: string
+  isStreaming: boolean
   isExpanded: boolean
   onToggleExpand: () => void
 }
@@ -23,7 +25,7 @@ interface CodeStepRowProps {
 const AUTO_COLLAPSE_DELAY_MS = 350
 
 /**
- * CodeStepRow — renders one Python step emitted by the CodeAgent.
+ * CodeStepRow — renders one Python step emitted by the agent runtime.
  *
  * Streaming behaviour:
  *   - While the block is being written (`message.partial === true`), it
@@ -35,12 +37,16 @@ const AUTO_COLLAPSE_DELAY_MS = 350
  *     auto-collapse. After that point the chevron returns and the user
  *     can re-expand normally via the parent's expandedRows store.
  */
-export const CodeStepRow = memo(({ message, isExpanded, onToggleExpand }: CodeStepRowProps) => {
-  const stepNumber = message.stepNumber ?? 0
-  const scriptPath = message.scriptPath ?? ''
-  const absPath = message.scriptAbsPath ?? ''
-  const code = message.text ?? ''
-  const isStreaming = message.partial === true
+export const CodeStepRow = memo(({
+  stepNumber = 0,
+  scriptPath = '',
+  scriptAbsPath = '',
+  code,
+  isStreaming,
+  isExpanded,
+  onToggleExpand,
+}: CodeStepRowProps) => {
+  const absPath = scriptAbsPath
   const { style: codeTheme } = useChatCodeTheme()
 
   // Local "expanded for streaming" override. Independent of the parent
@@ -196,7 +202,7 @@ CodeStepRow.displayName = 'CodeStepRow'
 
 
 /**
- * CodeResultRow — renders the sandbox output of a CodeAgent step.
+ * CodeResultRow — renders the sandbox output of an agent Python step.
  * Features:
  *   - Duration display (execution time)
  *   - Diff detection and syntax-highlighted rendering
@@ -204,7 +210,10 @@ CodeStepRow.displayName = 'CodeStepRow'
  *   - Collapsible long outputs
  */
 interface CodeResultRowProps {
-  message: UIMessage
+  output: string
+  error?: string | null
+  durationMs?: number
+  stepNumber?: number
 }
 
 /** Format milliseconds as a human-readable duration string. */
@@ -335,11 +344,7 @@ function SmartOutput({ text }: { text: string }) {
   return <MarkdownBlock markdown={text} />
 }
 
-export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
-  const output = message.text ?? ''
-  const error = message.codeError || null
-  const durationMs = message.durationMs
-
+export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumber }: CodeResultRowProps) => {
   const hasOutput = !!output.trim()
   const hasError = !!error
 
@@ -412,7 +417,6 @@ export const CodeResultRow = memo(({ message }: CodeResultRowProps) => {
   }
 
   // ── Error path ──
-  const stepNumber = message.stepNumber
   const lineCount = error!.split('\n').length
 
   return (

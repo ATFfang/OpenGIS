@@ -1,10 +1,10 @@
 import unittest
 from tempfile import TemporaryDirectory
 
-from opengis_backend.agent.context_projector import ContextProjector
-from opengis_backend.agent.event_log import event_to_message_part
-from opengis_backend.agent.events import AgentEvent, AgentEventType
-from opengis_backend.agent.session_coordinator import SessionBusyError, SessionCoordinator
+from opengis_backend.agent.context.context_projector import ContextProjector
+from opengis_backend.agent.telemetry.event_log import event_to_message_part
+from opengis_backend.agent.telemetry.events import AgentEvent, AgentEventType
+from opengis_backend.agent.session.session_coordinator import SessionBusyError, SessionCoordinator
 from opengis_backend.runs.archive import RunArchive
 from opengis_backend.workspace.memory_store import MemoryRecord, MemoryStore
 

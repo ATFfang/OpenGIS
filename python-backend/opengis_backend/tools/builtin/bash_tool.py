@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +131,9 @@ def _bash_sync(
         }
 
     try:
+        env = os.environ.copy()
+        python_bin = str(Path(sys.executable).resolve().parent)
+        env["PATH"] = python_bin + os.pathsep + env.get("PATH", "")
         # Use shell=True to support pipes, redirects, globbing, and chaining.
         # The _is_dangerous() check above blocks the worst injection vectors.
         result = subprocess.run(
@@ -139,6 +143,7 @@ def _bash_sync(
             text=True,
             timeout=timeout / 1000,   # ms → s
             cwd=cwd,
+            env=env,
         )
         output = ""
         if result.stdout:

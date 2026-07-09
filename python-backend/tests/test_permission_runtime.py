@@ -1,14 +1,14 @@
 import unittest
 from unittest.mock import patch
 
-from opengis_backend.agent.auto_install import auto_install_missing
-from opengis_backend.agent.permission import (
+from opengis_backend.agent.execution.auto_install import auto_install_missing
+from opengis_backend.agent.governance.permission import (
     PermissionAction,
     PermissionDecision,
     PermissionRuntime,
 )
-from opengis_backend.agent.profile import AgentProfile
-from opengis_backend.agent.tool_runtime import ToolRuntime
+from opengis_backend.agent.governance.profile import AgentProfile
+from opengis_backend.agent.execution.tool_runtime import ToolRuntime
 
 
 class PermissionRuntimeTests(unittest.TestCase):
@@ -61,9 +61,9 @@ class PermissionRuntimeTests(unittest.TestCase):
         runtime.approval_callback = approval
 
         with patch(
-            "opengis_backend.agent.auto_install.find_missing_packages",
+            "opengis_backend.agent.execution.auto_install.find_missing_packages",
             return_value=["humanize"],
-        ), patch("opengis_backend.agent.auto_install.subprocess.run") as run:
+        ), patch("opengis_backend.agent.execution.auto_install.subprocess.run") as run:
             installed = auto_install_missing(
                 "import humanize",
                 permission_runtime=runtime,

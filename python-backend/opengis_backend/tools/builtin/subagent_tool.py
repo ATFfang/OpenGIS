@@ -35,7 +35,7 @@ Design notes
   a depth guard forbids recursive spawning; a cooperative cancel path
   interrupts every live branch (loop + subprocess) when the user stops the run.
 - **Wiring**: the parent stashes ``_tool_registry`` and ``_llm_config`` into
-  ``ctx.meta`` (see ``GISCodeAgent.run``); these tools read them back to
+  ``ctx.meta``; these tools read them back to
   build child loops. ``ctx.meta`` is copied into each child so the workspace
   path (and the deps) propagate automatically.
 """
@@ -269,9 +269,9 @@ def _run_branch(
     # Lazy imports: avoid any import-order coupling at tool-load time and
     # mirror the pattern build_agent_loop itself uses.
     from opengis_backend.agent.agent_factory import build_agent_loop
-    from opengis_backend.agent.context_manager import ContextManager
-    from opengis_backend.agent.profile import AgentProfile
-    from opengis_backend.agent.session import AgentSession, SessionKind, SessionStatus, SessionStore
+    from opengis_backend.agent.context.context_manager import ContextManager
+    from opengis_backend.agent.governance.profile import AgentProfile
+    from opengis_backend.agent.session.session import AgentSession, SessionKind, SessionStatus, SessionStore
 
     registry = parent_meta.get("_tool_registry")
     llm_config = parent_meta.get("_llm_config")

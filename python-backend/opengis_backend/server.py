@@ -9,8 +9,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from opengis_backend.config import settings
-from opengis_backend.rpc_handler import RpcHandler
+from opengis_backend.runtime.config import settings
+from opengis_backend.rpc.handler import RpcHandler
 from opengis_backend.skills.discovery import UserSkillDiscovery, add_source_path
 from opengis_backend.tools.registry import ToolRegistry
 from opengis_backend.worker import get_worker_manager
@@ -114,7 +114,7 @@ async def add_user_skill_source(body: dict):
 @app.get("/api/system/logs-dir")
 async def get_logs_dir():
     """Return the absolute path of the active log directory (None if not configured)."""
-    from opengis_backend.logging_setup import get_log_dir
+    from opengis_backend.runtime.logging import get_log_dir
     log_dir = get_log_dir()
     return {"log_dir": str(log_dir) if log_dir else None}
 
@@ -131,7 +131,7 @@ async def http_rpc(body: dict):
     For streaming methods (chat.*), only the initial acknowledgement is returned;
     background notifications are not delivered over HTTP.
     """
-    from opengis_backend.rpc_http import dispatch_http
+    from opengis_backend.rpc.http import dispatch_http
 
     return await dispatch_http(body, tool_registry)
 

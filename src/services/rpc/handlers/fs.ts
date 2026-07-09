@@ -1,7 +1,7 @@
 /**
  * rpc.ui.fs.* handlers — 3 个
  *
- * Stage 3 接入 Electron Main 的 fs 权限门（只读 workspace 内路径）。
+ * Renderer-side filesystem notifications and declared filesystem methods.
  */
 
 import type { RpcHandler } from '../registry';

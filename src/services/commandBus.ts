@@ -3,7 +3,7 @@
  * into the frontend's imperative subsystems (MapEngine, stores, etc.).
  *
  * This is the consumer of pythonClient.onNotification. Every Python-side
- * display skill (add_layer, fly_to, ...) emits a `map.*` notification;
+ * display tools (add_layer, fly_to, ...) emit `map.*` notifications;
  * this bus dispatches them.
  *
  * Commands coming from Python:

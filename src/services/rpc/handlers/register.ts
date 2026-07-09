@@ -41,7 +41,7 @@ export function registerAllHandlers(
   return registered.sort();
 }
 
-/** 列出 Stage 1 应覆盖的全部 method 名（便于测试断言）。 */
+/** 列出当前注册表应覆盖的全部 method 名（便于测试断言）。 */
 export function listAllMethods(): string[] {
   const methods: string[] = [];
   for (const group of Object.values(ALL_HANDLER_GROUPS)) {

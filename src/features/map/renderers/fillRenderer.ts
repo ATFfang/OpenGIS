@@ -3,7 +3,7 @@
  *
  * 使用 fill + stroke（line）两个渲染图层。
  *
- * 继承自 Stage 3.9 之前 `MapEngine.syncRenderLayers` 的 fill 处理逻辑，
+ * Fill-layer rendering helpers extracted from `MapEngine.syncRenderLayers`,
  * 此处仅作抽离，不改变语义。
  */
 import type { MapLayerDefinition } from '@/services/geo'

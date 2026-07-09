@@ -1,7 +1,7 @@
 /** Chat store. 对话状态管理：消息列表、附件、流式输出。 */
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
-import type { UIMessage } from '@/types/chat'
+import type { MessagePart, UIMessage } from '@/types/chat'
 import { pythonClient } from '@/services/pythonClient'
 import {
   loadConversations,
@@ -9,7 +9,7 @@ import {
   deleteConversationFile,
   flushAllPendingWrites,
 } from '@/services/chatPersistence'
-import { withProjectedMessageParts } from '@/services/chatMessageParts'
+import { upsertMessagePart } from '@/services/chatMessageParts'
 
 // ─── 附件类型定义 ──────────────────────────────────────────────
 export interface ChatAttachment {
@@ -68,67 +68,6 @@ interface ChatStore {
   _persistActive: () => void
 }
 
-const STREAM_TEXT_FLUSH_MS = 48
-const MAX_LIVE_TOOL_OUTPUT_CHARS = 64 * 1024
-let pendingTextAppends = new Map<number, string>()
-let pendingTextCaps = new Map<number, number>()
-let pendingTextFlushTimer: number | null = null
-
-function appendBoundedText(current: string, append: string, maxChars?: number): string {
-  const next = current + append
-  if (!maxChars || next.length <= maxChars) return next
-  const omitted = next.length - maxChars
-  return `[live output truncated: ${omitted.toLocaleString()} chars omitted]\n` + next.slice(-maxChars)
-}
-
-function queueTextAppend(
-  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
-  get: () => ChatStore,
-  ts: number,
-  piece: string,
-  maxChars?: number,
-): void {
-  if (!piece) return
-  pendingTextAppends.set(ts, (pendingTextAppends.get(ts) || '') + piece)
-  if (maxChars) pendingTextCaps.set(ts, maxChars)
-  if (pendingTextFlushTimer != null) return
-  pendingTextFlushTimer = window.setTimeout(() => {
-    flushPendingTextAppends(set, get)
-  }, STREAM_TEXT_FLUSH_MS)
-}
-
-function flushPendingTextAppends(
-  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
-  get: () => ChatStore,
-): void {
-  if (pendingTextFlushTimer != null) {
-    window.clearTimeout(pendingTextFlushTimer)
-    pendingTextFlushTimer = null
-  }
-  if (pendingTextAppends.size === 0) return
-  const appends = pendingTextAppends
-  pendingTextAppends = new Map()
-  const caps = pendingTextCaps
-  pendingTextCaps = new Map()
-  set((state) => ({
-    conversations: state.conversations.map((c) => {
-      if (c.id !== state.activeConversationId) return c
-      let changed = false
-      const messages = c.messages.map((m) => {
-        const append = appends.get(m.ts)
-        if (!append) return m
-        changed = true
-        return withProjectedMessageParts({
-          ...m,
-          text: appendBoundedText(m.text || '', append, caps.get(m.ts)),
-        })
-      })
-      return changed ? { ...c, messages, updatedAt: Date.now() } : c
-    }),
-  }))
-  void get
-}
-
 // ─── 辅助函数：推送当前 LLM 设置到 Python 后端 ──────────────────────
 // 仅当配置自上次调用后实际更改时才发送。
 let _lastConfigHash: string | null = null
@@ -169,6 +108,164 @@ function settleRunningStatusCards(
       })
     }
   }
+}
+
+function sayTypeForPart(part: MessagePart): UIMessage['say'] {
+  if (part.type === 'reasoning') return 'reasoning'
+  if (part.type === 'tool') return 'tool'
+  if (part.type === 'tool_output') return 'code_result'
+  if (part.type === 'code') return 'code'
+  if (part.type === 'artifact') return 'image'
+  if (part.type === 'plan') return 'plan'
+  if (part.type === 'progress') return 'progress'
+  if (part.type === 'error') return 'error'
+  return 'text'
+}
+
+function messageFromNativePart(part: MessagePart): UIMessage {
+  const data = part.data ?? {}
+  const step = typeof data.step === 'number' ? data.step : data.stepNumber
+  return {
+    ts: Date.now(),
+    type: 'say',
+    say: sayTypeForPart(part),
+    text: part.text ?? '',
+    partial: part.status === 'running' || part.status === 'streaming',
+    runId: part.runId || part.run_id,
+    toolName: part.tool,
+    toolCallId: part.callId || part.call_id,
+    stepNumber: typeof step === 'number' ? step : undefined,
+    codeError: typeof data.error === 'string' ? data.error : null,
+    durationMs: typeof data.durationMs === 'number'
+      ? data.durationMs
+      : typeof data.duration_ms === 'number'
+        ? data.duration_ms
+        : undefined,
+    progressStage: typeof data.stage === 'string' ? data.stage : undefined,
+    progressDetail: part.text || (typeof data.detail === 'string' ? data.detail : undefined),
+    parts: [part],
+  }
+}
+
+function upsertNativePartIntoConversation(conv: Conversation, part: MessagePart): Conversation {
+  if (part.type === 'turn') return conv
+  const messages = [...conv.messages]
+  const existingIndex = messages.findIndex((message) =>
+    message.parts?.some((candidate) => candidate.id === part.id)
+  )
+  if (existingIndex >= 0) {
+    messages[existingIndex] = applyNativePartToMessage(
+      upsertMessagePart(messages[existingIndex], part),
+      part,
+    )
+    return { ...conv, messages, updatedAt: Date.now() }
+  }
+  messages.push(messageFromNativePart(part))
+  return { ...conv, messages, updatedAt: Date.now() }
+}
+
+function isOpenPartStatus(status: MessagePart['status'] | undefined): boolean {
+  return status === 'pending' || status === 'running' || status === 'streaming'
+}
+
+function isTurnScopedPart(part: MessagePart): boolean {
+  return (
+    part.type === 'text' ||
+    part.type === 'reasoning' ||
+    part.type === 'tool' ||
+    part.type === 'tool_output' ||
+    part.type === 'code' ||
+    part.type === 'plan' ||
+    part.type === 'progress'
+  )
+}
+
+function settleMessagePartStatus(part: MessagePart, mode: 'completed' | 'failed' | 'cancelled'): MessagePart {
+  if (!isTurnScopedPart(part)) return part
+  if (!isOpenPartStatus(part.status)) return part
+  return { ...part, status: mode }
+}
+
+function settledToolStatusForMode(
+  current: UIMessage['toolStatus'] | undefined,
+  mode: 'completed' | 'failed' | 'cancelled',
+): UIMessage['toolStatus'] | undefined {
+  if (current !== 'pending' && current !== 'running') return current
+  return mode === 'failed' || mode === 'cancelled' ? 'failed' : 'completed'
+}
+
+function settleConversationForTurnEnd(
+  conv: Conversation,
+  mode: 'completed' | 'failed' | 'cancelled',
+): Conversation {
+  let changed = false
+  const messages = conv.messages.map((message) => {
+    let next = message
+    if (message.parts?.length) {
+      const parts = message.parts.map((part) => {
+        const settled = settleMessagePartStatus(part, mode)
+        if (settled !== part) changed = true
+        return settled
+      })
+      next = { ...next, parts }
+    }
+    if (next.partial) {
+      changed = true
+      next = { ...next, partial: false }
+    }
+    if (next.toolStatus === 'pending' || next.toolStatus === 'running') {
+      changed = true
+      next = { ...next, toolStatus: settledToolStatusForMode(next.toolStatus, mode) }
+    }
+    return next
+  })
+  return changed ? { ...conv, messages, updatedAt: Date.now() } : conv
+}
+
+function applyNativePartToMessage(message: UIMessage, part: MessagePart): UIMessage {
+  const mergedPart = message.parts?.find((candidate) => candidate.id === part.id) ?? part
+  const partial = mergedPart.status === 'running' || mergedPart.status === 'streaming'
+  const data = mergedPart.data ?? {}
+  const updates: Partial<UIMessage> = {
+    partial,
+    runId: mergedPart.runId || mergedPart.run_id || message.runId,
+  }
+  if (mergedPart.type === 'text') {
+    updates.say = 'text'
+    if (mergedPart.text != null) updates.text = mergedPart.text || message.text
+  } else if (mergedPart.type === 'reasoning') {
+    updates.say = 'reasoning'
+    if (mergedPart.text != null) updates.text = mergedPart.text || message.text
+  } else if (mergedPart.type === 'code') {
+    updates.say = 'code'
+    const step = typeof data.step === 'number' ? data.step : data.stepNumber
+    if (typeof step === 'number') updates.stepNumber = step
+    if (mergedPart.text != null) updates.text = mergedPart.text || message.text
+  } else if (mergedPart.type === 'tool') {
+    updates.say = 'tool'
+    updates.toolName = mergedPart.tool || message.toolName
+    updates.toolCallId = mergedPart.callId || mergedPart.call_id || message.toolCallId
+    updates.toolStatus = mergedPart.status === 'failed' ? 'failed' : partial ? 'running' : 'completed'
+  } else if (mergedPart.type === 'tool_output') {
+    updates.say = 'code_result'
+    if (mergedPart.text != null) updates.text = mergedPart.text || message.text
+    const step = typeof data.step === 'number' ? data.step : data.stepNumber
+    if (typeof step === 'number') updates.stepNumber = step
+    updates.codeError = typeof data.error === 'string' ? data.error : message.codeError
+    updates.durationMs = typeof data.durationMs === 'number'
+      ? data.durationMs
+      : typeof data.duration_ms === 'number'
+        ? data.duration_ms
+        : message.durationMs
+  } else if (mergedPart.type === 'progress') {
+    updates.say = 'progress'
+    updates.progressStage = typeof data.stage === 'string' ? data.stage : message.progressStage
+    updates.progressDetail = mergedPart.text || (typeof data.detail === 'string' ? data.detail : message.progressDetail)
+  } else if (mergedPart.type === 'error') {
+    updates.say = 'error'
+    updates.text = mergedPart.text || message.text
+  }
+  return { ...message, ...updates }
 }
 
 async function configureBackendAgent(): Promise<void> {
@@ -214,420 +311,92 @@ function installNotificationBridge(
     if (!state.activeConversationId) return
 
     switch (method) {
-      case 'chat.stream_delta': {
-        // 追加到（或创建）当前助手消息
-        const conv = state.activeConversation()
-        const last = conv?.messages[conv.messages.length - 1]
-        const content = (params?.content as string) ?? ''
-        if (last && last.type === 'say' && last.say === 'text' && last.partial) {
-          queueTextAppend(set, get, last.ts, content)
-        } else {
-          // 添加文本前清除所有残留的 thinking 消息
-          if (last && last.say === 'thinking' && last.partial) {
-            state._updateMessage(last.ts, { partial: false })
+      case 'chat.message_part': {
+        const part = (params?.part ?? params) as MessagePart | undefined
+        if (!part?.id || !part.type) break
+        if (part.type === 'turn' && part.data?.kind === 'stream_end') {
+          const activeConversationId = state.activeConversationId
+          if (activeConversationId) {
+            const conv = state.activeConversation()
+            if (conv) settleRunningStatusCards(conv, state._updateMessage, 'completed')
+            set((s) => ({
+              conversations: s.conversations.map((conversation) =>
+                conversation.id === activeConversationId
+                  ? settleConversationForTurnEnd(conversation, 'completed')
+                  : conversation
+              ),
+            }))
           }
-          state._addMessage({
-            ts: Date.now(),
-            type: 'say',
-            say: 'text',
-            text: content,
-            partial: true,
-          })
-        }
-        break
-      }
-      case 'chat.stream_end': {
-        flushPendingTextAppends(set, get)
-        const conv = state.activeConversation()
-        if (conv) {
-          // 移除所有残留的 progress / thinking 消息
-          for (let i = conv.messages.length - 1; i >= 0; i--) {
-            const msg = conv.messages[i]
-            if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
-              state._updateMessage(msg.ts, { partial: false })
-              break
-            }
-          }
-          // 完成部分文本消息
-          const last = conv.messages[conv.messages.length - 1]
-          if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
-            state._updateMessage(last.ts, { partial: false })
-          }
-          settleRunningStatusCards(conv, state._updateMessage, 'completed')
-        }
-        get().setStreaming(false)
-        set({ workflowPlanActive: false })
-        break
-      }
-      case 'chat.code_block': {
-        flushPendingTextAppends(set, get)
-        // 参数: { step, code, script_path, script_abs_path, run_id }
-        // 如果已经在此步骤的代码流中，只需完成
-        // 现有部分代码消息即可（保留时间戳以便
-        // 行的展开状态保持稳定）。否则添加新消息。
-        const convCb = state.activeConversation()
-        const stepNum = params?.step as number | undefined
-        let mergedIntoExisting = false
-
-        if (convCb && stepNum != null) {
-          for (let i = convCb.messages.length - 1; i >= 0; i--) {
-            const m = convCb.messages[i]
-            if (m.say === 'code' && m.stepNumber === stepNum) {
-              // Merge into existing message (whether partial or already finished)
-              state._updateMessage(m.ts, {
-                text: params?.code as string,
-                scriptPath: params?.script_path as string | undefined,
-                scriptAbsPath: params?.script_abs_path as string | undefined,
-                runId: params?.run_id as string | undefined,
-                partial: false,
-              })
-              mergedIntoExisting = true
-              break
-            }
-            // 停止扫描，一旦遇到比此步骤更旧的内容
-            if (m.say === 'code' && (m.stepNumber ?? 0) < stepNum) break
-          }
-        }
-        if (mergedIntoExisting) {
-          // Still need to remove any lingering progress / thinking message
-          if (convCb) {
-            const lastCb = convCb.messages[convCb.messages.length - 1]
-            if (lastCb && (lastCb.say === 'progress' || lastCb.say === 'thinking')) {
-              state._updateMessage(lastCb.ts, { partial: false })
-            }
-          }
+          get().setStreaming(false)
+          set({ workflowPlanActive: false })
+          get()._persistActive()
           break
         }
-
-        // Remove any lingering progress / thinking message
-        if (convCb) {
-          const lastCb = convCb.messages[convCb.messages.length - 1]
-          if (lastCb && (lastCb.say === 'progress' || lastCb.say === 'thinking')) {
-            state._updateMessage(lastCb.ts, { partial: false })
+        set((s) => ({
+          conversations: s.conversations.map((conversation) =>
+            conversation.id === s.activeConversationId
+              ? upsertNativePartIntoConversation(conversation, part)
+              : conversation
+          ),
+        }))
+        if (part.type === 'error') {
+          const activeConversationId = get().activeConversationId
+          const conv = get().activeConversation()
+          if (conv) settleRunningStatusCards(conv, get()._updateMessage, 'failed')
+          if (activeConversationId) {
+            set((s) => ({
+              conversations: s.conversations.map((conversation) =>
+                conversation.id === activeConversationId
+                  ? settleConversationForTurnEnd(conversation, 'failed')
+                  : conversation
+              ),
+            }))
           }
+          get().setStreaming(false)
+          set({ workflowPlanActive: false })
+          get()._persistActive()
         }
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'code',
-          text: params?.code as string,
-          stepNumber: stepNum,
-          scriptPath: params?.script_path as string | undefined,
-          scriptAbsPath: params?.script_abs_path as string | undefined,
-          runId: params?.run_id as string | undefined,
-        })
-        break
-      }
-      case 'chat.code_block_start': {
-        // 参数: { step, run_id }
-        // LLM 刚刚打开了 ```python 围栏。创建一个部分代码
-        // 消息，以便 UI 立即开始流入。
-        const convCs = state.activeConversation()
-        const stepNumS = params?.step as number | undefined
-
-        // 隐藏任何 thinking/progress  spinner — 代码正在到达
-        if (convCs) {
-          const lastCs = convCs.messages[convCs.messages.length - 1]
-          if (lastCs && (lastCs.say === 'progress' || lastCs.say === 'thinking') && lastCs.partial) {
-            state._updateMessage(lastCs.ts, { partial: false })
-          }
-        }
-
-        // 如果此步骤的部分消息已存在，不要重复创建
-        if (convCs && stepNumS != null) {
-          const dup = convCs.messages.some(
-            (m) => m.say === 'code' && m.stepNumber === stepNumS && m.partial,
-          )
-          if (dup) break
-        }
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'code',
-          text: '',
-          stepNumber: stepNumS,
-          runId: params?.run_id as string | undefined,
-          partial: true,
-        })
-        break
-      }
-      case 'chat.code_delta': {
-        // 参数: { step, delta, run_id }
-        // 追加到此步骤的部分代码消息
-        const convCd = state.activeConversation()
-        const stepNumD = params?.step as number | undefined
-        const piece = (params?.delta as string) ?? ''
-        if (!convCd || stepNumD == null || !piece) break
-        for (let i = convCd.messages.length - 1; i >= 0; i--) {
-          const m = convCd.messages[i]
-          if (m.say === 'code' && m.stepNumber === stepNumD && m.partial) {
-            queueTextAppend(set, get, m.ts, piece)
-            break
-          }
-          if (m.say === 'code' && (m.stepNumber ?? 0) < stepNumD) break
-        }
-        break
-      }
-      case 'chat.code_block_end': {
-        flushPendingTextAppends(set, get)
-        // 参数: { step, run_id }
-        // LLM 完成了围栏写入。标记部分消息完成
-        // — 前端将在短暂延迟后动画折叠它。
-        // 我们保持 partial=true 一个额外的节拍，以便 UI 可以读取它
-        // 为"刚刚完成"；在这里翻转为 false 会触发折叠。
-        const convCe = state.activeConversation()
-        const stepNumE = params?.step as number | undefined
-        if (!convCe || stepNumE == null) break
-        for (let i = convCe.messages.length - 1; i >= 0; i--) {
-          const m = convCe.messages[i]
-          if (m.say === 'code' && m.stepNumber === stepNumE && m.partial) {
-            state._updateMessage(m.ts, { partial: false })
-            break
-          }
-          if (m.say === 'code' && (m.stepNumber ?? 0) < stepNumE) break
-        }
-        break
-      }
-      case 'chat.reasoning_delta': {
-        // 参数: { delta, round?, open?, run_id }
-        // 将代码前思考的块流入可折叠的
-        // "Thinking" 气泡。追加到最近的部分
-        // reasoning 消息；如果不存在（或 `open` 为 true），开始
-        // 一个新的。
-        const convRd = state.activeConversation()
-        if (!convRd) break
-        const piece = (params?.delta as string) ?? ''
-        const wantsOpen = params?.open === true
-        // 隐藏任何 thinking/progress spinner — reasoning 已到达
-        const lastRd = convRd.messages[convRd.messages.length - 1]
-        if (lastRd && (lastRd.say === 'progress' || lastRd.say === 'thinking') && lastRd.partial) {
-          state._updateMessage(lastRd.ts, { partial: false })
-        }
-        const refreshed = state.activeConversation()
-        const lastReason = refreshed?.messages[(refreshed?.messages.length ?? 0) - 1]
-        if (!wantsOpen && lastReason && lastReason.say === 'reasoning' && lastReason.partial) {
-          if (piece) queueTextAppend(set, get, lastReason.ts, piece)
-        } else {
-          state._addMessage({
-            ts: Date.now(),
-            type: 'say',
-            say: 'reasoning',
-            text: piece,
-            partial: true,
-            runId: params?.run_id as string | undefined,
-          })
-        }
-        break
-      }
-      case 'chat.reasoning_end': {
-        flushPendingTextAppends(set, get)
-        // 参数: { round, run_id }
-        // 关闭当前部分 reasoning 气泡 — UI 将
-        // 动画折叠它。
-        const convRe = state.activeConversation()
-        if (!convRe) break
-        for (let i = convRe.messages.length - 1; i >= 0; i--) {
-          const m = convRe.messages[i]
-          if (m.say === 'reasoning' && m.partial) {
-            state._updateMessage(m.ts, { partial: false })
-            break
-          }
-          if (m.say === 'code' || m.say === 'text') break
-        }
-        break
-      }
-      case 'chat.reasoning_promote': {
-        flushPendingTextAppends(set, get)
-        // 参数: { round, run_id }
-        // 轮次结束但没有代码 — 我们作为 "reasoning" 流式传输的内容
-        // 实际上是最终答案。就地转换气泡。
-        const convRp = state.activeConversation()
-        if (!convRp) break
-        for (let i = convRp.messages.length - 1; i >= 0; i--) {
-          const m = convRp.messages[i]
-          if (m.say === 'reasoning' && m.partial) {
-            state._updateMessage(m.ts, { say: 'text', partial: false })
-            break
-          }
-          if (m.say === 'code' || m.say === 'text') break
-        }
-        break
-      }
-      case 'chat.code_result': {
-        // 参数: { step, output, error, run_id, duration_ms }
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'code_result',
-          text: (params?.output as string) || '',
-          stepNumber: params?.step as number | undefined,
-          codeError: (params?.error as string | null) ?? null,
-          runId: params?.run_id as string | undefined,
-          durationMs: params?.duration_ms as number | undefined,
-        })
-        break
-      }
-      case 'chat.tool_start': {
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'tool',
-          toolName: params?.name as string,
-          toolCallId: params?.call_id as string | undefined,
-          toolArgs: params?.args as Record<string, unknown>,
-          toolStatus: 'running',
-        })
-        break
-      }
-      case 'chat.tool_output_delta': {
-        const conv = state.activeConversation()
-        const callId = params?.call_id as string | undefined
-        const piece = (params?.delta as string) ?? ''
-        if (!conv || !callId || !piece) break
-        for (let i = conv.messages.length - 1; i >= 0; i--) {
-          const m = conv.messages[i]
-          if (m.say === 'tool' && m.toolCallId === callId) {
-            queueTextAppend(set, get, m.ts, piece, MAX_LIVE_TOOL_OUTPUT_CHARS)
-            break
-          }
-        }
-        break
-      }
-      case 'chat.tool_result': {
-        flushPendingTextAppends(set, get)
-        const conv = state.activeConversation()
-        const metadata = (params?.metadata || {}) as Record<string, unknown>
-        const codeStep = metadata.code_step as number | undefined
-        const scriptPath = metadata.script_path as string | undefined
-        const scriptAbsPath = metadata.script_abs_path as string | undefined
-        const callId = params?.call_id as string | undefined
-        // 找到最近的运行中工具消息并标记为完成
-        if (conv) {
-          let updated = false
-          if (callId) {
-            for (let i = conv.messages.length - 1; i >= 0; i--) {
-              const m = conv.messages[i]
-              if (m.say === 'tool' && m.toolCallId === callId) {
-                state._updateMessage(m.ts, {
-                  toolStatus: params?.error ? 'failed' : 'completed',
-                  text: params?.output as string,
-                  durationMs: params?.duration_ms as number | undefined,
-                })
-                updated = true
-                break
-              }
-            }
-          }
-          for (let i = conv.messages.length - 1; i >= 0; i--) {
-            const m = conv.messages[i]
-            if (!updated && m.say === 'tool' && m.toolStatus === 'running') {
-              state._updateMessage(m.ts, {
-                toolStatus: params?.error ? 'failed' : 'completed',
-                text: params?.output as string,
-                durationMs: params?.duration_ms as number | undefined,
-              })
-              break
-            }
-          }
+        if (part.type === 'tool' && (part.status === 'completed' || part.status === 'failed')) {
+          const metadata = ((part.data?.metadata || {}) as Record<string, unknown>)
+          const codeStep = metadata.code_step as number | undefined
+          const scriptPath = metadata.script_path as string | undefined
+          const scriptAbsPath = metadata.script_abs_path as string | undefined
           if (codeStep != null && (scriptPath || scriptAbsPath)) {
-            for (let i = conv.messages.length - 1; i >= 0; i--) {
-              const m = conv.messages[i]
-              if (m.say === 'code' && m.stepNumber === codeStep) {
-                state._updateMessage(m.ts, {
-                  scriptPath,
-                  scriptAbsPath,
-                  runId: params?.run_id as string | undefined,
-                })
-                break
+            const conv = get().activeConversation()
+            if (conv) {
+              for (let i = conv.messages.length - 1; i >= 0; i--) {
+                const m = conv.messages[i]
+                if (m.say === 'code' && m.stepNumber === codeStep) {
+                  get()._updateMessage(m.ts, {
+                    scriptPath,
+                    scriptAbsPath,
+                    runId: part.runId || part.run_id,
+                  })
+                  break
+                }
+                if (m.say === 'code' && (m.stepNumber ?? 0) < codeStep) break
               }
-              if (m.say === 'code' && (m.stepNumber ?? 0) < codeStep) break
             }
           }
         }
-        break
-      }
-      case 'chat.error': {
-        flushPendingTextAppends(set, get)
-        settleRunningStatusCards(state.activeConversation(), state._updateMessage, 'failed')
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'error',
-          text: (params?.error as string) || 'Unknown error',
-        })
-        get().setStreaming(false)
-        set({ workflowPlanActive: false })
-        break
-      }
-      case 'chat.max_steps_reached': {
-        // 软停止：agent 用尽了每次运行的步骤预算。
-        // 摘要已通过 chat.stream_delta 推送，因此
-        // 此消息仅添加"继续？"功能。
-        state._addMessage({
-          ts: Date.now(),
-          type: 'say',
-          say: 'max_steps_reached',
-          maxStepsInfo: {
-            maxSteps: Number(params?.max_steps ?? 0),
-            stepCount: Number(params?.step_count ?? 0),
-            summary: (params?.summary as string) || '',
-          },
-          runId: params?.run_id as string | undefined,
-        })
-        // 注意：stream_end 会立即由后端发出，它将
-        // 关闭 isStreaming — 无需在此处执行
         break
       }
       case 'chat.cancelled': {
-        flushPendingTextAppends(set, get)
-        // Clean up all partial UI state — same as stream_end.
-        // Without this, thinking bubbles, progress bars, and subagent
-        // cards stay stuck in their "running" state after cancel.
-        const cancelConv = state.activeConversation()
-        if (cancelConv) {
-          for (const msg of cancelConv.messages) {
-            // Mark partial thinking / progress as finished
-            if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
-              state._updateMessage(msg.ts, { partial: false })
-            }
-          }
-          settleRunningStatusCards(cancelConv, state._updateMessage, 'cancelled')
-          // Close any partial assistant text
-          const last = cancelConv.messages[cancelConv.messages.length - 1]
-          if (last && last.partial && last.say !== 'progress' && last.say !== 'thinking') {
-            state._updateMessage(last.ts, { partial: false })
-          }
+        const activeConversationId = state.activeConversationId
+        if (activeConversationId) {
+          const cancelConv = state.activeConversation()
+          if (cancelConv) settleRunningStatusCards(cancelConv, state._updateMessage, 'cancelled')
+          set((s) => ({
+            conversations: s.conversations.map((conversation) =>
+              conversation.id === activeConversationId
+                ? settleConversationForTurnEnd(conversation, 'cancelled')
+                : conversation
+            ),
+          }))
         }
         get().setStreaming(false)
         set({ workflowPlanActive: false })
-        break
-      }
-      case 'chat.progress': {
-        // 进度指示器：更新或添加进度消息
-        // 首先，清除所有残留的 thinking 消息
-        const conv = state.activeConversation()
-        const last = conv?.messages[conv.messages.length - 1]
-        const stage = (params?.stage as string) || 'processing'
-        const progressDetail = (params?.message as string) || ''
-        if (last && last.say === 'thinking' && last.partial) {
-          // 用进度替换 thinking
-          state._updateMessage(last.ts, { partial: false })
-        }
-        const convAfter = state.activeConversation()
-        const lastAfter = convAfter?.messages[convAfter.messages.length - 1]
-        if (lastAfter && lastAfter.say === 'progress') {
-          // 更新现有进度消息
-          state._updateMessage(lastAfter.ts, { progressStage: stage, progressDetail, partial: true })
-        } else {
-          state._addMessage({
-            ts: Date.now(),
-            type: 'say',
-            say: 'progress',
-            progressStage: stage,
-            progressDetail,
-            partial: true,
-          })
-        }
+        get()._persistActive()
         break
       }
       case 'chat.title_generated': {
@@ -770,20 +539,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
       try {
         const loaded = await loadConversations(workspacePath)
-        // Mark pending screenshot cards as expired — the backend session
-        // that created them is gone, so they can never be captured.
+        // Chat rendering is MessagePart-first. Persisted rows without parts
+        // are discarded at load time.
         for (const conv of loaded) {
-          conv.messages = conv.messages.map((msg) => {
-            if (msg.say === 'screenshot' && msg.screenshotData) {
-              return withProjectedMessageParts({
-                ...msg,
-                say: 'text',
-                text: '📸 [截图已过期]',
-                screenshotData: undefined,
-              })
-            }
-            return withProjectedMessageParts(msg)
-          })
+          conv.messages = conv.messages.filter((msg) => Array.isArray(msg.parts) && msg.parts.length > 0)
         }
         set({
           conversations: loaded,
@@ -902,11 +661,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     abortTask: async (workspacePathOverride?: string | null) => {
-      const t0 = performance.now()
-      console.log(`[ABORT-DEBUG][${new Date().toISOString()}] abortTask called, isStreaming=${get().isStreaming}`)
       // 立即设置 streaming 为 false 以提高 UI 响应速度
       set({ isStreaming: false, isCancelling: true })
-      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms set isStreaming=false,isCancelling=true`)
       // 添加用户可见的取消消息
       get()._addMessage({
         ts: Date.now(),
@@ -914,7 +670,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         say: 'text',
         text: '⏹️ Task cancelled by user.',
       })
-      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms sending rpc.agent.interrupt...`)
       // 告诉后端终止进程并释放锁
       // 我们等待此操作，以便后端有时间清理，
       // 然后再让用户发送下一条消息
@@ -926,13 +681,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const result = await pythonClient.send('rpc.agent.interrupt', {
           workspace_path: workspacePath || undefined,
         })
-        console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt returned:`, result)
+        void result
       } catch (e) {
-        console.warn(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms rpc.agent.interrupt FAILED:`, e)
+        console.warn('[chatStore] rpc.agent.interrupt failed:', e)
       } finally {
         set({ isCancelling: false, workflowPlanActive: false })
       }
-      console.log(`[ABORT-DEBUG] +${(performance.now()-t0).toFixed(1)}ms abortTask finished`)
     },
 
     _addMessage: (message) => {
@@ -941,7 +695,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (c.id === state.activeConversationId) {
             return {
               ...c,
-              messages: [...c.messages, withProjectedMessageParts(message)],
+              messages: [...c.messages, message],
               updatedAt: Date.now(),
             }
           }
@@ -958,7 +712,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return {
               ...c,
               messages: c.messages.map((m) =>
-                m.ts === ts ? withProjectedMessageParts({ ...m, ...updates }) : m
+                m.ts === ts ? { ...m, ...updates } : m
               ),
             }
           }

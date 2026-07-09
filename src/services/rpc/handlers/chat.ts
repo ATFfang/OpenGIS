@@ -1,8 +1,9 @@
 /**
  * rpc.ui.chat.* handlers — 3 个
  *
- * Stage 1：show_text / show_table 仍是 stub（轻量内容直接走 stream_delta）。
- * Stage 3.12 (2026-04-28)：show_image 真实现。后端 save_plot skill 把
+ * show_text / show_table remain lightweight stubs; normal assistant text
+ * arrives through MessagePart events. show_image is implemented: the backend
+ * save_plot tool writes
  *   PNG 落到 workspace/assets/plots/ 后调用本 handler，参数仅传路径，
  *   前端读文件 → Blob URL → 注入 chatStore 渲染。
  */
@@ -71,7 +72,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
   },
 
   /**
-   * Plan / TODO checklist. The backend `update_plan` skill sends the FULL
+   * Plan / TODO checklist. The backend `update_plan` tool sends the FULL
    * plan on every call; we upsert a single `say='plan'` message keyed by
    * `plan_id` so repeated updates animate the same card in place rather
    * than spamming the chat with one card per update.
@@ -186,10 +187,10 @@ export const chatHandlers: Record<string, RpcHandler> = {
   },
 
   /**
-   * Interactive map screenshot request. The backend skill sends this
+   * Interactive map screenshot request. The backend tool sends this
    * to show a capture card in the chat. The user adjusts the map and
    * clicks "Capture" — the frontend saves the image and writes a
-   * result marker so the backend skill can unblock.
+   * result marker so the backend tool can unblock.
    */
   'rpc.ui.chat.interactive_snapshot': (params) => {
     const raw = (params ?? {}) as Record<string, unknown>;

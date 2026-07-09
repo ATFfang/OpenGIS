@@ -3,7 +3,7 @@
  *
  * 为什么集中放一处：
  *   - 和 INTERFACE.md §1 一一对应，便于对账
- *   - Stage 3 若要把 schema 序列化成 JSON Schema 给 Python 参考，一次导出即可
+ *   - 若要把 schema 序列化成 JSON Schema 给 Python 参考，一次导出即可
  *
  * 命名规则：`<RpcMethodBaseName>Schema`，如 `AddLayerSchema`。
  */
@@ -376,7 +376,7 @@ export const ShowTableSchema = z.object({
 });
 
 /**
- * 计划 / TODO 清单更新。后端 `update_plan` skill 调用本 method，每次携带
+ * 计划 / TODO 清单更新。后端 `update_plan` tool 调用本 method，每次携带
  * 完整的步骤列表（声明式全量替换）。前端按 `plan_id` upsert 同一张卡片。
  */
 export const PlanStepStatusSchema = z.enum([

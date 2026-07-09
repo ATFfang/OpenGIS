@@ -1,12 +1,13 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { MapPin, Maximize2, X, Check, Loader2, ImageOff } from 'lucide-react'
-import type { UIMessage } from '@/types/chat'
 import { useMapStore } from '@/stores/mapStore'
 import type { PinnedImage } from '@/features/map/PinnedImagePanel'
 import { pathToImageUrl, releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 interface ImageRowProps {
-  message: UIMessage
+  images?: string[]
+  files?: string[]
+  caption?: string
 }
 
  /**
@@ -21,9 +22,8 @@ interface ImageRowProps {
  * Pin button adds a draggable floating image window on the map
  * (via mapStore.addPinnedImage), preserving the original aspect ratio.
  */
-export const ImageRow = memo(({ message }: ImageRowProps) => {
-  const images = message.images ?? []
-  const path = message.files?.[0]
+export const ImageRow = memo(({ images = [], files = [], caption = '' }: ImageRowProps) => {
+  const path = files[0]
   const storedUrl = images[0]
 
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(storedUrl)
@@ -91,7 +91,7 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
         <div className="relative inline-block group max-w-full">
           <img
             src={url}
-            alt={message.text || 'plot'}
+            alt={caption || 'plot'}
             className="max-w-[420px] max-h-[320px] rounded-xl border border-border/30 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
             onClick={() => setPreviewOpen(true)}
           />
@@ -134,9 +134,9 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
           </div>
         </div>
 
-        {message.text && (
+        {caption && (
           <p className="text-[12px] text-text-muted mt-1 max-w-[420px] leading-relaxed">
-            {message.text}
+            {caption}
           </p>
         )}
       </div>
@@ -156,7 +156,7 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
           </button>
           <img
             src={url}
-            alt={message.text || 'plot'}
+            alt={caption || 'plot'}
             className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />

@@ -503,13 +503,6 @@ export class MapEngine {
       this.map.removeSource(sourceId)
     }
     this.managedSourceIds.delete(sourceId)
-
-    console.log(
-      '[MapEngine] Removed layer:',
-      layerId,
-      'render-layers:',
-      layerIdsToRemove,
-    )
   }
 
   /**
@@ -537,13 +530,6 @@ export class MapEngine {
       this.managedLayerIds.delete(id)
       this.renderLayerToDef.delete(id)
     }
-
-    console.log(
-      '[MapEngine] Removed render layers only (kept source):',
-      layerId,
-      'render-layers:',
-      layerIdsToRemove,
-    )
   }
 
   /**
@@ -578,7 +564,7 @@ export class MapEngine {
    * 重新排序渲染图层。对每个 layer def 取它的 render layer id 列表
    * （通过 renderer.listRenderLayerIds），按 bottom → top 顺序 moveLayer
    *
-   * Stage 3.9 的老实现靠 hard-coded suffix 顺序（fill/line/stroke/circle）
+   * Earlier rendering code relied on hard-coded suffix order（fill/line/stroke/circle）
    * 新版交给 renderer 自己决定顺序：`listRenderLayerIds` 返回的顺序即
    * 从底到顶
    */
@@ -754,7 +740,7 @@ export class MapEngine {
 
   /**
    * 在渲染模式切换（如 fill → graduated，或 circle → cluster）时，
-   * MapView 需要能主动把旧 renderer 的子层清掉，但保留 source（由 syncLayer
+   * MapView 需要能主动清理 renderer 子层，但保留 source（由 syncLayer
    * 的 ensureGeoJSONSource 负责重用）。单独的 cluster/raster 走 removeMapLayer
    * 全清路径；vector 类之间切换只清子层即可
    *

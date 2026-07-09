@@ -16,7 +16,7 @@ import { ScriptRunnerView } from '@/features/script-runner/ScriptRunnerView'
 import { WorkflowsPanel } from '@/features/workflows/WorkflowsPanel'
 import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
 import { RunsPanel } from '@/features/runs/RunsPanel'
-import { SkillsPanel } from '@/features/skills/SkillsPanel'
+import { ToolAndSkillPanel } from '@/features/tool-catalog/ToolAndSkillPanel'
 import { WorkersPanel } from '@/features/workers/WorkersPanel'
 import { DataPivotPanel } from '@/features/pivot/DataPivotPanel'
 import { LayoutComposerView } from '@/features/layout-composer/LayoutComposerView'
@@ -398,7 +398,7 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
     case 'workers':
       return <WorkersPanel />
     case 'skills':
-      return <SkillsPanel />
+      return <ToolAndSkillPanel />
     default:
       return null
   }

@@ -1,5 +1,5 @@
 /**
- * AssetStore (v3) — workspace 下的文件资产登记
+ * AssetStore — workspace 下的文件资产登记
  *
  * Asset = 用户 workspace 里识别到的 GIS 文件（shp/geojson/tif/csv/...）。
  * 和 Layer 的区别：
@@ -7,7 +7,7 @@
  *   - Layer 是「这个文件现在渲染在地图上」
  *   - 一个 Asset 可以被加载成多个 Layer（少见但合法）
  *
- * 扫描策略（Stage 4 实现）：
+ * 扫描策略：
  *   workspace 打开时 `rpc.ui.fs.list_assets` 触发扫描，结果写入 store。
  */
 

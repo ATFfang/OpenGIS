@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from opengis_backend.agent.script_archive import ScriptArchive
+from opengis_backend.agent.telemetry.script_archive import ScriptArchive
 
 
 class ScriptArchiveTests(unittest.TestCase):

@@ -1,8 +1,8 @@
 /**
- * EventBus (v3) — TS → Python 单向状态变更通知
+ * EventBus — TS → Python 单向状态变更通知
  *
- * Stage 1：发送动作通过 `transport` 抽象；默认用 `consoleTransport`（只打日志）。
- * Stage 3：替换为真实 WebSocket notification transport。
+ * Sending is routed through a swappable `transport`; the default no-op keeps
+ * tests and renderer-only boot safe until PythonClient wires the real bridge.
  *
  * 节流规则：
  *   - `event.viewport.changed` 必须节流（trailing），默认 200ms
@@ -57,7 +57,7 @@ export interface ViewportChangedPayload {
 export interface WorkspaceOpenedPayload {
   workspace_path: string;
   project_name: string;
-  layers: unknown[]; // Layer[] snapshot，Stage 3 填准确类型
+  layers: unknown[]; // Layer[] snapshot from the current map store.
   assets: unknown[]; // Asset[] snapshot
 }
 
@@ -66,15 +66,12 @@ export interface WorkspaceClosedPayload {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Transport：Stage 1 只有 console，Stage 3 换成 WebSocket
+// Transport: default no-op, replaced by PythonClient during app startup.
 // ─────────────────────────────────────────────────────────────────────
 
 export type EventTransport = (notif: JsonRpcNotification) => void;
 
-export const consoleTransport: EventTransport = (notif) => {
-  // eslint-disable-next-line no-console
-  console.log('[EventBus]', notif.method, notif.params);
-};
+export const noopTransport: EventTransport = () => {};
 
 // ─────────────────────────────────────────────────────────────────────
 // 节流工具（trailing-edge，保留最后一次 payload）
@@ -114,14 +111,14 @@ export class EventBus {
   private viewportEmit: (payload: ViewportChangedPayload) => void;
 
   constructor(opts: EventBusOptions = {}) {
-    this.transport = opts.transport ?? consoleTransport;
+    this.transport = opts.transport ?? noopTransport;
     const throttleMs = opts.viewportThrottleMs ?? 200;
     this.viewportEmit = trailingThrottle((p: ViewportChangedPayload) => {
       this.send('event.viewport.changed', p);
     }, throttleMs);
   }
 
-  /** Stage 3 接通真实 transport 后调用这个替换。 */
+  /** Replace the active transport when PythonClient connects or reconnects. */
   setTransport(transport: EventTransport): void {
     this.transport = transport;
   }
@@ -162,5 +159,5 @@ export class EventBus {
   }
 }
 
-/** 默认单例。Stage 3 用 `setTransport` 接入真实 WebSocket。 */
+/** 默认单例。Use `setTransport` to attach the active Python bridge. */
 export const eventBus = new EventBus();

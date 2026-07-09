@@ -23,10 +23,9 @@ export interface DispatcherLike {
    * Route a notification (no `id`) to the handler registry. Returns void;
    * any handler error is swallowed by the dispatcher's `onError` hook.
    *
-   * Stage 3.8 fix: before this, ``_handleMessage`` only broadcast inbound
-   * notifications to ``notificationHandlers`` and **never** hit the
-   * dispatcher, so Python-pushed `rpc.ui.map.*` notifications silently
-   * dropped (the map store's handlers were registered but unreachable).
+   * Route Python-pushed notifications through both the handler registry and
+   * external listeners. This keeps map/worker/chat side effects centralized
+   * while preserving subscription hooks for UI code.
    */
   handleNotification(notif: JsonRpcNotification): Promise<void>
 }
@@ -86,11 +85,9 @@ export class PythonClient {
   /**
    * Register the RPC dispatcher used to service inbound requests from the
    * Python backend (methods with ``rpc.`` / ``chat.`` / ``event.`` prefix
-   * and an ``id`` field). Without a dispatcher, inbound requests fall
-   * through to the notification handlers for backwards compatibility.
-   *
-   * Stage 3.4: this is the wire-up point that finally connects the
-   * Stage-1 Dispatcher + Registry to the real WebSocket.
+   * and an ``id`` field). Notifications are also broadcast through
+   * ``onNotification`` for stores and extension hosts that subscribe to the
+   * shared event stream.
    */
   setDispatcher(dispatcher: DispatcherLike | null): void {
     this.dispatcher = dispatcher
@@ -146,7 +143,7 @@ export class PythonClient {
    *
    * @param timeoutMs  Override the per-request timeout. Defaults are tuned
    *                   per method family: `chat.user_message` gets 10 minutes
-   *                   because CodeAgent runs are multi-step + LLM-bound,
+   *                   because agent runs are multi-step + LLM-bound,
    *                   everything else gets 60 seconds.
    */
   async send<T = any>(
@@ -247,7 +244,6 @@ export class PythonClient {
       this.ws = new WebSocket(this.url)
 
       this.ws.onopen = () => {
-        console.log('[PythonClient] Connected to', this.url)
         this._isConnected = true
         this.reconnectAttempts = 0
       }
@@ -262,7 +258,6 @@ export class PythonClient {
       }
 
       this.ws.onclose = () => {
-        console.log('[PythonClient] Disconnected')
         this._isConnected = false
         this.rejectPendingRequests(new Error('WebSocket disconnected'))
         this._scheduleReconnect()
@@ -286,8 +281,7 @@ export class PythonClient {
       return
     }
 
-    // JSON-RPC Request from Python → TS (has id + method + routable prefix)
-    // Stage 3.4: dispatch to the Registry via the wired-in Dispatcher.
+    // JSON-RPC Request from Python → TS (has id + method + routable prefix).
     if (data.id !== undefined && typeof data.method === 'string') {
       const channel = getMethodChannel(data.method)
       if (this.dispatcher && channel !== null) {
@@ -324,23 +318,21 @@ export class PythonClient {
           })
         return
       }
-      // No dispatcher wired or unknown channel → fall through so legacy
-      // notification handlers still see the method name.
+      // No dispatcher wired or unknown channel: fall through to the
+      // broadcast notification stream so observers still see the method.
     }
 
     // JSON-RPC Notification (no id).
     //
-    // Stage 3.8: two sinks, in order.
+    // Two sinks, in order.
     //   1. If a dispatcher is wired AND the method sits on one of the
     //      canonical channels (rpc./chat./event.), route it to the
     //      dispatcher. This is how `rpc.ui.map.add_layer_from_geojson`
     //      (and friends) finally reach the handlers in
     //      `src/services/rpc/handlers/`.
-    //   2. Always also fan out to `notificationHandlers`. Legacy Python
-    //      pushes like `chat.stream_delta` / `chat.code_block` / script
-    //      events are consumed by store-level subscribers that were
-    //      registered via `onNotification(...)` — they must keep seeing
-    //      every notification.
+    //   2. Always also fan out to `notificationHandlers`. Store-level
+    //      features such as chat MessageParts, script output, worker logs,
+    //      pivots, and extensions subscribe through `onNotification(...)`.
     //
     // Running both is safe: canonical-channel methods are registered
     // exclusively on the dispatcher's registry; non-canonical methods
@@ -426,8 +418,6 @@ export class PythonClient {
 
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
     this.reconnectAttempts++
-
-    console.log(`[PythonClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
 
     this.reconnectTimer = setTimeout(() => {
       this._connect()

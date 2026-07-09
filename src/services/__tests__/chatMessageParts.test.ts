@@ -1,58 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { UIMessage } from '@/types/chat'
-import { messagePartsForRender, withProjectedMessageParts } from '@/services/chatMessageParts'
+import {
+  messagePartsForRender,
+  upsertMessagePart,
+} from '@/services/chatMessageParts'
 
 describe('chatMessageParts', () => {
-  it('projects legacy assistant text into MessagePart[]', () => {
+  it('renders only native MessagePart[] from the message envelope', () => {
     const message: UIMessage = {
       ts: 1000,
       type: 'say',
       say: 'text',
-      text: 'hello',
-      partial: true,
-    }
-
-    const projected = withProjectedMessageParts(message)
-
-    expect(projected.parts).toHaveLength(1)
-    expect(projected.parts?.[0]).toMatchObject({
-      id: '1000:text',
-      type: 'text',
-      status: 'streaming',
-      text: 'hello',
-    })
-  })
-
-  it('refreshes legacy projected parts when the legacy message changes', () => {
-    const message = withProjectedMessageParts({
-      ts: 2000,
-      type: 'say',
-      say: 'code',
-      text: 'print("a")',
-      stepNumber: 3,
-      partial: true,
-    })
-
-    const updated = withProjectedMessageParts({
-      ...message,
-      text: 'print("ab")',
-      partial: false,
-    })
-
-    expect(messagePartsForRender(updated)[0]).toMatchObject({
-      id: '2000:code:3',
-      type: 'code',
-      status: 'completed',
-      text: 'print("ab")',
-    })
-  })
-
-  it('keeps native non-legacy parts untouched', () => {
-    const message: UIMessage = {
-      ts: 3000,
-      type: 'say',
-      say: 'text',
-      text: 'legacy text',
+      text: 'legacy envelope text',
       parts: [
         {
           id: 'native',
@@ -64,10 +23,89 @@ describe('chatMessageParts', () => {
       ],
     }
 
-    expect(withProjectedMessageParts(message).parts?.[0]).toMatchObject({
-      id: 'native',
-      text: 'native text',
+    expect(messagePartsForRender(message)).toEqual(message.parts)
+  })
+
+  it('does not synthesize fallback parts for legacy envelope-only messages', () => {
+    const message: UIMessage = {
+      ts: 2000,
+      type: 'say',
+      say: 'text',
+      text: 'old text',
+      partial: true,
+    }
+
+    expect(messagePartsForRender(message)).toEqual([])
+  })
+
+  it('upserts native streaming parts by stable id', () => {
+    const message: UIMessage = {
+      ts: 4000,
+      type: 'say',
+      say: 'text',
+      text: '',
+    }
+
+    const first = upsertMessagePart(message, {
+      id: 'run:text:final',
+      type: 'text',
+      status: 'streaming',
+      text: 'hel',
+    })
+    const second = upsertMessagePart(first, {
+      id: 'run:text:final',
+      type: 'text',
+      status: 'streaming',
+      text: 'lo',
+    })
+    const done = upsertMessagePart(second, {
+      id: 'run:text:final',
+      type: 'text',
+      status: 'completed',
+      data: { finished: true },
+    })
+
+    expect(messagePartsForRender(done)).toHaveLength(1)
+    expect(messagePartsForRender(done)[0]).toMatchObject({
+      id: 'run:text:final',
+      type: 'text',
+      status: 'completed',
+      text: 'hello',
+      data: { finished: true },
+    })
+  })
+
+  it('keeps reasoning and text as separate native parts', () => {
+    const message: UIMessage = {
+      ts: 5000,
+      type: 'say',
+      say: 'reasoning',
+      text: '',
+    }
+
+    const withReasoning = upsertMessagePart(message, {
+      id: 'run:reasoning:1',
+      type: 'reasoning',
+      status: 'streaming',
+      text: 'reasoning summary',
+    })
+    const withText = upsertMessagePart(withReasoning, {
+      id: 'run:text:final',
+      type: 'text',
+      status: 'streaming',
+      text: 'final answer',
+    })
+
+    expect(messagePartsForRender(withText)).toHaveLength(2)
+    expect(messagePartsForRender(withText)[0]).toMatchObject({
+      id: 'run:reasoning:1',
+      type: 'reasoning',
+      text: 'reasoning summary',
+    })
+    expect(messagePartsForRender(withText)[1]).toMatchObject({
+      id: 'run:text:final',
+      type: 'text',
+      text: 'final answer',
     })
   })
 })
-

@@ -391,14 +391,13 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
   const isDirectory = node.type === 'directory'
   const isGisFile = isSupportedExtension(node.name)
   const canPivot = canPivotFile(node)
-  // Defensive: agent-created layers or legacy entries may lack `meta`.
+  // Defensive: agent-created layers may lack `meta`.
   // Never assume it's present — otherwise a single bad layer crashes the
   // whole sidebar tree.
   //
-  // Match by full filePath first (unique), fall back to fileName for legacy
-  // layers loaded before filePath was tracked. Matching by fileName alone
-  // falsely marks unrelated same-named files as loaded and hides the
-  // "Add to Map" menu item.
+  // Match by full filePath first (unique), then fileName as a lossy fallback.
+  // Matching by fileName alone falsely marks unrelated same-named files as
+  // loaded and hides the "Add to Map" menu item.
   const isLayerLoaded = layers.some((l) => {
     const meta = l?.meta
     if (!meta) return false

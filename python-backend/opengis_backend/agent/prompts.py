@@ -1,10 +1,4 @@
-"""System prompts for the OpenGIS Agent (tool-calling first).
-
-v4.0 (2026-07): Migrated from CodeAct to tool-calling architecture.
-- LLM calls tools directly instead of writing code blocks.
-- execute_code available as fallback for complex analysis.
-- Termination: LLM replies with text summary (no final_answer).
-"""
+"""System prompts for the OpenGIS function-call agent."""
 
 OPENGIS_SYSTEM_PROMPT = """\
 You are OpenGIS Assistant — an autonomous geospatial analysis agent.
@@ -256,3 +250,44 @@ def build_tool_signatures(registered_tools) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def build_tool_catalog_summary(registered_tools) -> str:
+    """Format a compact tool catalog for the long-lived system prompt.
+
+    Full JSON schemas are supplied separately via provider function-calling on
+    each turn. Keeping the static prompt compact prevents long sessions from
+    paying the full tool signature cost repeatedly.
+    """
+    groups: dict[str, list[str]] = {}
+    for rs in registered_tools:
+        if rs.schema.name == "save_plot":
+            continue
+        cat = rs.schema.category or "other"
+        groups.setdefault(cat, []).append(rs.schema.name)
+
+    lines = [
+        "Tool schemas are dynamically materialized per turn. Use the provider",
+        "function list as the source of truth for exact parameters. The catalog",
+        "below is only a capability map:",
+        "",
+    ]
+    order = ["system", "data", "visualization", "worker", "report", "writing", "orchestration"]
+    seen: set[str] = set()
+    for cat in order:
+        names = groups.get(cat, [])
+        if not names:
+            continue
+        seen.add(cat)
+        label = _CATEGORY_LABELS.get(cat, cat.title())
+        lines.append(f"### {label}")
+        lines.append(", ".join(sorted(names)))
+        lines.append("")
+    for cat, names in sorted(groups.items()):
+        if cat in seen:
+            continue
+        label = _CATEGORY_LABELS.get(cat, cat.title())
+        lines.append(f"### {label}")
+        lines.append(", ".join(sorted(names)))
+        lines.append("")
+    return "\n".join(lines).strip()

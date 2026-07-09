@@ -4,7 +4,7 @@
  * Why this exists
  * ───────────────
  * Both `MarkdownBlock` (fenced code in assistant text) and `CodeStepRow`
- * (Python steps from CodeAgent) render syntax-highlighted code. They
+ * (agent Python steps) render syntax-highlighted code. They
  * used to hard-code `oneDark` regardless of the app theme, then forcibly
  * paint the background with `var(--bg-tertiary)`. In light mode that
  * becomes "saturated dark-theme tokens on a light-grey background",

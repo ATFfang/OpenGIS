@@ -12,10 +12,6 @@ interface ThinkingRowProps {
   showChevron?: boolean
 }
 
-/**
- * ThinkingRow — Cline-inspired collapsible thinking/reasoning section.
- * Shows a shimmer animation during streaming with smooth expand/collapse.
- */
 export const ThinkingRow = memo(({
   showTitle = false,
   reasoningContent,

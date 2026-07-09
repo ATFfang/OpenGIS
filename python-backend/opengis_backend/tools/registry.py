@@ -33,7 +33,7 @@ class RegisteredTool:
     schema: ToolSchema
     function: Callable
     needs_context: bool = False
-    raw_function: Callable | None = None  # Original undecorated function (for CodeAgent direct call)
+    raw_function: Callable | None = None  # Original undecorated function for the tool bridge.
 
 
 # Global tool registry
@@ -56,7 +56,7 @@ def tool(
     Decorator to register a function as an executable GIS tool.
 
     If `needs_context=True`, the tool function MUST accept a `ctx: ToolContext`
-    as its first positional argument. The CodeAgent will inject the active
+    as its first positional argument. The agent runtime will inject the active
     ToolContext automatically — user code never passes it manually.
 
     Usage:
@@ -107,7 +107,7 @@ def tool(
             except Exception as e:
                 return ToolResult(success=False, error=str(e))
 
-        # Store the async wrapper plus the raw function for CodeAgent's direct calls.
+        # Store the async wrapper plus the raw function for direct tool calls.
         _registry[name] = RegisteredTool(
             schema=schema,
             function=wrapper,
@@ -147,7 +147,7 @@ class ToolRegistry:
         return [s.schema for s in _registry.values()]
 
     def list_registered(self) -> list[RegisteredTool]:
-        """List all RegisteredTool records (for CodeAgent tool wrapping)."""
+        """List all RegisteredTool records for agent/runtime adapters."""
         return list(_registry.values())
 
     def get(self, name: str) -> RegisteredTool | None:

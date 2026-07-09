@@ -127,10 +127,6 @@ function ResolvedImage({ src, alt, resolveImageSrc, releasePath, onClick }: {
   )
 }
 
-/**
- * MarkdownBlock — Cline-inspired markdown renderer.
- * Renders markdown with syntax highlighting, GFM support, and cursor animation.
- */
 const MarkdownBlock = memo(({ markdown, showCursor, baseDir, resolveImageSrc }: MarkdownBlockProps) => {
   const defaultImageResolver = useCallback(
     (src: string) => defaultResolveImageSrc(src, baseDir),

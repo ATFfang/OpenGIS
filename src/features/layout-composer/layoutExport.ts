@@ -1,7 +1,7 @@
 import type { MapLayerDefinition } from '@/services/geo'
-import { getCategorizedCache } from '@/features/map/renderers/categorizedRenderer'
-import { getGraduatedCache } from '@/features/map/renderers/graduatedRenderer'
 import { getLayoutDesignWidth, scaleLayoutValue } from './layoutMetrics'
+import { buildLegendSections } from './layoutLegend'
+import { buildScaleBarMetrics } from './layoutScaleBar'
 import type { LayoutElement, LayoutElementStyle, LayoutExportOptions, LayoutExportResult, LayoutPage } from './types'
 
 const PX_PER_MM = 4
@@ -358,115 +358,6 @@ function drawDecoratedBackground(
     ctx.stroke()
   }
   ctx.restore()
-}
-
-interface LegendSection {
-  layerId: string
-  title: string
-  showTitle: boolean
-  entries: Array<{ label: string; color: string }>
-}
-
-function buildLegendSections(layers: MapLayerDefinition[], element: LayoutElement): LegendSection[] {
-  const selectedLayerIds = Array.isArray(element.props?.layerIds)
-    ? element.props.layerIds.filter((id): id is string => typeof id === 'string')
-    : []
-  if (selectedLayerIds.length === 0) return []
-  const grouped = element.props?.grouped !== false
-  const selected = new Set(selectedLayerIds)
-  return layers
-    .filter((layer) => selected.has(layer.id))
-    .map((layer) => ({
-      layerId: layer.id,
-      title: layer.name,
-      showTitle: grouped || selectedLayerIds.length > 1,
-      entries: buildLegendEntries(layer),
-    }))
-}
-
-function buildLegendEntries(layer: MapLayerDefinition): Array<{ label: string; color: string }> {
-  if (layer.style.renderType === 'categorized') {
-    const colors = getCategorizedCache(layer.id) ?? layer.style.categorized?.colors ?? {}
-    const entries = Object.entries(colors).map(([label, color]) => ({ label, color }))
-    if (entries.length > 0) return entries
-  }
-
-  if (layer.style.renderType === 'graduated') {
-    const cached = getGraduatedCache(layer.id)
-    const breaks = cached?.breaks ?? layer.style.graduated?.breaks ?? []
-    const palette = cached?.palette ?? layer.style.graduated?.palette ?? []
-    if (breaks.length > 0 && palette.length > 0) {
-      return palette.map((color, index) => ({ color, label: graduatedLabel(index, breaks) }))
-    }
-  }
-
-  return [{ label: layer.name, color: layer.style.color || layer.style.strokeColor || '#64748b' }]
-}
-
-function graduatedLabel(index: number, breaks: number[]): string {
-  const format = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(2)
-  if (index === 0) return `< ${format(breaks[0])}`
-  if (index >= breaks.length) return `>= ${format(breaks[breaks.length - 1])}`
-  return `${format(breaks[index - 1])} - ${format(breaks[index])}`
-}
-
-function buildScaleBarMetrics(
-  element: LayoutElement,
-  page: LayoutPage,
-  fallbackScaleDenominator: number,
-): { labels: string[]; widthRatio: number; maxDistanceMeters: number } {
-  const auto = element.props?.autoLabel !== false
-  if (!auto) {
-    return {
-      labels: parseScaleBarLabels(String(element.props?.label ?? '0        5        10 km')),
-      widthRatio: 1,
-      maxDistanceMeters: 0,
-    }
-  }
-  const scaleDenominator = Number(element.props?.scaleDenominator ?? fallbackScaleDenominator)
-  const widthMm = page.widthMm * (element.frame.width / 100)
-  const availableMeters = Math.max(0, (widthMm * scaleDenominator) / 1000)
-  const maxDistanceMeters = niceDistance(availableMeters)
-  const widthRatio = availableMeters > 0 ? Math.max(0.2, Math.min(1, maxDistanceMeters / availableMeters)) : 1
-  const segments = Math.max(1, Math.min(8, Number(element.props?.segments ?? 4)))
-  const labels = Array.from({ length: segments + 1 }, (_, index) =>
-    formatDistance((maxDistanceMeters / segments) * index),
-  )
-  return { labels, widthRatio, maxDistanceMeters }
-}
-
-function niceDistance(maxMeters: number): number {
-  if (!Number.isFinite(maxMeters) || maxMeters <= 0) return 0
-  const exponent = Math.floor(Math.log10(maxMeters))
-  const base = Math.pow(10, exponent)
-  for (const multiple of [5, 2, 1]) {
-    const candidate = multiple * base
-    if (candidate <= maxMeters) return candidate
-  }
-  return base / 2
-}
-
-function formatDistance(meters: number): string {
-  if (meters >= 1000) {
-    const km = meters / 1000
-    return `${Number.isInteger(km) ? km : km.toFixed(km >= 10 ? 1 : 2)} km`
-  }
-  return `${Math.round(meters)} m`
-}
-
-function parseScaleBarLabels(label: string): string[] {
-  const parts = label.trim().split(/\s+/).filter(Boolean)
-  if (parts.length <= 1) return parts.length === 1 ? parts : ['0', '5', '10 km']
-  const last = parts[parts.length - 1]
-  const previous = parts[parts.length - 2]
-  if (!looksNumeric(last) && looksNumeric(previous)) {
-    return [...parts.slice(0, -2), `${previous} ${last}`]
-  }
-  return parts
-}
-
-function looksNumeric(value: string): boolean {
-  return /^[-+]?\d+(?:\.\d+)?(?:,\d{3})*$/.test(value)
 }
 
 function roundedRect(

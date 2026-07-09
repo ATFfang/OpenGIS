@@ -24,10 +24,7 @@ export function parseParams<T extends z.ZodTypeAny>(
   return result.data;
 }
 
-/**
- * 标记一个 method 在 Stage 1 阶段还没实现。
- * Stage 2-3 会逐个替换成真实实现。
- */
+/** Mark a declared method as intentionally unavailable in the renderer. */
 export function notImplemented(method: string): never {
   throw RpcError.notImplemented(method);
 }

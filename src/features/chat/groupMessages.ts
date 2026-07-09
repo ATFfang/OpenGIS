@@ -1,13 +1,12 @@
 /**
  * Chat 消息分组工具 —— 让"一轮 agent 回答"只画一个机器人头像。
  *
- * Python 侧 CodeAgent 一轮完整回答会依次推多条消息：
+ * Python 侧 agent runtime 一轮完整回答会依次推多条消息：
  *   reasoning → code → code_result → text(final_answer) / tool
  * 之前 ChatView 每条都套一个 MessageWrapper 画头像，用户会误以为"机器人回答了 N 次"。
  *
  * 本模块把消息按"发言方"聚合成 Group：
- *   - user_feedback / ask='followup'       → role='user'（每条独立一组）
- *   - api_req_started / api_req_finished   → role='system'（细条展示，独立一组）
+ *   - user_feedback                        → role='user'（每条独立一组）
  *   - 其它 assistant 产出                   → 与前一条 assistant 合并
  *
  * 纯函数，无副作用，单元可测。
@@ -23,8 +22,7 @@ export interface MessageGroupData {
 }
 
 export function roleOf(msg: UIMessage): MessageRole {
-  if (msg.say === 'user_feedback' || msg.ask === 'followup') return 'user'
-  if (msg.say === 'api_req_started' || msg.say === 'api_req_finished') return 'system'
+  if (msg.say === 'user_feedback') return 'user'
   return 'assistant'
 }
 

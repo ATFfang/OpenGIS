@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from opengis_backend.agent.tool_runtime import ToolRuntime
+from opengis_backend.agent.execution.tool_runtime import ToolRuntime
 
 
 class _ExecResult:
@@ -28,7 +28,7 @@ class ToolRuntimeAutoInstallTests(unittest.TestCase):
         )
 
         with patch(
-            "opengis_backend.agent.auto_install.auto_install_missing",
+            "opengis_backend.agent.execution.auto_install.auto_install_missing",
             return_value="Auto-installed: humanize",
         ) as auto_install:
             result = runtime.execute("execute_code", {"code": "import humanize\nprint('ok')"})
@@ -55,7 +55,7 @@ class ToolRuntimeAutoInstallTests(unittest.TestCase):
         )
 
         with patch(
-            "opengis_backend.agent.auto_install.auto_install_missing",
+            "opengis_backend.agent.execution.auto_install.auto_install_missing",
             side_effect=[None, "Auto-installed: humanize"],
         ) as auto_install:
             result = runtime.execute("execute_code", {"code": "plugin_loader()"})

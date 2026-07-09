@@ -8,10 +8,13 @@ ResidentWorkerManager; permission policy forces approval before agent use.
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
 from opengis_backend.tools.context import ToolContext
 from opengis_backend.tools.registry import tool
 from opengis_backend.worker import get_worker_manager
+
+WORKER_PROTOCOL_DOC = str(Path(__file__).resolve().parents[2] / "worker" / "WORKER_PROTOCOL.md")
 
 
 def _workspace(ctx: ToolContext) -> str:
@@ -32,6 +35,7 @@ def _workspace(ctx: ToolContext) -> str:
         "`config.json`, `src/`, and the only entrypoint `main.py`. Keep `main.py` thin; "
         "put acquisition in `src/datasource.py`, transformation/state in `src/service.py`, "
         "and OpenGIS output in `src/publisher.py`. Do not edit `opengis_worker.py`; it is generated. "
+        "For the full worker service protocol, read `python-backend/opengis_backend/worker/WORKER_PROTOCOL.md`. "
         "Dynamic map protocol available inside main.py: "
         "`from opengis_worker import emit_dynamic_layer_update, emit_dynamic_layer_diff`. "
         "Use `emit_dynamic_layer_update(...)` for the initial/full GeoJSON frame. "
@@ -114,7 +118,7 @@ def start_worker(
     worker_id: str | None = None,
     initial_health_timeout: float = 1.5,
 ) -> dict[str, Any]:
-    return get_worker_manager().start_worker(
+    result = get_worker_manager().start_worker(
         workspace_path=_workspace(ctx),
         name=name,
         code=code,
@@ -124,6 +128,8 @@ def start_worker(
         manifest=manifest,
         initial_health_timeout=initial_health_timeout,
     )
+    result["protocol_doc"] = WORKER_PROTOCOL_DOC
+    return result
 
 
 @tool(
@@ -139,7 +145,8 @@ def start_worker(
         "emit a full frame on first use of each layer id, then diff frames with increasing "
         "sequence numbers. Use the worker service package structure: thin `main.py`, "
         "`src/datasource.py` for polling, `src/service.py` for state/trajectory logic, "
-        "and `src/publisher.py` for map emission."
+        "and `src/publisher.py` for map emission. For the full worker service protocol, "
+        "read `python-backend/opengis_backend/worker/WORKER_PROTOCOL.md`."
     ),
     category="worker",
     params=[
@@ -215,7 +222,7 @@ def start_dynamic_map_worker(
     combined_description = description
     if metadata:
         combined_description = (description + "\n" if description else "") + "Dynamic map layers: " + ", ".join(metadata)
-    return get_worker_manager().start_worker(
+    result = get_worker_manager().start_worker(
         workspace_path=_workspace(ctx),
         name=name,
         code=code,
@@ -225,6 +232,8 @@ def start_dynamic_map_worker(
         manifest=manifest,
         initial_health_timeout=initial_health_timeout,
     )
+    result["protocol_doc"] = WORKER_PROTOCOL_DOC
+    return result
 
 
 @tool(
@@ -245,6 +254,52 @@ def start_dynamic_map_worker(
 def get_worker(ctx: ToolContext, worker_id: str, include_logs: bool = True) -> dict[str, Any]:
     workspace = _workspace(ctx)
     return get_worker_manager().get_worker(worker_id, include_logs=include_logs, workspace_path=workspace)
+
+
+@tool(
+    name="wait_worker_update",
+    display_name="Wait For Worker Update",
+    description=(
+        "Wait briefly for a resident worker to emit new output, update health, or exit. "
+        "Use this after start_worker/restart_worker instead of execute_code with time.sleep. "
+        "The timeout is capped at 60 seconds; prefer 5-20 seconds and inspect the returned "
+        "wait.changed, wait.timed_out, health.state, and logs before deciding whether to edit/restart."
+    ),
+    category="worker",
+    params=[
+        {"name": "worker_id", "type": "string", "description": "Worker id to wait for."},
+        {
+            "name": "since_ts",
+            "type": "number",
+            "description": "Optional baseline log timestamp. If omitted, waits for output after the call starts.",
+            "required": False,
+        },
+        {
+            "name": "timeout",
+            "type": "number",
+            "description": "Maximum seconds to wait, capped at 60. Default 20.",
+            "required": False,
+        },
+        {"name": "include_logs", "type": "boolean", "description": "Whether to include recent logs. Default true.", "required": False},
+    ],
+    returns="Worker metadata plus wait.changed/timed_out/status_changed.",
+    needs_context=True,
+)
+def wait_worker_update(
+    ctx: ToolContext,
+    worker_id: str,
+    since_ts: float | None = None,
+    timeout: float = 20.0,
+    include_logs: bool = True,
+) -> dict[str, Any]:
+    workspace = _workspace(ctx)
+    return get_worker_manager().wait_worker_update(
+        worker_id,
+        workspace_path=workspace,
+        since_ts=since_ts,
+        timeout=timeout,
+        include_logs=include_logs,
+    )
 
 
 @tool(

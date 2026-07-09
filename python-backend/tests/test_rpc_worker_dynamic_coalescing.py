@@ -10,7 +10,7 @@ else:
     FASTAPI_AVAILABLE = True
 
 if FASTAPI_AVAILABLE:
-    from opengis_backend.rpc_handler import (
+    from opengis_backend.rpc.handler import (
         DYNAMIC_LAYER_BACKEND_FLUSH_SECONDS,
         DYNAMIC_LAYER_UPDATE_METHOD,
         RpcHandler,

@@ -6,16 +6,12 @@ This module owns *everything* about "which LLM to talk to":
   (model id, api key, base url). This is the currency the
   rest of the agent layer should pass around instead of three loose strings.
 - ``build_llm_caller(config)`` — the single factory that turns an
-  ``LLMConfig`` into a callable ``(messages, *, on_delta=None) -> str``.
+  ``LLMConfig`` into a callable returning ``LLMResponse``.
 
-v3.1 (2026-04): Removed smolagents dependency. Now uses litellm directly
-for all LLM calls.
-
-v3.3 (2026-04): Added streaming support. The returned caller now
-accepts an optional ``on_delta(text)`` callback. When supplied, the
-LLM is invoked with ``stream=True`` and each content delta is forwarded
-to the callback as it arrives. The function still returns the full
-assembled text so existing call sites stay backward-compatible.
+v3.3 (2026-04): Added streaming support. The returned caller accepts an
+optional ``on_delta(text)`` callback. When supplied, the LLM is invoked
+with ``stream=True`` and each content delta is forwarded to the callback
+as it arrives. The function returns the assembled ``LLMResponse``.
 
 v3.4 (2026-04): Removed ``api_format`` entirely. The model name is
 expected to carry the provider prefix (e.g. ``"openai/gpt-4o"``,
@@ -249,9 +245,9 @@ def _extract_finish_reason(choice: Any) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Factory — direct litellm caller (no smolagents dependency)
+# Factory — direct litellm caller
 # ──────────────────────────────────────────────────────────────────
-LLMCaller = Callable[..., str]
+LLMCaller = Callable[..., LLMResponse]
 
 
 def build_llm_caller(config: LLMConfig) -> LLMCaller:
@@ -428,21 +424,10 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
     return _call
 
 
-# ──────────────────────────────────────────────────────────────────
-# Legacy compatibility shim
-# ──────────────────────────────────────────────────────────────────
-
-
-def build_llm_model(config: LLMConfig) -> LLMCaller:
-    """Legacy alias for ``build_llm_caller``."""
-    return build_llm_caller(config)
-
-
 __all__ = [
     "LLMConfig",
     "LLMResponse",
     "LLMCaller",
     "_resolve_llm_route",
     "build_llm_caller",
-    "build_llm_model",
 ]

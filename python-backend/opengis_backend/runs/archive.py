@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from opengis_backend.agent.script_archive import _app_data_base  # reuse same root
+from opengis_backend.agent.telemetry.script_archive import _app_data_base  # reuse same root
 
 logger = logging.getLogger(__name__)
 

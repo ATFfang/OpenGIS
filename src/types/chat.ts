@@ -1,7 +1,7 @@
 /**
  * Chat / Agent UI types — owned by the frontend, decoupled from any
- * upstream Agent framework. Reflects what the OpenGIS Python CodeAgent
- * actually emits over IPC.
+ * upstream Agent framework. Reflects what the OpenGIS Python agent runtime
+ * emits over IPC.
  */
 
 // ── Provider list (mirrors what the backend's litellm understands) ──
@@ -26,12 +26,12 @@ export type ApiProvider =
 
 export const DEFAULT_API_PROVIDER: ApiProvider = 'openai'
 
-// ── UI message taxonomy (matches CodeAgent event stream) ──
+// ── UI message taxonomy (matches the agent event stream) ──
 export type SayType =
   | 'text'             // Plain text response from the agent
   | 'reasoning'        // Thinking / planning step
   | 'user_feedback'    // Echoes the user's input
-  | 'tool'            // A tool/skill invocation summary
+  | 'tool'            // A tool invocation summary
   | 'code'             // A Python code block emitted by the agent
   | 'code_result'      // Stdout/stderr from executing a code block
   | 'image'            // Inline image (e.g. matplotlib plot saved by save_plot)
@@ -39,25 +39,17 @@ export type SayType =
   | 'plan'             // A TODO / plan checklist emitted by update_plan
   | 'progress'         // Execution progress indicator
   | 'subagent'         // Isolated sub-agent delegation card (run_subagent / run_subagents)
-  | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
+  | 'thinking'         // transient work indicator, not rendered as assistant content
   | 'error'
-  | 'followup'
-  | 'completion_result'
-  | 'mistake_limit_reached'
   | 'max_steps_reached'
-  | 'api_req_started'
-  | 'api_req_finished'
-  | 'mcp_server_response'
   | 'screenshot'
 
 export type AskType =
-  | 'followup'
   | 'tool'
   | 'command'
-  | 'completion_result'
   | 'resume_task'
 
-// ── Plan / TODO checklist (emitted by the backend `update_plan` skill) ──
+// ── Plan / TODO checklist (emitted by the backend `update_plan` tool) ──
 export type PlanStepStatus =
   | 'pending'
   | 'in_progress'
@@ -158,7 +150,7 @@ export interface UIMessage {
   /** Directory used to resolve relative Markdown image paths. */
   markdownBaseDir?: string
 
-  // Tool / skill invocation
+  // Tool invocation
   toolName?: string
   toolCallId?: string
   toolArgs?: Record<string, unknown>
@@ -169,7 +161,7 @@ export interface UIMessage {
   chartConfig?: unknown
   tableData?: unknown[]
 
-  // CodeAgent step metadata — filled for say='code' / 'code_result'.
+  // Agent code step metadata — filled for say='code' / 'code_result'.
   // `scriptPath` is relative to the opened workspace (or the run directory
   // when no workspace is open) and is safe to pass to openFileAsTab.
   stepNumber?: number
@@ -217,20 +209,7 @@ export interface UIMessage {
   }
 
   /**
-   * Event-sourced v2 projection. Existing ChatView still renders legacy
-   * fields; new views can render this stable part list directly.
+   * Event-sourced projection used by ChatView.
    */
   parts?: MessagePart[]
-}
-
-// API-request metadata stored as JSON inside an `api_req_started` say message.
-export interface ApiReqInfo {
-  request?: string
-  tokensIn?: number
-  tokensOut?: number
-  cacheWrites?: number
-  cacheReads?: number
-  cost?: number
-  cancelReason?: string
-  streamingFailedMessage?: string
 }

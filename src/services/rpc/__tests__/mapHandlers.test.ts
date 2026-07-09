@@ -1,5 +1,5 @@
 /**
- * Stage 3.5：真实现的 7 个 map handler 的契约测试。
+ * Map handler contract tests.
  *
  * 目标：证明 handler 跑完 LayerStore 的状态确实发生了变化（add / remove /
  * visibility / style / basemap），以及 camera 类 handler 正确调用了
@@ -582,7 +582,7 @@ describe('rpc.ui.map.set_basemap', () => {
     expect(resp).toMatchObject({ error: { code: -32602 } });
   });
 
-  it('custom style_url is rejected at Stage 3.5', async () => {
+  it('custom style_url is rejected explicitly', async () => {
     const d = makeDispatcher();
     const resp = await d.handleRequest(
       req('rpc.ui.map.set_basemap', { basemap: { style_url: 'https://example.com/s.json' } }),
@@ -717,7 +717,7 @@ describe('rpc.ui.map.set_layer_visibility', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// Stage 3.7：新补的 5 个 handler
+// Query/read handler coverage
 // ─────────────────────────────────────────────────────────────────────
 
 /** 给 list/get/query 系列测试用的小工具，喂一个 3-point layer */

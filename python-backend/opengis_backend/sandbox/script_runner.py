@@ -1,6 +1,6 @@
 """
 ScriptRunner — execute a user-authored Python script in the same
-sandbox the CodeAgent uses.
+sandbox the agent runtime uses.
 
 This is the back-end of the Script Runner panel in the UI. It lets
 the user *bypass the LLM* and invoke tools / rpc.* bridges directly,
@@ -53,7 +53,7 @@ import uuid
 from typing import Any, Awaitable, Callable, Optional
 
 from opengis_backend.agent.tools import build_tool_callables
-from opengis_backend.agent.executor import (
+from opengis_backend.agent.execution.executor import (
     ChildDiedError,
     ExecTimeout,
     SubprocessExecutorConfig,
@@ -76,7 +76,7 @@ class ScriptRunner:
     Instances are cheap; the executor itself is created per-run so
     every script starts from a clean Python interpreter (matches the
     agent's "one executor per agent.run" convention — see MEMORY
-    §"Stage 2 executor 每 run 重建").
+    subprocess executor per run).
     """
 
     def __init__(
@@ -145,7 +145,7 @@ class ScriptRunner:
         self._current_run_id = rid
 
         # Per-run ToolContext — the same object the agent builds for
-        # its CodeAgent runs. Ctx-aware tools (map display, etc.)
+        # normal runs. Ctx-aware tools (map display, etc.)
         # will call ctx.notify_fn(...) which hops back onto the ws loop.
         ctx = ToolContext(
             notify_fn=self._notify_fn,

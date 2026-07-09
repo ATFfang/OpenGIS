@@ -140,7 +140,7 @@ export function MapView({
     // actually on the map. If this callback silently adds layers without
     // updating the ref, the later layer-sync effect's diff will never see
     // them in `prevIds` and therefore never fire `removeMapLayer` when
-    // they get removed from the store. (Stage 3.9 bug: "删除图层但地图
+    // they get removed from the store. This prevents "删除图层但地图
     // 还在".)
     map.on('load', () => {
       const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
@@ -334,7 +334,6 @@ export function MapView({
       // Remove layers that are no longer in the store
       for (const id of prevIds) {
         if (!currentIds.has(id)) {
-          console.log('[MapView] Removing layer from map:', id)
           mapEngine.removeMapLayer(id)
           prevRenderTypeRef.current.delete(id)
           prevLayerDataRef.current.delete(id)
@@ -346,7 +345,6 @@ export function MapView({
         const prevRenderType = prevRenderTypeRef.current.get(layer.id)
         if (!prevIds.has(layer.id)) {
           // New layer — add to map
-          console.log('[MapView] Adding new layer to map:', layer.id, layer.name)
           mapEngine.syncLayer(layer)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
           prevLayerDataRef.current.set(layer.id, layer.data)
@@ -354,14 +352,6 @@ export function MapView({
           // renderType switched (e.g. fill → graduated, circle → cluster).
           // MapLibre layer types are immutable, so we MUST remove + re-add;
           // renderer.update() is for paint-only hot patches.
-          console.log(
-            '[MapView] renderType changed for',
-            layer.id,
-            prevRenderType,
-            '→',
-            layer.style.renderType,
-            '— rebuild',
-          )
           mapEngine.removeRenderLayersOnly(layer.id)
           mapEngine.syncLayer(layer)
           mapEngine.setLayerVisibility(layer.id, layer.visible)

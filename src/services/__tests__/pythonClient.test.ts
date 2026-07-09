@@ -1,5 +1,5 @@
 /**
- * Stage 3.4 contract tests: PythonClient ↔ Dispatcher wiring.
+ * Contract tests: PythonClient ↔ Dispatcher wiring.
  *
  * We bypass WebSocket by constructing a PythonClient instance and driving
  * ``_handleMessage`` directly through a test shim. The goal is to nail
@@ -10,9 +10,9 @@
  *      dispatcher.handleRequest is invoked and the response is written
  *      back to the ws.
  *   3. Notification (no id) on a canonical channel → routed to
- *      dispatcher.handleNotification (Stage 3.8 fix).
+ *      dispatcher.handleNotification.
  *   4. Notification on any channel → also fanned out to
- *      `notificationHandlers` for legacy store subscribers.
+ *      `notificationHandlers` for store-level event subscribers.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -67,7 +67,7 @@ function stubDispatcher(
   };
 }
 
-describe('PythonClient inbound message routing (Stage 3.4)', () => {
+describe('PythonClient inbound message routing', () => {
   let client: PythonClient;
 
   beforeEach(() => {
@@ -158,10 +158,8 @@ describe('PythonClient inbound message routing (Stage 3.4)', () => {
     const notifSpy = vi.fn();
     client.onNotification(notifSpy);
 
-    // "map.addLayer" has no rpc./chat./event. prefix → should NOT be
-    // dispatched. Kept as a smoke case because Python may still emit
-    // non-v3 notifications during development (e.g. progress/debug).
-    // Legacy notification handlers still see it.
+    // "map.addLayer" has no rpc./chat./event. prefix, so it is not
+    // dispatched. Broadcast subscribers still see it.
     feed(client, {
       jsonrpc: '2.0',
       method: 'map.addLayer',
@@ -223,7 +221,7 @@ describe('PythonClient inbound message routing (Stage 3.4)', () => {
     expect(sent).toHaveLength(0);
   });
 
-  // ── Stage 3.8: notification routing (the bug we just fixed) ──────────
+  // ── Notification routing ─────────────────────────────────────────────
 
   it('routes rpc.* notifications (no id) to dispatcher.handleNotification', async () => {
     stubOpenWs(client);
@@ -259,13 +257,15 @@ describe('PythonClient inbound message routing (Stage 3.4)', () => {
 
     feed(client, {
       jsonrpc: '2.0',
-      method: 'chat.stream_delta',
-      params: { delta: 'hi' },
+      method: 'chat.message_part',
+      params: { part: { id: 'run:text:final', type: 'text', text: 'hi' } },
     });
 
     await Promise.resolve();
     expect(dispatcher.handleNotification).toHaveBeenCalledTimes(1);
-    expect(notifSpy).toHaveBeenCalledWith('chat.stream_delta', { delta: 'hi' });
+    expect(notifSpy).toHaveBeenCalledWith('chat.message_part', {
+      part: { id: 'run:text:final', type: 'text', text: 'hi' },
+    });
   });
 
   it('does not call handleNotification when no dispatcher is wired', async () => {
@@ -280,7 +280,7 @@ describe('PythonClient inbound message routing (Stage 3.4)', () => {
     });
 
     await Promise.resolve();
-    // No throw, and the legacy handler still sees the message.
+    // No throw, and broadcast subscribers still see the message.
     expect(notifSpy).toHaveBeenCalledWith('rpc.ui.map.add_layer_from_geojson', {});
   });
 

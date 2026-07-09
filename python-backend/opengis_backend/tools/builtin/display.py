@@ -140,8 +140,7 @@ def _notify_map(ctx: ToolContext, canonical: str, payload: dict) -> None:
     Emit a canonical v3.0 map command notification.
 
     ``map.*`` is fire-and-forget — the LLM does not await a response.
-    Since Stage 3.6 there is only one channel: ``rpc.ui.map.*``.
-    The legacy ``map.addLayer`` / ``map.flyTo`` / etc. names are gone.
+    The map command channel is ``rpc.ui.map.*``.
     """
     run_async_from_sync(ctx.notify(canonical, payload))
 

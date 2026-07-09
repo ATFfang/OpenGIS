@@ -4,9 +4,8 @@ Tool → callable adapter for the agent's subprocess executor.
 This module converts ``RegisteredTool`` records into plain callables
 that the subprocess executor can invoke via its tool-bridge RPC.
 
-v3.1 (2026-04): Removed smolagents dependency. Tools are now plain
-callables (not smolagents.Tool subclasses). The executor's tool bridge
-calls them as ``tool(*args, **kwargs)`` — same interface, no framework.
+Tools are plain callables. The executor's tool bridge calls them as
+``tool(*args, **kwargs)``.
 
 The public symbol is ``build_tool_callables``.
 """
@@ -42,8 +41,8 @@ def build_tool_callables(
     Args:
         registered: list of RegisteredTool from the ToolRegistry.
         ctx_provider: zero-arg callable returning the ToolContext to inject
-                      into context-aware tools. If None, falls back to the
-                      contextvar-based ``get_current_context()`` (legacy path).
+                      into context-aware tools. If None, uses the ambient
+                      contextvar-based ``get_current_context()``.
 
     Returns:
         dict mapping tool name → callable. Each callable accepts the

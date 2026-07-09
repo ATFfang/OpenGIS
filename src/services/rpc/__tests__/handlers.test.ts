@@ -54,15 +54,9 @@ describe('Handler registration', () => {
 });
 
 describe('Handler contract: valid params → -32603 not implemented', () => {
-  // Stage 3.5 + 3.7 已把 12 个 map handler 改为真实现，故不再在这里测：
-  //   Stage 3.5：add_layer_from_geojson / remove_layer / zoom_to_bbox / fly_to /
-  //              set_basemap / set_layer_style / set_layer_visibility
-  //   Stage 3.7：add_layer / zoom_to_layer / list_layers / get_layer / query_features
-  // 这些 method 的契约测试见 `__tests__/mapHandlers.test.ts`。
-  //
-  // 下面只保留**目前仍是 stub** 的 method。13 个 map handler 里唯一没实现的
-  // 是 add_raster_from_url（MapEngine 还没接 raster 源），其余都实装完了。
-  // 下面只保留**目前仍是 stub** 的 method。
+  // Implemented map/chat/ask/fs handlers have dedicated behavior tests.
+  // This block only covers methods that are intentionally declared but still
+  // unavailable in the renderer.
   //   - chat.show_image 已真实现（plot 通道），不在此列。
   //   - chat.show_text / show_table 仍是 stub。
   //   - ask.* 已接 Dialog 审批 UI，不在此列。

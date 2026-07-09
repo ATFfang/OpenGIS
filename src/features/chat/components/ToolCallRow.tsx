@@ -17,8 +17,6 @@ import {
   Code2,
   AlertCircle,
 } from 'lucide-react'
-import type { UIMessage } from '@/types/chat'
-
 interface ToolInfo {
   tool: string
   path?: string
@@ -28,8 +26,15 @@ interface ToolInfo {
   description?: string
 }
 
+export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'
+
 interface ToolCallRowProps {
-  message: UIMessage
+  toolName?: string
+  toolCallId?: string
+  toolArgs?: Record<string, unknown>
+  output?: string
+  status?: ToolCallStatus
+  durationMs?: number
   isExpanded: boolean
   onToggleExpand: () => void
 }
@@ -43,31 +48,36 @@ interface EditFileResult {
   deletions?: number
 }
 
-/**
- * ToolCallRow — Cline-inspired tool call renderer.
- * Shows tool calls with icons, collapsible content, and status indicators.
- */
-export const ToolCallRow = memo(({ message, isExpanded, onToggleExpand }: ToolCallRowProps) => {
+export const ToolCallRow = memo(({
+  toolName,
+  toolCallId,
+  toolArgs,
+  output = '',
+  status,
+  durationMs,
+  isExpanded,
+  onToggleExpand,
+}: ToolCallRowProps) => {
   const [editDiffExpanded, setEditDiffExpanded] = useState(true)
-  const tool = parseTool(message)
-  const editResult = tool && isEditFileTool(tool.tool) ? getEditFileResult(message, tool) : null
+  const tool = parseTool({ toolName, toolArgs, output })
+  const editResult = tool && isEditFileTool(tool.tool) ? getEditFileResult(output, tool) : null
 
   useEffect(() => {
     if (editResult?.diff) setEditDiffExpanded(true)
-  }, [message.toolCallId, editResult?.diff])
+  }, [toolCallId, editResult?.diff])
 
   if (!tool) return null
 
-  const isRunning = message.toolStatus === 'running'
-  const isFailed = message.toolStatus === 'failed'
-  const isCompleted = message.toolStatus === 'completed'
+  const isRunning = status === 'running'
+  const isFailed = status === 'failed'
+  const isCompleted = status === 'completed'
   const isCodeTool = isCodeExecutionTool(tool.tool)
-  const codeExecution = isCodeTool ? getCodeExecutionContent(message) : null
+  const codeExecution = isCodeTool ? getCodeExecutionContent(toolArgs, output) : null
 
-  const { icon, title, content } = getToolDisplay(tool, message)
-  const showDetails = shouldShowToolDetails(tool.tool, message, editResult)
+  const { icon, title, content } = getToolDisplay(tool, status)
+  const showDetails = shouldShowToolDetails(tool.tool, status, output, editResult)
   const detailLabel = getDetailLabel(tool.tool, tool)
-  const durationLabel = formatDuration(message.durationMs ?? 0)
+  const durationLabel = formatDuration(durationMs ?? 0)
   const effectiveExpanded = editResult
     ? editDiffExpanded
     : isCodeTool && isRunning && !!codeExecution?.output.trim()
@@ -167,30 +177,36 @@ function formatDuration(ms: number): string {
   return `${m}m ${s}s`
 }
 
-function parseTool(message: UIMessage): ToolInfo | null {
-  if (!message.toolName && !message.text) return null
+function parseTool(input: {
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+  output?: string
+}): ToolInfo | null {
+  if (!input.toolName && !input.output) return null
 
-  if (message.toolName) {
-    const result = isEditFileTool(message.toolName) ? parseEditFileOutput(message.text) : null
+  if (input.toolName) {
+    const result = isEditFileTool(input.toolName) ? parseEditFileOutput(input.output) : null
     return {
-      tool: message.toolName,
-      path: result?.path || (message.toolArgs?.path as string | undefined),
-      content: buildToolContent(message),
+      tool: input.toolName,
+      path: result?.path || (input.toolArgs?.path as string | undefined),
+      content: buildToolContent(input.toolName, input.toolArgs ?? {}, input.output ?? ''),
       diff: result?.diff,
     }
   }
 
   try {
-    return JSON.parse(message.text || '{}') as ToolInfo
+    return JSON.parse(input.output || '{}') as ToolInfo
   } catch {
     return null
   }
 }
 
-function buildToolContent(message: UIMessage): string {
-  const name = message.toolName || ''
-  const args = message.toolArgs || {}
-  const output = message.text || ''
+function buildToolContent(
+  toolName: string,
+  args: Record<string, unknown>,
+  output: string,
+): string {
+  const name = toolName || ''
   if (isCodeExecutionTool(name)) {
     return output
   }
@@ -198,17 +214,20 @@ function buildToolContent(message: UIMessage): string {
     const result = parseEditFileOutput(output)
     if (result?.diff) return result.diff
   }
-  if (message.toolStatus === 'failed') {
+  if (output) {
     return output || JSON.stringify(args, null, 2)
   }
   return ''
 }
 
-function getCodeExecutionContent(message: UIMessage): { code: string; output: string } {
-  const args = message.toolArgs || {}
+function getCodeExecutionContent(
+  args: Record<string, unknown> | undefined,
+  output: string,
+): { code: string; output: string } {
+  const safeArgs = args || {}
   return {
-    code: typeof args.code === 'string' ? args.code.trim() : '',
-    output: message.text || '',
+    code: typeof safeArgs.code === 'string' ? safeArgs.code.trim() : '',
+    output,
   }
 }
 
@@ -220,14 +239,19 @@ function isEditFileTool(toolName: string): boolean {
   return toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'editedExistingFile'
 }
 
-function shouldShowToolDetails(toolName: string, message: UIMessage, editResult?: EditFileResult | null): boolean {
+function shouldShowToolDetails(
+  toolName: string,
+  status: ToolCallStatus | undefined,
+  output: string,
+  editResult?: EditFileResult | null,
+): boolean {
   if (isCodeExecutionTool(toolName)) {
-    return !!message.text?.trim()
+    return !!output.trim()
   }
   if (isEditFileTool(toolName)) {
-    return !!editResult?.diff || message.toolStatus === 'failed'
+    return !!editResult?.diff || status === 'failed'
   }
-  return message.toolStatus === 'failed'
+  return status === 'failed'
 }
 
 function getDetailLabel(toolName: string, tool: ToolInfo): string {
@@ -238,8 +262,8 @@ function getDetailLabel(toolName: string, tool: ToolInfo): string {
   return tool.path ? `${tool.path}\u200E` : 'Error details'
 }
 
-function getEditFileResult(message: UIMessage, tool: ToolInfo): EditFileResult | null {
-  const parsed = parseEditFileOutput(message.text)
+function getEditFileResult(output: string, tool: ToolInfo): EditFileResult | null {
+  const parsed = parseEditFileOutput(output)
   if (parsed) return parsed
   if (tool.diff) {
     return {
@@ -368,7 +392,7 @@ function diffLineStyle(line: string): { bg: string; text: string; gutter: string
 
 function getToolDisplay(
   tool: ToolInfo,
-  message: UIMessage
+  status: ToolCallStatus | undefined,
 ): { icon: React.ReactNode; title: string; content: string | null } {
   const iconSize = 'w-3 h-3'
 
@@ -458,7 +482,7 @@ function getToolDisplay(
       }
     default:
       return {
-        icon: message.toolStatus === 'failed' ? <AlertCircle className={iconSize} /> : <Wrench className={iconSize} />,
+        icon: status === 'failed' ? <AlertCircle className={iconSize} /> : <Wrench className={iconSize} />,
         title: `Using ${tool.tool}`,
         content: tool.content || null,
       }

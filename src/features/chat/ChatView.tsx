@@ -1,54 +1,25 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import {
-  Send,
-  Paperclip,
-  Square,
-  ChevronDown,
-  Plus,
-  Globe,
-  Cpu,
-  MessageSquare,
-  Zap,
-  History,
-  Trash2,
-  X,
-  FileText,
-  GitBranch,
-  FolderOpen,
-  Pencil,
-  Wrench,
-  Database,
-  Copy,
-  Check,
-  Search,
-  ArrowUp,
-} from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useChatStore, type ChatAttachment } from '@/stores/chatStore'
-import { useAssetStore } from '@/stores/assetStore'
-import { useWorkflowStore } from '@/stores/workflowStore'
 import { useT } from '@/i18n'
-import appIconImg from '../../../resources/icons/app-icon.png'
 import ChatRow from './components/ChatRow'
-import OrbLogo from './components/OrbLogo'
 import { ApprovalInline } from '@/features/approval/ApprovalGate'
+import { ChatComposer } from './components/ChatComposer'
+import { ChatHeader } from './components/ChatHeader'
+import { ListSpacer, TypingFooter } from './components/ChatListChrome'
+import { ChatSearchCapsule } from './components/ChatSearchCapsule'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
+import { MessageGroup } from './components/MessageGroup'
+import { WelcomeContent } from './components/WelcomeContent'
 import type { UIMessage } from '@/types/chat'
-import { groupMessages, type MessageRole } from './groupMessages'
+import { groupMessages } from './groupMessages'
 import { messagePartsForRender } from '@/services/chatMessageParts'
 
 // Stable empty reference so the `messages` selector fallback doesn't create a
 // new array each render (which would defeat memoization downstream).
 const EMPTY_MESSAGES: UIMessage[] = []
 
-/**
- * ChatView — Cline-inspired AI chat panel with polished UI.
- *
- * Layout:
- * 1. Header with model indicator and actions
- * 2. Scrollable messages area (virtualized via react-virtuoso)
- * 3. Sticky input footer with rich controls
- */
 export function ChatView({
   variant = 'default',
 }: {
@@ -101,7 +72,7 @@ export function ChatView({
   const isBusy = isStreaming || isCancelling
 
   // 把消息按 "一轮 assistant 回答" 分组：两次 user_feedback 之间的所有 assistant
-  // 消息（text / reasoning / code / code_result / tool / completion_result / ...）
+  // 消息（text / reasoning / code / code_result / tool / ...）
   // 合成一组，整组只画一个机器人头像。否则 Python 侧一轮回答会同时推 N 条消息，
   // 每条都挂头像，用户会误以为"机器人回答了 N 次"。
   const messageGroups = useMemo(() => groupMessages(messages), [messages])
@@ -123,13 +94,12 @@ export function ChatView({
     return ids
   }, [messages])
 
-  // 用户已发送消息的历史栈（最新在前），用于 ↑/↓ 在输入框中回放。
-  // 说明：ChatRow 里一条 user_feedback 的 text 就是用户当时敲的文本。
   const userHistory = useMemo<string[]>(() => {
     const acc: string[] = []
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
-      if (m.say === 'user_feedback' && m.text) acc.push(m.text)
+      const userPart = messagePartsForRender(m).find((part) => part.type === 'text' && part.data?.role === 'user')
+      if (userPart?.text) acc.push(userPart.text)
     }
     return acc
   }, [messages])
@@ -519,7 +489,7 @@ export function ChatView({
       if (msg.say === 'user_feedback') break
     }
 
-    if (lastMsg.say === 'code_result' || lastMsg.say === 'text' || lastMsg.say === 'api_req_started') {
+    if (lastMsg.say === 'code_result' || lastMsg.say === 'text') {
       return { label: t.chat.thinking, tone: 'thinking' as const }
     }
     return { label: t.chat.progressProcessing, tone: 'working' as const }
@@ -535,149 +505,31 @@ export function ChatView({
     }
   }, [hasTask, isStreaming, messages.length, scheduleScrollToBottom])
 
-  // Count tokens from last API request
-  const lastApiReq = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].say === 'api_req_started' && messages[i].text) {
-        try {
-          return JSON.parse(messages[i].text!)
-        } catch { return null }
-      }
-    }
-    return null
-  }, [messages])
-
   return (
     <div className={`w-full h-full flex flex-col bg-bg-primary overflow-hidden ${
       variant === 'floating'
         ? 'rounded-2xl shadow-2xl'
         : ''
     }`}>
-      {/* === Header === */}
-<header className={`shrink-0 bg-bg-primary/80 backdrop-blur-sm relative z-50 ${
-        variant === 'floating' ? 'rounded-t-2xl' : 'border-b border-border'
-      }`}>
-        <div className="px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="relative">
-              <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center">
-                <img src={appIconImg} alt="OpenGIS" className="w-7 h-7 object-contain" />
-              </div>
-              {isStreaming && (
-                <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-accent-success ring-2 ring-bg-primary animate-pulse" />
-              )}
-            </div>
-            <div className="flex flex-col">
-              {isEditingTitle && hasTask ? (
-                <form
-                  className="flex items-center gap-1"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    const trimmed = editingTitle.trim()
-                    if (trimmed && activeConversationId) {
-                      useChatStore.getState().renameConversation(activeConversationId, trimmed)
-                    }
-                    setIsEditingTitle(false)
-                  }}
-                >
-                  <input
-                    ref={headerTitleInputRef}
-                    className="text-[13px] font-semibold text-text-primary leading-tight bg-bg-secondary border border-border rounded px-1.5 py-0.5 outline-none focus:border-accent-primary w-[160px]"
-                    value={editingTitle}
-                    onChange={(e) => setEditingTitle(e.target.value)}
-                    onBlur={() => {
-                      const trimmed = editingTitle.trim()
-                      if (trimmed && activeConversationId) {
-                        useChatStore.getState().renameConversation(activeConversationId, trimmed)
-                      }
-                      setIsEditingTitle(false)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') setIsEditingTitle(false)
-                    }}
-                    autoFocus
-                  />
-                </form>
-              ) : (
-                <span
-                  className="text-[13px] font-semibold text-text-primary leading-tight cursor-pointer hover:text-accent-primary transition-colors"
-                  onDoubleClick={() => {
-                    if (hasTask && conversation) {
-                      setEditingTitle(conversation.title || t.chat.newConversation)
-                      setIsEditingTitle(true)
-                    }
-                  }}
-                  title={t.chat.doubleClickRename}
-                >
-                  {hasTask ? (conversation?.title || t.chat.newConversation) : 'OpenGIS Agent'}
-                </span>
-              )}
-              <span className="text-[10px] text-text-muted leading-tight mt-0.5">
-                {isStreaming ? (
-                  <span className="text-accent-primary font-medium">{t.chat.progress.generating}</span>
-                ) : (
-                  t.chat.poweredByLLM
-                )}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            {lastApiReq?.tokensIn != null && (
-              <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-md bg-bg-secondary text-[10px] text-text-muted mr-1">
-                <Cpu className="w-3 h-3" />
-                <span>{lastApiReq.tokensIn + (lastApiReq.tokensOut || 0)} tokens</span>
-              </div>
-            )}
-            {/* Conversation history toggle */}
-            {conversations.length > 1 && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowConversationList(!showConversationList)}
-                  className="p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-all duration-150"
-                  title={t.chat.conversationHistory}
-                >
-                  <History className="w-4 h-4" />
-                </button>
-                {showConversationList && (
-                  <ConversationListDropdown
-                    conversations={conversations}
-                    activeId={activeConversationId}
-                    onSelect={(id) => {
-                      setActiveConversation(id)
-                      setShowConversationList(false)
-                    }}
-                    onDelete={(id) => {
-                      useChatStore.getState().deleteConversation(id)
-                    }}
-                    onClose={() => setShowConversationList(false)}
-                  />
-                )}
-              </div>
-            )}
-            {hasTask && (
-              <button
-                onClick={focusSearch}
-                className={`p-1.5 rounded-lg transition-all duration-150 ${
-                  searchOpen
-                    ? 'text-accent-primary bg-accent-primary/10'
-                    : 'text-text-muted hover:text-text-primary hover:bg-bg-hover'
-                }`}
-                title="搜索对话"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-            )}
-            {/* New conversation button */}
-            <button
-              onClick={() => createConversation()}
-              className="p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-all duration-150"
-              title={t.chat.newConversation}
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
+      <ChatHeader
+        variant={variant}
+        hasTask={hasTask}
+        isStreaming={isStreaming}
+        conversation={conversation}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        isEditingTitle={isEditingTitle}
+        editingTitle={editingTitle}
+        titleInputRef={headerTitleInputRef}
+        searchOpen={searchOpen}
+        showConversationList={showConversationList}
+        onEditingTitleChange={setIsEditingTitle}
+        onEditingTitleTextChange={setEditingTitle}
+        onShowConversationListChange={setShowConversationList}
+        onSelectConversation={setActiveConversation}
+        onCreateConversation={createConversation}
+        onFocusSearch={focusSearch}
+      />
 
       {searchOpen && (
         <ChatSearchCapsule
@@ -773,130 +625,32 @@ export function ChatView({
           </div>
         )}
 
-        {/* Input area */}
-        <div className="p-3 pt-2 relative">
-          <div className="relative bg-bg-secondary rounded-2xl border border-border focus-within:border-accent-primary/40 focus-within:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] transition-all duration-200">
-            {/* Attached files chips */}
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 px-3 pt-2 pb-0">
-                {attachments.map((att, i) => (
-                  <div
-                    key={`${att.path}-${i}`}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-accent-primary/10 border border-accent-primary/25 text-[11px] text-text-secondary group"
-                  >
-                    {att.type === 'workflow' ? (
-                      <GitBranch className="w-3 h-3 text-accent-primary shrink-0" />
-                    ) : att.type === 'tool_group' ? (
-                      <Wrench className="w-3 h-3 text-amber-400 shrink-0" />
-                    ) : (
-                      <FileText className="w-3 h-3 text-text-muted shrink-0" />
-                    )}
-                    <span className="max-w-[120px] truncate">{att.name}</span>
-                    <button
-                      onClick={() => removeAttachment(i)}
-                      className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-text-muted/60 hover:text-accent-danger hover:bg-accent-danger/10 transition-colors"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <textarea
-              ref={textAreaRef}
-              value={inputValue}
-              onChange={(e) => {
-                setInputValue(e.target.value)
-                adjustTextareaHeight()
-                // 用户主动编辑 → 退出历史模式（下次按 ↑ 重新暂存草稿）
-                if (historyIndex !== -1) {
-                  setHistoryIndex(-1)
-                  draftBeforeHistoryRef.current = ''
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              spellCheck={false}
-              placeholder={hasTask ? t.chat.placeholder : t.chat.placeholder}
-              rows={1}
-              className="w-full bg-transparent text-[13px] text-text-primary placeholder:text-text-muted/50 py-2.5 pl-4 pr-24 resize-none outline-none max-h-[200px] overflow-y-auto leading-6 align-middle"
-              style={{
-                minHeight: '44px',
-                scrollbarWidth: 'none',
-                fontFamily: 'inherit',
-              }}
-            />
-
-            {/* Action buttons */}
-            <div className="absolute right-2 bottom-2 flex items-center gap-0.5">
-              <button
-                onClick={() => setShowAttachPanel(!showAttachPanel)}
-                className={`p-2 rounded-lg transition-all duration-150 ${
-                  showAttachPanel || attachments.length > 0
-                    ? 'text-accent-primary bg-accent-primary/10'
-                    : 'text-text-muted/40 hover:text-text-secondary hover:bg-bg-hover'
-                }`}
-                title={t.chat.attachFile}
-              >
-                <Paperclip className="w-4 h-4" />
-              </button>
-
-              {isBusy ? (
-                <button
-                  onClick={handleStop}
-                  disabled={isCancelling}
-                  className="p-2 bg-accent-danger/10 text-accent-danger hover:bg-accent-danger/20 disabled:opacity-50 disabled:cursor-wait rounded-lg transition-all duration-150 ring-1 ring-accent-danger/20"
-                  title={t.chat.stopGeneration}
-                >
-                  <Square className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  onClick={handleSend}
-                  disabled={isBusy || (!inputValue.trim() && attachments.length === 0)}
-                  className="p-2 bg-accent-primary text-white hover:bg-accent-primary/90 disabled:bg-bg-tertiary disabled:text-text-muted/30 disabled:cursor-not-allowed rounded-lg transition-all duration-150 shadow-sm disabled:shadow-none"
-                  title={t.chat.send}
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Attach panel */}
-          {showAttachPanel && (
-            <AttachPanel
-              onAttachFile={handleAttachFile}
-              onAttachWorkflow={handleAttachWorkflow}
-              onAttachToolGroup={handleAttachToolGroup}
-              attachedToolGroups={attachments.filter(a => a.type === 'tool_group').map(a => a.name)}
-              onClose={() => setShowAttachPanel(false)}
-            />
-          )}
-
-          {/* Bottom hint */}
-          <div className="flex items-center justify-between mt-1.5 px-1">
-            <span className="text-[10px] text-text-muted/40">
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">↵</kbd> {t.chat.sendHint}
-              <span className="mx-1.5">·</span>
-              <kbd className="px-1 py-0.5 bg-bg-tertiary/50 rounded text-[9px] font-mono">⇧↵</kbd> {t.chat.newLineHint}
-            </span>
-            <span className="text-[10px] text-text-muted/40 flex items-center gap-1">
-              {isBusy ? (
-                <>
-                  <Zap className="w-2.5 h-2.5 text-accent-primary" />
-                  <span className="text-accent-primary">{isCancelling ? t.chat.cancelling : t.chat.streaming}</span>
-                </>
-              ) : (
-                <>
-                  <div className="w-1.5 h-1.5 rounded-full bg-accent-success/60" />
-                  {t.chat.ready}
-                </>
-              )}
-            </span>
-          </div>
-        </div>
+        <ChatComposer
+          inputValue={inputValue}
+          attachments={attachments}
+          showAttachPanel={showAttachPanel}
+          isBusy={isBusy}
+          isCancelling={isCancelling}
+          textAreaRef={textAreaRef}
+          onInputChange={(value) => {
+            setInputValue(value)
+            if (historyIndex !== -1) {
+              setHistoryIndex(-1)
+              draftBeforeHistoryRef.current = ''
+            }
+          }}
+          onTextAreaResize={adjustTextareaHeight}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          onSend={handleSend}
+          onStop={handleStop}
+          onToggleAttachPanel={() => setShowAttachPanel(!showAttachPanel)}
+          onCloseAttachPanel={() => setShowAttachPanel(false)}
+          onAttachFile={handleAttachFile}
+          onAttachWorkflow={handleAttachWorkflow}
+          onAttachToolGroup={handleAttachToolGroup}
+          onRemoveAttachment={removeAttachment}
+        />
       </footer>
 
       {/* File Browser Dialog (decoupled component) */}
@@ -911,127 +665,6 @@ export function ChatView({
 
 // --- Message grouping ---
 // `groupMessages` / `roleOf` / `MessageRole` 提取到 ./groupMessages 以便单测。
-
-// --- Virtuoso list chrome (top spacer + streaming "thinking" footer) ---
-
-function ListSpacer() {
-  return <div className="h-3" aria-hidden />
-}
-
-type ActiveWorkState = { label: string; tone: 'thinking' | 'code' | 'working' } | null
-
-function TypingFooter({ context }: { context?: ActiveWorkState }) {
-  if (!context) return <div className="h-3" aria-hidden />
-  return (
-    <div className="px-5 py-3">
-      <div className="flex items-start gap-3">
-        <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0">
-          <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
-        </div>
-        <ActiveWorkIndicator label={context.label} tone={context.tone} />
-      </div>
-    </div>
-  )
-}
-
-function ChatSearchCapsule({
-  query,
-  inputRef,
-  current,
-  total,
-  onQueryChange,
-  onPrevious,
-  onNext,
-  onClose,
-}: {
-  query: string
-  inputRef: RefObject<HTMLInputElement>
-  current: number
-  total: number
-  onQueryChange: (value: string) => void
-  onPrevious: () => void
-  onNext: () => void
-  onClose: () => void
-}) {
-  const hasQuery = query.trim().length > 0
-  const hasResults = total > 0
-
-  return (
-    <div className="shrink-0 bg-bg-primary px-3 py-1.5">
-      <div className="mx-auto flex w-full max-w-[520px] items-center gap-1.5 rounded-full bg-bg-secondary/85 px-2 py-1 shadow-[0_1px_10px_rgba(0,0,0,0.08)] ring-1 ring-black/5 dark:ring-white/5">
-        <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" />
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              onClose()
-              return
-            }
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              if (e.shiftKey) onPrevious()
-              else onNext()
-            }
-          }}
-          placeholder="搜索对话"
-          className="min-w-0 flex-1 bg-transparent px-1 text-xs text-text-primary outline-none placeholder:text-text-muted/50"
-        />
-        <span className={`min-w-[42px] text-center text-[10px] tabular-nums ${hasQuery && !hasResults ? 'text-accent-danger' : 'text-text-muted'}`}>
-          {hasQuery ? (hasResults ? `${current}/${total}` : '无结果') : 'Ctrl F'}
-        </span>
-        <button
-          type="button"
-          onClick={onPrevious}
-          disabled={!hasResults}
-          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-          title="上一个"
-        >
-          <ArrowUp className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!hasResults}
-          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-          title="下一个"
-        >
-          <ChevronDown className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex h-6 w-6 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary"
-          title="关闭"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ActiveWorkIndicator({ label, tone }: { label: string; tone: 'thinking' | 'code' | 'working' }) {
-  const dotClass =
-    tone === 'code'
-      ? 'bg-accent-warning'
-      : tone === 'working'
-        ? 'bg-accent-geo'
-        : 'bg-accent-primary'
-  return (
-    <div className="flex items-center gap-2 pt-1 min-w-0">
-      <span className="relative flex w-2 h-2 shrink-0" aria-hidden>
-        <span className={`absolute inline-flex h-full w-full rounded-full ${dotClass} opacity-35 animate-ping`} />
-        <span className={`relative inline-flex rounded-full w-2 h-2 ${dotClass}`} />
-      </span>
-      <span className="chat-thinking-text text-xs font-medium truncate">
-        {label.endsWith('...') || label.endsWith('…') ? label : `${label}...`}
-      </span>
-    </div>
-  )
-}
 
 function getRunningToolLabel(message: UIMessage, t: ReturnType<typeof useT>): string {
   const name = message.toolName || ''
@@ -1070,35 +703,6 @@ function progressLabelForStage(
   }
 }
 
-/** Concatenate a group's user-visible text so it can be copied as one block. */
-function extractGroupText(items: UIMessage[]): string {
-  const parts: string[] = []
-  for (const m of items) {
-    const messageParts = messagePartsForRender(m)
-    if (messageParts.length > 0) {
-      for (const part of messageParts) {
-        if (part.type === 'text' && part.text?.trim()) {
-          parts.push(part.text.trim())
-        } else if (part.type === 'code' && part.text?.trim()) {
-          parts.push('```python\n' + part.text.trim() + '\n```')
-        } else if (part.type === 'tool_output' && part.text?.trim()) {
-          parts.push(part.text.trim())
-        }
-      }
-      continue
-    }
-    const say = m.say
-    if (say === 'text' || say === 'completion_result' || say === 'user_feedback') {
-      if (m.text?.trim()) parts.push(m.text.trim())
-    } else if (say === 'code' && m.text?.trim()) {
-      parts.push('```python\n' + m.text.trim() + '\n```')
-    } else if (say === 'code_result' && m.text?.trim()) {
-      parts.push(m.text.trim())
-    }
-  }
-  return parts.join('\n\n')
-}
-
 /** Concatenate searchable message content. Kept text-only so virtualized rows stay cheap. */
 function extractSearchText(items: UIMessage[]): string {
   const parts: string[] = []
@@ -1106,16 +710,8 @@ function extractSearchText(items: UIMessage[]): string {
     for (const part of messagePartsForRender(m)) {
       if (part.text) parts.push(part.text)
       if (part.tool) parts.push(part.tool)
-      if (part.data) parts.push(safeJsonForSearch(part.data))
+      parts.push(searchTextForPartData(part.data))
     }
-    if (m.text) parts.push(m.text)
-    if (m.toolName) parts.push(m.toolName)
-    if (m.progressDetail) parts.push(m.progressDetail)
-    if (m.scriptPath) parts.push(m.scriptPath)
-    if (m.scriptAbsPath) parts.push(m.scriptAbsPath)
-    if (m.files?.length) parts.push(...m.files)
-    if (m.images?.length) parts.push(...m.images)
-    if (m.toolArgs) parts.push(safeJsonForSearch(m.toolArgs))
     if (m.planData) {
       if (m.planData.title) parts.push(m.planData.title)
       for (const step of m.planData.steps) {
@@ -1133,529 +729,21 @@ function extractSearchText(items: UIMessage[]): string {
   return parts.filter(Boolean).join('\n')
 }
 
-function safeJsonForSearch(value: unknown): string {
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return ''
+function searchTextForPartData(value: unknown): string {
+  if (!value || typeof value !== 'object') return ''
+  const data = value as Record<string, unknown>
+  const fields: string[] = []
+  for (const key of ['stage', 'detail', 'kind', 'scriptPath', 'scriptAbsPath', 'error']) {
+    const text = data[key]
+    if (typeof text === 'string') fields.push(text)
   }
-}
-
-// --- Message group wrapper with a single avatar per group ---
-
-function MessageGroup({
-  role,
-  items,
-  onEditUser,
-  highlighted = false,
-  children,
-}: {
-  role: MessageRole
-  items: UIMessage[]
-  onEditUser?: (text: string) => void
-  highlighted?: boolean
-  children: ReactNode
-}) {
-  const t = useT()
-  if (role === 'system') {
-    // 细条系统消息（token/cost 指示）不占头像位。
-    return <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 transition-colors`}>{children}</div>
+  const planData = data.planData as { title?: unknown; steps?: Array<{ title?: unknown; note?: unknown }> } | undefined
+  if (planData?.title && typeof planData.title === 'string') fields.push(planData.title)
+  if (Array.isArray(planData?.steps)) {
+    for (const step of planData.steps) {
+      if (typeof step.title === 'string') fields.push(step.title)
+      if (typeof step.note === 'string') fields.push(step.note)
+    }
   }
-
-  if (role === 'user') {
-    const userText = items.find((m) => m.say === 'user_feedback')?.text ?? ''
-    return (
-      <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
-        <div className="flex justify-end">
-          <div className="max-w-[85%] min-w-0">
-            {children}
-            <div className="flex justify-end gap-0.5 mt-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
-              {userText && onEditUser && (
-                <MessageActionButton
-                  title={t.chat.editAndResend}
-                  onClick={() => onEditUser(userText)}
-                  icon={<Pencil className="w-3 h-3" />}
-                />
-              )}
-              {userText && <CopyActionButton text={userText} />}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // assistant：一组里可能有多条子消息（thought / code / code_result / text ...），
-  // 全部堆在同一个头像右边，子消息之间留一点竖向间距。
-  const groupText = extractGroupText(items)
-  return (
-    <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg overflow-hidden">
-            <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
-          </div>
-        </div>
-        <div className="min-w-0 space-y-2.5">
-          {children}
-          {groupText && (
-            <div className="flex gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
-              <CopyActionButton text={groupText} />
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// --- Hover message-action buttons ---
-
-function MessageActionButton({
-  title,
-  onClick,
-  icon,
-}: {
-  title: string
-  onClick: () => void
-  icon: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className="w-6 h-6 rounded-md flex items-center justify-center text-text-muted/70 hover:text-text-primary hover:bg-bg-hover transition-colors"
-    >
-      {icon}
-    </button>
-  )
-}
-
-function CopyActionButton({ text }: { text: string }) {
-  const t = useT()
-  const [copied, setCopied] = useState(false)
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }, [text])
-  return (
-    <MessageActionButton
-      title={t.common.copy}
-      onClick={handleCopy}
-      icon={copied ? <Check className="w-3 h-3 text-accent-success" /> : <Copy className="w-3 h-3" />}
-    />
-  )
-}
-
-// --- Welcome Content ---
-
-function WelcomeContent({ onSuggestionClick }: { onSuggestionClick: (text: string) => void }) {
-  const t = useT()
-  // Check if workspace is open
-  const workspacePath = useAssetStore((s) => s.workspacePath)
-  const hasWorkspace = !!workspacePath
-
-  const suggestions: Array<{
-    text: string
-    icon: ReactNode
-    desc: string
-    gradient: string
-    iconColor: string
-    borderColor: string
-  }> = [
-    {
-      text: t.chat.suggestionLoadData,
-      icon: <FolderOpen className="w-4 h-4" />,
-      desc: t.chat.suggestionLoadDataDesc,
-      gradient: 'from-blue-500/20 to-cyan-500/20',
-      iconColor: 'text-blue-400',
-      borderColor: 'hover:border-blue-500/30',
-    },
-    {
-      text: t.chat.suggestionBuffer,
-      icon: <Globe className="w-4 h-4" />,
-      desc: t.chat.suggestionBufferDesc,
-      gradient: 'from-green-500/20 to-emerald-500/20',
-      iconColor: 'text-green-400',
-      borderColor: 'hover:border-green-500/30',
-    },
-    {
-      text: t.chat.suggestionChoropleth,
-      icon: <Zap className="w-4 h-4" />,
-      desc: t.chat.suggestionChoroplethDesc,
-      gradient: 'from-purple-500/20 to-pink-500/20',
-      iconColor: 'text-purple-400',
-      borderColor: 'hover:border-purple-500/30',
-    },
-  ]
-
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-center px-6">
-      {/* Animated orb logo */}
-      <div className="relative mb-8 animate-fade-in">
-        <OrbLogo size={80} />
-      </div>
-
-      <h2 className="text-xl font-bold text-text-primary mb-2 animate-fade-in">
-        {t.chat.emptyState.title}
-      </h2>
-      <p className="text-sm text-text-muted mb-8 max-w-[320px] leading-relaxed animate-fade-in">
-        {t.chat.emptyState.hint}
-      </p>
-
-      {/* Empty state: no workspace open */}
-      {!hasWorkspace && (
-        <div className="w-full max-w-[360px] mb-6 animate-fade-in">
-          <div className="flex items-start gap-3 bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-3">
-            <div className="w-5 h-5 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0 mt-0.5">
-              <span className="text-amber-500 text-xs">⚠</span>
-            </div>
-            <div className="text-left">
-              <p className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-                {t.chat.emptyState.noWorkspace}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Suggestion cards */}
-      {suggestions.length > 0 && (
-      <div className="grid grid-cols-1 gap-2 w-full max-w-[360px] animate-slide-up">
-        {suggestions.map((s, i) => (
-          <button
-            key={i}
-            onClick={() => onSuggestionClick(s.text)}
-            className={`w-full text-left bg-bg-secondary hover:bg-bg-tertiary border border-border ${s.borderColor} rounded-xl px-4 py-3 transition-all duration-200 group hover:shadow-sm`}
-            style={{ animationDelay: `${i * 50}ms` }}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${s.gradient} flex items-center justify-center shrink-0 ring-1 ring-white/5`}>
-                <span className={s.iconColor}>{s.icon}</span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] uppercase tracking-wider text-text-muted group-hover:text-accent-primary transition-colors font-semibold">
-                  {s.desc}
-                </span>
-                <p className="text-[13px] text-text-secondary group-hover:text-text-primary transition-colors truncate mt-0.5 leading-snug">
-                  {s.text}
-                </p>
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
-      )}
-
-      {/* Powered by badge */}
-    </div>
-  )
-}
-
-// --- Conversation List Dropdown ---
-
-function ConversationListDropdown({
-  conversations,
-  activeId,
-  onSelect,
-  onDelete,
-  onClose,
-}: {
-  conversations: { id: string; title: string; messages: UIMessage[]; updatedAt: number }[]
-  activeId: string | null
-  onSelect: (id: string) => void
-  onDelete: (id: string) => void
-  onClose: () => void
-}) {
-  const t = useT()
-  const ref = useRef<HTMLDivElement>(null)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editingTitle, setEditingTitle] = useState('')
-  const listTitleInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editingId && listTitleInputRef.current) {
-      listTitleInputRef.current.focus()
-      listTitleInputRef.current.select()
-    }
-  }, [editingId])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [onClose])
-
-  return (
-    <div
-      ref={ref}
-      className="absolute right-0 top-full mt-1 w-64 max-h-80 overflow-y-auto bg-bg-primary border border-border rounded-xl shadow-xl z-[999] animate-fade-in"
-      style={{ scrollbarWidth: 'thin' }}
-    >
-      <div className="p-2">
-        <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5">
-          {t.chat.conversations} ({conversations.length})
-        </div>
-        {conversations.map((conv) => (
-          <div
-            key={conv.id}
-            className={`group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-all duration-150 ${
-              conv.id === activeId
-                ? 'bg-accent-primary/10 text-accent-primary'
-                : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-            }`}
-            onClick={() => onSelect(conv.id)}
-          >
-            <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              {editingId === conv.id ? (
-                <input
-                  ref={listTitleInputRef}
-                  className="text-[12px] leading-tight bg-bg-primary border border-border rounded px-1 py-0.5 outline-none focus:border-accent-primary w-full"
-                  value={editingTitle}
-                  onChange={(e) => setEditingTitle(e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  onBlur={() => {
-                    const trimmed = editingTitle.trim()
-                    if (trimmed) {
-                      useChatStore.getState().renameConversation(conv.id, trimmed)
-                    }
-                    setEditingId(null)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      const trimmed = editingTitle.trim()
-                      if (trimmed) {
-                        useChatStore.getState().renameConversation(conv.id, trimmed)
-                      }
-                      setEditingId(null)
-                    } else if (e.key === 'Escape') {
-                      setEditingId(null)
-                    }
-                  }}
-                />
-              ) : (
-                <p
-                  className="text-[12px] truncate leading-tight"
-                  onDoubleClick={(e) => {
-                    e.stopPropagation()
-                    setEditingTitle(conv.title || t.chat.newConversation)
-                    setEditingId(conv.id)
-                  }}
-                >
-                  {conv.title || t.chat.newConversation}
-                </p>
-              )}
-              <p className="text-[10px] text-text-muted mt-0.5">
-                {conv.messages.length} {t.chat.messages}
-              </p>
-            </div>
-            <div className="flex items-center gap-0.5">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setEditingTitle(conv.title || t.chat.newConversation)
-                  setEditingId(conv.id)
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 text-text-muted hover:text-accent-primary rounded transition-all"
-                title={t.chat.renameConversation}
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDelete(conv.id)
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 text-text-muted hover:text-accent-danger rounded transition-all"
-                title={t.chat.deleteConversation}
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// --- Attach Panel ---
-
-function AttachPanel({
-  onAttachFile,
-  onAttachWorkflow,
-  onAttachToolGroup,
-  attachedToolGroups,
-  onClose,
-}: {
-  onAttachFile: () => void
-  onAttachWorkflow: (entry: { path: string; name: string }) => void
-  onAttachToolGroup: (name: string, groups: string[]) => void
-  attachedToolGroups: string[]
-  onClose: () => void
-}) {
-  const t = useT()
-  const ref = useRef<HTMLDivElement>(null)
-  const workflowEntries = useWorkflowStore((s) => s.entries)
-  const refreshWorkflows = useWorkflowStore((s) => s.refresh)
-
-  // Load workflows on mount so the section is populated even if the
-  // WorkflowsPanel sidebar tab was never opened.
-  useEffect(() => {
-    refreshWorkflows()
-  }, [refreshWorkflows])
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [onClose])
-
-  return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 right-0 mb-2 bg-bg-secondary border border-border rounded-xl shadow-xl z-[999] animate-fade-in overflow-hidden"
-    >
-      <div className="p-2">
-        <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5">
-          {t.chat.attachFile}
-        </div>
-
-        {/* Attach file from disk */}
-        <button
-          onClick={onAttachFile}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-all duration-150 group"
-        >
-          <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0 ring-1 ring-blue-500/20">
-            <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
-          </div>
-          <div className="text-left">
-            <p className="text-[12px] font-medium leading-tight">{t.chat.browseFiles}</p>
-            <p className="text-[10px] text-text-muted mt-0.5">
-              {t.fileBrowser.selectFiles}
-            </p>
-          </div>
-        </button>
-
-        {/* Workflow section */}
-        {workflowEntries.length > 0 && (
-          <>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5 mt-1 flex items-center gap-1">
-              <GitBranch className="w-3 h-3" />
-              {t.chat.attachWorkflow}
-            </div>
-            <div className="max-h-32 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-              {workflowEntries.map((entry) => (
-                <button
-                  key={entry.path}
-                  onClick={() => onAttachWorkflow(entry)}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-all duration-150"
-                >
-                  <div className="w-6 h-6 rounded-md bg-purple-500/10 flex items-center justify-center shrink-0 ring-1 ring-purple-500/20">
-                    <GitBranch className="w-3 h-3 text-purple-400" />
-                  </div>
-                  <div className="text-left flex-1 min-w-0">
-                    <p className="text-[12px] font-medium leading-tight truncate">
-                      {entry.name}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* Tool groups section */}
-        <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold px-2 py-1.5 mt-1 flex items-center gap-1">
-          <Wrench className="w-3 h-3" />
-          {t.chat.attachTools}
-        </div>
-        <button
-          onClick={() => onAttachToolGroup('QGIS4+', ['qgis'])}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedToolGroups.includes('QGIS4+')
-              ? 'bg-amber-500/10 text-amber-300 ring-1 ring-amber-500/30'
-              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-          }`}
-        >
-          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedToolGroups.includes('QGIS4+')
-              ? 'bg-amber-500/20 ring-amber-500/30'
-              : 'bg-amber-500/10 ring-amber-500/20'
-          }`}>
-            <Wrench className="w-3 h-3 text-amber-400" />
-          </div>
-          <div className="text-left flex-1 min-w-0">
-            <p className="text-[12px] font-medium leading-tight">QGIS4+</p>
-            <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedToolGroups.includes('QGIS4+') ? t.chat.attachedClickDetach : t.chat.qgisMcpCommands}
-            </p>
-          </div>
-        </button>
-        <button
-          onClick={() => onAttachToolGroup('OSM', ['osm'])}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedToolGroups.includes('OSM')
-              ? 'bg-green-500/10 text-green-300 ring-1 ring-green-500/30'
-              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-          }`}
-        >
-          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedToolGroups.includes('OSM')
-              ? 'bg-green-500/20 ring-green-500/30'
-              : 'bg-green-500/10 ring-green-500/20'
-          }`}>
-            <Globe className="w-3 h-3 text-green-400" />
-          </div>
-          <div className="text-left flex-1 min-w-0">
-            <p className="text-[12px] font-medium leading-tight">OSM</p>
-            <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedToolGroups.includes('OSM') ? t.chat.attachedClickDetach : t.chat.osmDataDownload}
-            </p>
-          </div>
-        </button>
-        <button
-          onClick={() => onAttachToolGroup('DataSources', ['datasource'])}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-150 ${
-            attachedToolGroups.includes('DataSources')
-              ? 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
-              : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-          }`}
-        >
-          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ring-1 ${
-            attachedToolGroups.includes('DataSources')
-              ? 'bg-cyan-500/20 ring-cyan-500/30'
-              : 'bg-cyan-500/10 ring-cyan-500/20'
-          }`}>
-            <Database className="w-3 h-3 text-cyan-400" />
-          </div>
-          <div className="text-left flex-1 min-w-0">
-            <p className="text-[12px] font-medium leading-tight">{t.chat.dataSources}</p>
-            <p className="text-[10px] text-text-muted mt-0.5">
-              {attachedToolGroups.includes('DataSources') ? t.chat.attachedClickDetach : t.chat.dataSourcesGuide}
-            </p>
-          </div>
-        </button>
-
-        {/* Hint */}
-        <div className="px-2 pt-2 pb-1">
-          <p className="text-[10px] text-text-muted/60 leading-relaxed">
-            💡 {t.chat.attachWorkflowHint}
-          </p>
-        </div>
-      </div>
-    </div>
-  )
+  return fields.join('\n').slice(0, 4000)
 }
