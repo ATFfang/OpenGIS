@@ -78,21 +78,23 @@ export const ImageRow = memo(({ images = [], files = [], caption = '' }: ImageRo
 
   if (!url) {
     return (
-      <div className="ml-[30px] mt-1 mb-1.5 max-w-[420px] rounded-lg border border-border/30 bg-bg-tertiary/40 px-3 py-2 text-[12px] text-text-muted flex items-center gap-2">
-        <ImageOff className="w-3.5 h-3.5" />
-        <span>Loading chart preview…</span>
+      <div className="mt-1 mb-1.5 flex w-full justify-center">
+        <div className="w-full max-w-[min(560px,100%)] rounded-lg border border-border/20 bg-bg-tertiary/40 px-3 py-2 text-[12px] text-text-muted flex items-center gap-2">
+          <ImageOff className="w-3.5 h-3.5" />
+          <span>Loading chart preview…</span>
+        </div>
       </div>
     )
   }
 
   return (
     <>
-      <div className="ml-[30px] mt-1 mb-1.5">
-        <div className="relative inline-block group max-w-full">
+      <div className="mt-1 mb-1.5 flex w-full justify-center">
+        <div className="relative group w-full max-w-[min(560px,100%)]">
           <img
             src={url}
             alt={caption || 'plot'}
-            className="max-w-[420px] max-h-[320px] rounded-xl border border-border/30 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
+            className="block h-auto max-h-[360px] w-full max-w-full rounded-xl border border-border/20 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
             onClick={() => setPreviewOpen(true)}
           />
 
@@ -132,13 +134,13 @@ export const ImageRow = memo(({ images = [], files = [], caption = '' }: ImageRo
               <Maximize2 className="w-3 h-3" />
             </button>
           </div>
-        </div>
 
-        {caption && (
-          <p className="text-[12px] text-text-muted mt-1 max-w-[420px] leading-relaxed">
-            {caption}
-          </p>
-        )}
+          {caption && (
+            <p className="text-[12px] text-text-muted mt-1 leading-relaxed text-center">
+              {caption}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Lightbox preview */}

@@ -54,20 +54,20 @@ class AgentEventLogTests(unittest.TestCase):
         self.assertEqual(part.id, "run_123:text:final")
         self.assertEqual(part.text, "hello")
 
-    def test_reasoning_promote_projects_to_same_part_as_text(self) -> None:
-        delta = event_to_message_part(
-            AgentEvent(AgentEventType.REASONING_DELTA, {"run_id": "run_123", "round": 2, "delta": "answer"})
-        )
-        promote = event_to_message_part(
-            AgentEvent(AgentEventType.REASONING_PROMOTE, {"run_id": "run_123", "round": 2})
+    def test_progress_projects_to_renderable_message_part(self) -> None:
+        event = AgentEvent(
+            AgentEventType.PROGRESS,
+            {"stage": "calling_llm", "message": "Thinking...", "run_id": "run_123"},
         )
 
-        self.assertIsNotNone(delta)
-        self.assertIsNotNone(promote)
-        self.assertEqual(delta.id, "run_123:reasoning:2")
-        self.assertEqual(promote.id, "run_123:reasoning:2")
-        self.assertEqual(promote.type, "text")
-        self.assertEqual(promote.status, "completed")
+        part = event_to_message_part(event)
+
+        self.assertIsNotNone(part)
+        self.assertEqual(part.id, "run_123:progress:live")
+        self.assertEqual(part.type, "progress")
+        self.assertEqual(part.status, "running")
+        self.assertEqual(part.data["stage"], "calling_llm")
+        self.assertEqual(part.data["message"], "Thinking...")
 
     def test_code_block_and_result_project_to_renderable_parts(self) -> None:
         code = event_to_message_part(

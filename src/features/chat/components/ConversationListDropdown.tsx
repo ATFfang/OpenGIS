@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { useChatStore } from '@/stores/chatStore'
 import { useT } from '@/i18n'
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 
 interface ConversationListDropdownProps {
-  conversations: { id: string; title: string; messages: UIMessage[]; updatedAt: number }[]
+  conversations: { id: string; title: string; messages: ChatMessage[]; updatedAt: number }[]
   activeId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void

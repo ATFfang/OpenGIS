@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import type { UIMessage, SayType, AskType } from '@/types/chat'
+import type { ChatMessage, SayType, AskType } from '@/types/chat'
 import { groupMessages, roleOf } from '../groupMessages'
 
 let tsCounter = 1_700_000_000_000
@@ -18,7 +18,7 @@ function msg(opts: {
   ask?: AskType
   text?: string
   partial?: boolean
-}): UIMessage {
+}): ChatMessage {
   tsCounter += 1
   return {
     ts: tsCounter,

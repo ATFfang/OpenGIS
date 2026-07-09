@@ -83,9 +83,6 @@ class AgentRunner:
 
     Parameters
     ----------
-    max_steps:
-        Echoed into the ``MAX_STEPS_REACHED`` event payload so the UI
-        knows what ceiling was in effect.
     run_id:
         Correlation id surfaced with terminal events.
     thinking_banner:
@@ -99,7 +96,6 @@ class AgentRunner:
         regardless of whether it is emitted to the UI.
     """
 
-    max_steps: int
     run_id: str
     thinking_banner: str = ""
     emit_final_answer: bool = True

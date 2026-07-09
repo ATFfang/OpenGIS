@@ -9,6 +9,7 @@ import { Dispatcher } from '../dispatcher';
 import { HandlerRegistry } from '../registry';
 import { listAllMethods, registerAllHandlers } from '../handlers/register';
 import type { JsonRpcRequest } from '@/types/protocol';
+import { useChatStore } from '@/stores/chatStore';
 
 function req(method: string, params: unknown = {}, id = 'r'): JsonRpcRequest {
   return { jsonrpc: '2.0', id, method, params };
@@ -152,5 +153,121 @@ describe('rpc.ui.fs.refresh_assets', () => {
       (globalThis as any).window = previousWindow;
       (globalThis as any).CustomEvent = previousCustomEvent;
     }
+  });
+});
+
+describe('rpc.ui.chat.plan_update', () => {
+  it('creates a renderable MessagePart-backed plan card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.plan_update', {
+      plan_id: 'workflow-test',
+      title: 'Workflow Test',
+      workflow: true,
+      run_id: 'run-1',
+      steps: [{ id: 'step1', title: 'Load data', status: 'in_progress' }],
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const conv = useChatStore.getState().activeConversation();
+    expect(conv?.messages).toHaveLength(1);
+    const msg = conv!.messages[0];
+    expect(msg.say).toBe('plan');
+    expect(msg.planData?.workflow).toBe(true);
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'plan:workflow-test',
+      type: 'plan',
+      status: 'running',
+      data: { planData: expect.objectContaining({ planId: 'workflow-test' }) },
+    });
+    expect(useChatStore.getState().workflowPlanActive).toBe(true);
+  });
+});
+
+describe('rpc.ui.chat.subagent_update', () => {
+  it('creates a renderable MessagePart-backed subagent card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.subagent_update', {
+      subagent_id: 'sub-1',
+      status: 'running',
+      parallel: false,
+      run_id: 'run-1',
+      tasks: [{ title: 'Inspect dataset', status: 'running' }],
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const msg = useChatStore.getState().activeConversation()!.messages[0];
+    expect(msg.say).toBe('subagent');
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'subagent:sub-1',
+      type: 'progress',
+      status: 'running',
+      data: {
+        kind: 'subagent',
+        subagentData: expect.objectContaining({ subagentId: 'sub-1' }),
+      },
+    });
+  });
+});
+
+describe('rpc.ui.chat.interactive_snapshot', () => {
+  it('creates a renderable MessagePart-backed screenshot approval card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.interactive_snapshot', {
+      request_id: 'shot-1',
+      save_path: '/tmp/shot.png',
+      prompt: 'Capture map',
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const msg = useChatStore.getState().activeConversation()!.messages[0];
+    expect(msg.say).toBe('screenshot');
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'screenshot:shot-1',
+      type: 'approval',
+      status: 'pending',
+      data: {
+        kind: 'screenshot',
+        screenshotData: expect.objectContaining({ requestId: 'shot-1' }),
+      },
+    });
   });
 });

@@ -30,9 +30,9 @@ from opengis_backend.agent.telemetry.script_archive import ScriptArchive
 logger = logging.getLogger(__name__)
 
 
-# ── Thinking stage labels (for progress_callback) ──
-# These map internal stage names to user-friendly descriptions.
-THINKING_STAGES = {
+# ── Progress stage labels (for progress_callback) ──
+# These are stable stage ids consumed by the MessagePart UI.
+PROGRESS_STAGES = {
     "calling_llm": "calling_llm",
     "thinking_next_step": "thinking_next_step",
     "executing_code": "executing_code",
@@ -74,7 +74,7 @@ class StepRecorder:
             logger.exception("step_callback failed for step %s", step.step_num)
 
     def on_progress(self, stage: str, detail: str = "") -> None:
-        """Emit a THINKING event to the UI.
+        """Emit a PROGRESS event to the UI.
 
         Called by the agent loop BEFORE an LLM call or code execution
         so the user sees real-time status instead of a blank screen.
@@ -86,7 +86,7 @@ class StepRecorder:
                 self.loop,
                 self.queue,
                 AgentEvent(
-                    type=AgentEventType.THINKING,
+                    type=AgentEventType.PROGRESS,
                     data={
                         "stage": stage,
                         "message": detail,

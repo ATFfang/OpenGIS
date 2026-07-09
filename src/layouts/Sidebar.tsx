@@ -45,7 +45,7 @@ export function Sidebar({
     { id: 'workers', icon: Activity, label: t.sidebar.workers },
     { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
     { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
-    { id: 'skills', icon: Wrench, label: t.sidebar.skills },
+    { id: 'tools', icon: Wrench, label: t.sidebar.tools },
     { id: 'settings', icon: Settings, label: t.sidebar.settings },
   ]
 

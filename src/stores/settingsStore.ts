@@ -37,7 +37,6 @@ interface SettingsState {
     showMapLabels: boolean
   }
   agent: {
-    maxIterations: number
     maxConsecutiveMistakes: number
     codeExecutionTimeout: number
     requireConfirmation: boolean
@@ -81,7 +80,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     showMapLabels: false,
   },
   agent: {
-    maxIterations: 25,
     maxConsecutiveMistakes: 3,
     codeExecutionTimeout: 60,
     requireConfirmation: true,
@@ -130,11 +128,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (typeof window !== 'undefined' && window.electronAPI) {
       try {
         const settings = await window.electronAPI.getSettings()
+        const agentSettings = { ...(settings.agent || {}) }
+        delete (agentSettings as { maxIterations?: unknown }).maxIterations
         set({
           model: { ...get().model, ...settings.model },
           python: { ...get().python, ...settings.python },
           appearance: { ...get().appearance, ...settings.appearance },
-          agent: { ...get().agent, ...settings.agent },
+          agent: { ...get().agent, ...agentSettings },
         })
       } catch (error) {
         console.error('[settingsStore] 加载设置失败:', error)

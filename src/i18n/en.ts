@@ -50,7 +50,7 @@ export const en = {
     workers: 'Workers',
     workflows: 'Workflows',
     runs: 'Runs',
-    skills: 'Tools',
+    tools: 'Tools',
     settings: 'Settings',
     switchProject: 'Switch Project',
     board: 'Board Mode',
@@ -148,9 +148,6 @@ export const en = {
     datasourceCatalog: 'Curated GeoJSON data sources',
     dataSources: 'Data Sources',
     dataSourcesGuide: 'Geospatial data source reference guide',
-    // MaxStepsReachedRow
-    maxStepsReached: 'Reached the step limit ({maxSteps}) for this run. The agent provided a summary above.',
-    maxStepsHint: 'Click below to continue, or increase Max Iterations in Settings → Agent.',
     continue: 'Continue',
     // SubagentRow
     subagents: 'Sub-agents',
@@ -340,8 +337,6 @@ export const en = {
     createPreset: 'Create',
     deletePreset: 'Delete preset',
     updatePreset: 'Update current preset',
-    maxIterations: 'Max Iterations',
-    maxIterationsDesc: 'Maximum number of agent iterations per run.',
     maxConsecutiveMistakes: 'Max Consecutive Mistakes',
     maxConsecutiveMistakesDesc: 'Number of consecutive tool call failures before stopping the agent.',
     requireConfirmation: 'Require Confirmation',

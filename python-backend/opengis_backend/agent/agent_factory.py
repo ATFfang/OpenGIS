@@ -30,7 +30,6 @@ def build_agent_loop(
     tools: ToolRegistry,
     llm_config: LLMConfig,
     ctx: ToolContext,
-    max_steps: int,
     step_callback: Optional[Callable[[AgentStep], None]] = None,
     progress_callback: Optional[Callable[[str, str], None]] = None,
     execution_output_callback: Optional[Callable[[str], None]] = None,
@@ -40,9 +39,6 @@ def build_agent_loop(
     on_code_start: Optional[Callable[[int], None]] = None,
     on_code_delta: Optional[Callable[[int, str], None]] = None,
     on_code_end: Optional[Callable[[int], None]] = None,
-    on_reasoning_start: Optional[Callable[[int], None]] = None,
-    on_reasoning_end: Optional[Callable[[int], None]] = None,
-    on_reasoning_promote: Optional[Callable[[int], None]] = None,
     on_tool_start: Optional[Callable[[str, dict, str], None]] = None,
     on_tool_result: Optional[Callable[..., None]] = None,
     tool_groups: Optional[list[str]] = None,
@@ -67,8 +63,6 @@ def build_agent_loop(
         ``needs_ctx=True``, (b) the executor factory to pick the
         subprocess' working directory, and (c) the system-prompt
         composer to inject the workspace path.
-    max_steps:
-        Hard cap on code execution steps in the loop.
     step_callback:
         Optional callback invoked after each step with an AgentStep.
     risky_op_listener:
@@ -85,7 +79,7 @@ def build_agent_loop(
         ``executor.cleanup()``) after the run finishes, win or lose —
         it owns a subprocess handle.
     """
-    profile = agent_profile or AgentProfile.gis_build(max_steps=max_steps)
+    profile = agent_profile or AgentProfile.gis_build()
     runtime = build_loop_runtime_bundle(
         tools=tools,
         llm_config=llm_config,
@@ -106,20 +100,17 @@ def build_agent_loop(
         llm_call=runtime.llm_call,
         executor_call=runtime.executor_call,
         system_prompt=system_prompt,
-        max_steps=int(profile.max_steps or max_steps),
         step_callback=step_callback,
         progress_callback=progress_callback,
         on_thought_delta=on_thought_delta,
         on_code_start=on_code_start,
         on_code_delta=on_code_delta,
         on_code_end=on_code_end,
-        on_reasoning_start=on_reasoning_start,
-        on_reasoning_end=on_reasoning_end,
-        on_reasoning_promote=on_reasoning_promote,
         on_tool_start=on_tool_start,
         on_tool_result=on_tool_result,
         context=context if context is not None else ContextManager(),
         user_instructions=user_instructions,
+        agent_profile=profile,
         tool_runtime=runtime.tool_runtime,
         tool_schemas=runtime.tool_schemas,
         tool_materializer=ToolMaterializer(runtime.tool_schemas),

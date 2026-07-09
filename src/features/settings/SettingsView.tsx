@@ -953,22 +953,6 @@ export function SettingsView() {
                 ref={(el) => { sectionRefs.current['agent'] = el }}
               >
                 <SettingSection title={t.settings.agentBehavior}>
-                  {/* Max Iterations */}
-                  <SettingItem
-                    id="agent-maxiter"
-                    label={t.settings.maxIterations}
-                    description={t.settings.maxIterationsDesc}
-                  >
-                    <SettingSlider
-                      id="agent-maxiter"
-                      value={agent.maxIterations}
-                      onChange={(v) => setAgent({ maxIterations: v })}
-                      min={1}
-                      max={50}
-                      step={1}
-                    />
-                  </SettingItem>
-
                   {/* Max Consecutive Mistakes */}
                   <SettingItem
                     id="agent-maxmistakes"

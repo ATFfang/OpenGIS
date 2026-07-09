@@ -23,6 +23,7 @@ interface CodeStepRowProps {
 // Delay before auto-collapsing a freshly-finished code block. Long enough
 // for the eye to register "done", short enough to feel snappy.
 const AUTO_COLLAPSE_DELAY_MS = 350
+const STREAMING_CODE_RENDER_LIMIT = 12_000
 
 /**
  * CodeStepRow — renders one Python step emitted by the agent runtime.
@@ -110,16 +111,20 @@ export const CodeStepRow = memo(({
   // so the user sees the empty editor open up immediately.
   const showBody = code.length > 0 || isStreaming
   const lineCount = code ? code.split('\n').length : 0
+  const streamingTruncated = isStreaming && code.length > STREAMING_CODE_RENDER_LIMIT
+  const streamingCode = streamingTruncated
+    ? code.slice(0, STREAMING_CODE_RENDER_LIMIT)
+    : code
 
   return (
     <div className="group">
       {/* Header: step + clickable path */}
-      <div className="flex items-center gap-2.5 mb-2">
-        <div className="w-5 h-5 rounded-md flex items-center justify-center bg-accent-primary/10">
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="w-[18px] h-[18px] rounded flex items-center justify-center bg-accent-primary/10">
           <Code2 className={`w-3 h-3 text-accent-primary ${isStreaming ? 'animate-pulse' : ''}`} />
         </div>
-        <span className="font-semibold text-[13px] text-text-primary">
-          Step {stepNumber || '?'}
+        <span className="font-semibold text-[12px] text-text-primary">
+          Python
           {isStreaming && (
             <span className="ml-1.5 text-[10px] uppercase tracking-wider font-normal text-accent-primary/70">
               writing…
@@ -141,55 +146,70 @@ export const CodeStepRow = memo(({
 
       {/* Collapsible code body */}
       {showBody && (
-        <div className="bg-bg-tertiary/50 rounded-xl overflow-hidden border border-border/30 ml-[30px]">
+        <div
+          className="bg-bg-tertiary/90 rounded-lg overflow-hidden"
+          style={{ border: '1px solid color-mix(in srgb, var(--border-color) 50%, transparent)' }}
+        >
           <button
             onClick={handleHeaderClick}
             disabled={isStreaming}
-            className={`w-full flex items-center text-text-muted py-2 px-3 select-none bg-transparent border-none text-left text-[12px] transition-all duration-150 ${
+            className={`w-full flex items-center text-text-muted py-2 px-3 select-none border-none text-left text-[11px] transition-all duration-150 ${
               isStreaming
-                ? 'cursor-default'
-                : 'cursor-pointer hover:text-text-secondary hover:bg-bg-hover/50'
+                ? 'cursor-default bg-bg-hover/35'
+                : 'cursor-pointer bg-bg-hover/45 hover:text-text-secondary hover:bg-bg-hover/65'
             }`}
           >
             <span className="mr-2 flex-1 text-left text-[11px] uppercase tracking-wider">
               {effectiveExpanded ? 'Hide code' : 'Show code'}
               {lineCount > 0 && (
                 <span className="text-text-muted/60 normal-case tracking-normal ml-2">
-                  ({lineCount} {lineCount === 1 ? 'line' : 'lines'})
+                  ({lineCount} {lineCount === 1 ? 'line' : 'lines'}{stepNumber ? ` · #${stepNumber}` : ''})
                 </span>
               )}
             </span>
             {!isStreaming && (
               <span className="transition-transform duration-150">
                 {effectiveExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                  <ChevronDown className="w-3 h-3 shrink-0" />
                 ) : (
-                  <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+                  <ChevronRight className="w-3 h-3 shrink-0" />
                 )}
               </span>
             )}
           </button>
 
           {effectiveExpanded && (
-            <div className="border-t border-border/25">
-              <SyntaxHighlighter
-                style={codeTheme}
-                language="python"
-                PreTag="div"
-                customStyle={{
-                  margin: 0,
-                  borderRadius: 0,
-                  fontSize: '12px',
-                  lineHeight: '1.6',
-                  padding: '12px 16px',
-                  background: 'var(--bg-tertiary)',
-                  maxHeight: '400px',
-                  overflowY: 'auto',
-                  textShadow: 'none',
-                }}
-              >
-                {code || (isStreaming ? ' ' : '')}
-              </SyntaxHighlighter>
+            <div style={{ borderTop: '1px solid color-mix(in srgb, var(--border-color) 50%, transparent)' }}>
+              {isStreaming ? (
+                <pre
+                  className="m-0 max-h-[340px] overflow-auto bg-bg-tertiary/65 px-3.5 py-3 font-mono text-[11.75px] leading-[1.58] text-text-primary whitespace-pre"
+                  style={{ textShadow: 'none' }}
+                >
+                  {streamingCode || ' '}
+                  {streamingTruncated && (
+                    `\n\n… live preview paused after ${STREAMING_CODE_RENDER_LIMIT.toLocaleString()} chars. Full code will be available when writing completes.`
+                  )}
+                </pre>
+              ) : (
+                <SyntaxHighlighter
+                  style={codeTheme}
+                  language="python"
+                  PreTag="div"
+                  customStyle={{
+                    margin: 0,
+                    borderRadius: 0,
+                    fontSize: '11.75px',
+                    lineHeight: '1.58',
+                    padding: '12px 14px',
+                    background: 'color-mix(in srgb, var(--bg-tertiary) 66%, transparent)',
+                    maxHeight: '340px',
+                    overflowY: 'auto',
+                    textShadow: 'none',
+                  }}
+                >
+                  {code || ' '}
+                </SyntaxHighlighter>
+              )}
             </div>
           )}
         </div>
@@ -364,7 +384,7 @@ export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumbe
     // Short output — render inline without collapse
     if (!isLongOutput) {
       return (
-        <div className="ml-[30px] -mt-1">
+        <div className="-mt-1">
           <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
             <SmartOutput text={output} />
           </div>
@@ -380,11 +400,11 @@ export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumbe
     // Long output — render with collapsible wrapper
     const lineCount = output.split('\n').length
     return (
-      <div className="ml-[30px] -mt-1">
-        <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/30">
+      <div className="-mt-1">
+        <div className="rounded-lg overflow-hidden border bg-bg-secondary/55 border-border/12">
           <button
             onClick={() => setCollapsed((v) => !v)}
-            className="w-full flex items-center gap-2 py-1.5 px-3 text-[11px] hover:bg-bg-hover/50 transition-colors"
+            className="w-full flex items-center gap-1.5 py-1.5 px-3 text-[10.5px] hover:bg-bg-hover/35 transition-colors"
           >
             <Code2 className="w-3 h-3 text-accent-primary/70 shrink-0" />
             <span className="uppercase tracking-wider font-semibold text-text-secondary/80">
@@ -405,8 +425,8 @@ export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumbe
           </button>
 
           {!collapsed && (
-            <div className="border-t border-border/25 p-3 max-h-[400px] overflow-y-auto scrollbar-thin">
-              <div className="text-[13px] leading-[1.7] text-text-primary/85">
+            <div className="border-t border-border/12 p-3 max-h-[340px] overflow-y-auto scrollbar-thin">
+              <div className="text-[12px] leading-[1.6] text-text-primary/85">
                 <SmartOutput text={output} />
               </div>
             </div>
@@ -420,11 +440,11 @@ export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumbe
   const lineCount = error!.split('\n').length
 
   return (
-    <div className="ml-[30px] -mt-1">
-      <div className="rounded-xl overflow-hidden border bg-bg-tertiary/30 border-border/30">
+    <div className="-mt-1">
+      <div className="rounded-lg overflow-hidden border bg-bg-secondary/55 border-border/12">
         <button
           onClick={() => setCollapsed((v) => !v)}
-          className="w-full flex items-center gap-2 py-1.5 px-3 text-[11px] hover:bg-bg-hover/50 transition-colors"
+          className="w-full flex items-center gap-1.5 py-1.5 px-3 text-[10.5px] hover:bg-bg-hover/35 transition-colors"
         >
           <AlertCircle className="w-3 h-3 text-accent-danger/70 shrink-0" />
           <span className="uppercase tracking-wider font-semibold text-accent-danger/80">
@@ -446,8 +466,8 @@ export const CodeResultRow = memo(({ output, error = null, durationMs, stepNumbe
         </button>
 
         {!collapsed && (
-          <div className="border-t border-border/25">
-            <pre className="text-[12px] p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[260px] overflow-y-auto scrollbar-thin font-mono leading-relaxed text-text-secondary">
+          <div className="border-t border-border/12">
+            <pre className="text-[11.5px] p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[240px] overflow-y-auto scrollbar-thin font-mono leading-relaxed text-text-secondary">
               <code>{error}</code>
             </pre>
           </div>

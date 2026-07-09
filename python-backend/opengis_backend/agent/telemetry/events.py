@@ -26,9 +26,6 @@ class AgentEventType(str, Enum):
 
     STREAM_DELTA = "stream_delta"      # Streaming text token (final answer)
     STREAM_END = "stream_end"          # Stream completed
-    REASONING_DELTA = "reasoning_delta"      # Streaming chunk of agent's thinking (pre-code thought)
-    REASONING_END = "reasoning_end"          # Reasoning paragraph finalised (next thing is code or new round)
-    REASONING_PROMOTE = "reasoning_promote"  # Promote the current reasoning msg to a normal text reply
     CODE_BLOCK = "code_block"          # Agent emitted a code block (full, post-execution)
     CODE_BLOCK_START = "code_block_start"  # Streaming code block has started
     CODE_DELTA = "code_delta"          # Streaming chunk of code being written
@@ -38,9 +35,7 @@ class AgentEventType(str, Enum):
     TOOL_OUTPUT_DELTA = "tool_output_delta"  # Live stdout from a running tool
     TOOL_RESULT = "tool_result"        # Tool execution finished
     PROGRESS = "progress"              # Execution progress indicator
-    THINKING = "thinking"              # LLM is being called (pre-response indicator)
     TITLE_GENERATED = "title_generated" # Auto-generated conversation title
-    MAX_STEPS_REACHED = "max_steps_reached"
     ERROR = "error"                    # Error occurred
 
 

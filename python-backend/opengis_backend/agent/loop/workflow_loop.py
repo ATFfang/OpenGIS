@@ -28,7 +28,6 @@ from opengis_backend.agent.loop.retry_policy import (
     LLM_MAX_RETRIES,
     LLM_RETRYABLE_EXCEPTIONS,
 )
-from opengis_backend.agent.loop.streaming import StreamingParser
 from opengis_backend.agent.execution.tool_materializer import ToolMaterializer, is_tool_visibility_miss
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime
 from opengis_backend.agent.loop.turn_runner import (
@@ -85,8 +84,8 @@ class WorkflowLoop:
     max_retries_per_node: int = 3
     step_callback: Optional[Callable[[AgentStep], None]] = None
     progress_callback: Optional[Callable[[str, str], None]] = None
-    # Streaming hooks — same as AgentLoop. When provided, the LLM call
-    # uses stream=True and tokens are forwarded in real-time.
+    # Commit hooks. Provider text is committed only after a turn settles;
+    # execute_code input can still stream through code callbacks.
     on_thought_delta: Optional[Callable[[str], None]] = None
     on_code_start: Optional[Callable[[int], None]] = None
     on_code_delta: Optional[Callable[[int, str], None]] = None
@@ -250,7 +249,6 @@ class WorkflowLoop:
             tool_runtime=self.tool_runtime,
             tool_schemas=self.tool_schemas,
             tool_materializer=self.tool_materializer,
-            streaming_parser_factory=StreamingParser,
             retryable_exceptions=LLM_RETRYABLE_EXCEPTIONS,
             max_retries=LLM_MAX_RETRIES,
             base_delay=LLM_BASE_DELAY,
@@ -287,13 +285,9 @@ class WorkflowLoop:
                     tool_steps=tool_steps,
                     system_prompt=self.system_prompt,
                     progress_stage="calling_llm",
-                    progress_detail=(
-                        f"Step {step_index}: {node.title} — calling LLM "
-                        f"(iteration {iteration + 1})..."
-                    ),
+                    progress_detail=f"Step {step_index}: {node.title} — thinking...",
                     text_code_step=step_index,
                     code_step_for_tool=lambda tool_index: step_index * 100 + tool_index + 1,
-                    enable_reasoning_lifecycle=False,
                     retry_detail="Connection interrupted",
                     logger_prefix=f"WF:{node.id}",
                     scope="workflow",
@@ -531,7 +525,6 @@ class WorkflowLoop:
                 context=self.context,
                 tool_runtime=None,
                 tool_schemas=[],
-                streaming_parser_factory=StreamingParser,
                 retryable_exceptions=LLM_RETRYABLE_EXCEPTIONS,
                 max_retries=LLM_MAX_RETRIES,
                 base_delay=LLM_BASE_DELAY,

@@ -24,9 +24,8 @@ class WorkerEvent:
 def parse_worker_event(text: str) -> WorkerEvent | None:
     """Parse one stdout line emitted by a resident worker.
 
-    Accepted shapes:
+    Accepted shape:
       - {"opengis_method": "rpc.ui.*", "params": {...}}
-      - {"opengis_event": "dynamic_layer_update", ...params}
     """
     try:
         payload = json.loads(text)
@@ -35,22 +34,15 @@ def parse_worker_event(text: str) -> WorkerEvent | None:
     if not isinstance(payload, dict):
         return None
 
-    method: str | None = None
-    params: dict[str, Any] | None = None
-    if isinstance(payload.get("opengis_method"), str):
-        method = str(payload.get("opengis_method"))
-        raw_params = payload.get("params")
-        params = raw_params if isinstance(raw_params, dict) else {}
-    elif payload.get("opengis_event") == "dynamic_layer_update":
-        method = DYNAMIC_LAYER_METHOD
-        params = {
-            key: value
-            for key, value in payload.items()
-            if key not in {"opengis_event", "opengis_method"}
-        }
+    raw_method = payload.get("opengis_method")
+    if not isinstance(raw_method, str):
+        return None
+    method = raw_method
+    raw_params = payload.get("params")
+    params = raw_params if isinstance(raw_params, dict) else {}
 
     if not method or not method.startswith("rpc.ui."):
-      return None
+        return None
     return WorkerEvent(method=method, params=dict(params or {}))
 
 

@@ -17,6 +17,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PLAN_STEPS = 3
+DEFAULT_EXPLORE_STEPS = 4
+DEFAULT_WORKFLOW_STEPS = 8
+DEFAULT_SUBAGENT_STEPS = 4
+
 
 class AgentMode(str, Enum):
     """High-level operating modes for OpenGIS agents."""
@@ -58,20 +63,31 @@ class AgentProfile:
             name="gis-build",
             mode=AgentMode.BUILD,
             description="Default autonomous GIS task execution agent.",
-            tool_groups=None,
+            tool_groups=["core", "qgis", "osm", "datasource"],
             permission_level=PermissionLevel.SAFE_WRITE,
             max_steps=max_steps,
+            metadata={
+                "tool_schema_budget": 36,
+            },
         )
 
     @staticmethod
     def gis_plan(max_steps: int | None = None) -> "AgentProfile":
+        steps = int(max_steps or DEFAULT_PLAN_STEPS)
         return AgentProfile(
             name="gis-plan",
             mode=AgentMode.PLAN,
             description="Read-only planning and decomposition agent.",
             tool_groups=["core"],
             permission_level=PermissionLevel.READ_ONLY,
-            max_steps=max_steps,
+            max_steps=steps,
+            metadata={
+                "tool_schema_budget": 18,
+                "max_provider_turns": steps,
+                "max_code_steps": 1,
+                "max_tool_steps": steps,
+                "max_work_steps": steps,
+            },
             prompt_suffix=(
                 "\nYou are in planning mode. Prefer reading and reasoning. "
                 "Do not modify files or map state unless explicitly requested.\n"
@@ -80,35 +96,53 @@ class AgentProfile:
 
     @staticmethod
     def gis_explore(max_steps: int | None = None) -> "AgentProfile":
+        steps = int(max_steps or DEFAULT_EXPLORE_STEPS)
         return AgentProfile(
             name="gis-explore",
             mode=AgentMode.EXPLORE,
             description="Dataset exploration agent with bounded output.",
             tool_groups=["core", "datasource", "osm"],
             permission_level=PermissionLevel.READ_ONLY,
-            max_steps=max_steps,
+            max_steps=steps,
+            metadata={
+                "tool_schema_budget": 24,
+                "max_provider_turns": steps,
+                "max_code_steps": min(steps, 2),
+                "max_tool_steps": steps * 2,
+                "max_work_steps": steps * 2,
+            },
         )
 
     @staticmethod
     def workflow_runner(max_steps: int | None = None) -> "AgentProfile":
+        steps = int(max_steps or DEFAULT_WORKFLOW_STEPS)
         return AgentProfile(
             name="workflow-runner",
             mode=AgentMode.WORKFLOW,
             description="Structured workflow node execution agent.",
             tool_groups=None,
             permission_level=PermissionLevel.SAFE_WRITE,
-            max_steps=max_steps,
+            max_steps=steps,
+            metadata={
+                "tool_schema_budget": 44,
+                "max_provider_turns": steps,
+            },
         )
 
     @staticmethod
     def subagent(max_steps: int | None = None, tool_groups: list[str] | None = None) -> "AgentProfile":
+        steps = int(max_steps or DEFAULT_SUBAGENT_STEPS)
         return AgentProfile(
             name="gis-subagent",
             mode=AgentMode.SUBAGENT,
             description="Isolated child agent for a self-contained subtask.",
             tool_groups=tool_groups,
             permission_level=PermissionLevel.SAFE_WRITE,
-            max_steps=max_steps,
+            max_steps=steps,
+            metadata={
+                "tool_schema_budget": 32,
+                "max_provider_turns": steps,
+            },
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -202,4 +236,8 @@ __all__ = [
     "AgentProfile",
     "AgentProfileStore",
     "DEFAULT_AGENT_PROFILES",
+    "DEFAULT_PLAN_STEPS",
+    "DEFAULT_EXPLORE_STEPS",
+    "DEFAULT_WORKFLOW_STEPS",
+    "DEFAULT_SUBAGENT_STEPS",
 ]

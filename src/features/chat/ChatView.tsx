@@ -12,13 +12,13 @@ import { ChatSearchCapsule } from './components/ChatSearchCapsule'
 import { FileBrowserDialog, type FileBrowserResult } from './components/FileBrowserDialog'
 import { MessageGroup } from './components/MessageGroup'
 import { WelcomeContent } from './components/WelcomeContent'
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 import { groupMessages } from './groupMessages'
 import { messagePartsForRender } from '@/services/chatMessageParts'
 
 // Stable empty reference so the `messages` selector fallback doesn't create a
 // new array each render (which would defeat memoization downstream).
-const EMPTY_MESSAGES: UIMessage[] = []
+const EMPTY_MESSAGES: ChatMessage[] = []
 
 export function ChatView({
   variant = 'default',
@@ -68,7 +68,7 @@ export function ChatView({
     () => conversations.find((c) => c.id === activeConversationId) ?? null,
     [conversations, activeConversationId],
   )
-  const messages: UIMessage[] = conversation?.messages ?? EMPTY_MESSAGES
+  const messages: ChatMessage[] = conversation?.messages ?? EMPTY_MESSAGES
   const isBusy = isStreaming || isCancelling
 
   // 把消息按 "一轮 assistant 回答" 分组：两次 user_feedback 之间的所有 assistant
@@ -76,13 +76,6 @@ export function ChatView({
   // 合成一组，整组只画一个机器人头像。否则 Python 侧一轮回答会同时推 N 条消息，
   // 每条都挂头像，用户会误以为"机器人回答了 N 次"。
   const messageGroups = useMemo(() => groupMessages(messages), [messages])
-
-  // O(1) global index lookup — replaces O(n) indexOf in the render loop.
-  const messageIndexMap = useMemo(() => {
-    const map = new Map<UIMessage, number>()
-    for (let i = 0; i < messages.length; i++) map.set(messages[i], i)
-    return map
-  }, [messages])
 
   const compactWorkflowRunIds = useMemo(() => {
     const ids = new Set<string>()
@@ -473,7 +466,7 @@ export function ChatView({
       }
       if (msg.say === 'progress' && msg.partial) {
         return {
-          label: msg.progressDetail || progressLabelForStage(msg.progressStage, t),
+          label: displayProgressDetail(msg.progressStage, msg.progressDetail, t),
           tone: 'working' as const,
         }
       }
@@ -506,7 +499,7 @@ export function ChatView({
   }, [hasTask, isStreaming, messages.length, scheduleScrollToBottom])
 
   return (
-    <div className={`w-full h-full flex flex-col bg-bg-primary overflow-hidden ${
+    <div className={`w-full h-full flex flex-col bg-[var(--chat-bg)] overflow-hidden ${
       variant === 'floating'
         ? 'rounded-2xl shadow-2xl'
         : ''
@@ -585,14 +578,12 @@ export function ChatView({
                     return !compactWorkflowRun
                   })
                   .map((msg, index) => {
-                  const globalIndex = messageIndexMap.get(msg) ?? 0
                   return (
                     <ChatRow
                       key={`${msg.ts}-${index}`}
                       message={msg}
                       isExpanded={expandedRows.has(msg.ts)}
                       onToggleExpand={toggleRowExpansion}
-                      isLast={globalIndex === messages.length - 1}
                     />
                   )
                 })}
@@ -608,7 +599,7 @@ export function ChatView({
 
       {/* === Footer === */}
       <ApprovalInline />
-      <footer className="shrink-0 border-t border-border bg-bg-primary">
+      <footer className="shrink-0 border-t border-border bg-[var(--chat-footer-bg)]">
         {/* Scroll to bottom */}
         {showScrollToBottom && hasTask && (
           <div className="flex justify-center py-1.5">
@@ -666,7 +657,7 @@ export function ChatView({
 // --- Message grouping ---
 // `groupMessages` / `roleOf` / `MessageRole` 提取到 ./groupMessages 以便单测。
 
-function getRunningToolLabel(message: UIMessage, t: ReturnType<typeof useT>): string {
+function getRunningToolLabel(message: ChatMessage, t: ReturnType<typeof useT>): string {
   const name = message.toolName || ''
   if (name === 'execute_code' || name === 'gis_execute_python') return t.chat.progressExecuting
   if (name === 'add_layer' || name === 'add_raster' || name.includes('map')) return t.chat.progressRendering
@@ -679,6 +670,9 @@ function progressLabelForStage(
   t: ReturnType<typeof useT>,
 ): string {
   switch (stage) {
+    case 'calling_llm':
+    case 'thinking_next_step':
+      return t.chat.thinking
     case 'installing_packages':
       return t.chat.progressInstalling
     case 'loading_geodata':
@@ -703,8 +697,19 @@ function progressLabelForStage(
   }
 }
 
+function displayProgressDetail(
+  stage: string | undefined,
+  detail: string | undefined,
+  t: ReturnType<typeof useT>,
+): string {
+  if (stage === 'calling_llm' || stage === 'thinking_next_step') {
+    return progressLabelForStage(stage, t)
+  }
+  return detail || progressLabelForStage(stage, t)
+}
+
 /** Concatenate searchable message content. Kept text-only so virtualized rows stay cheap. */
-function extractSearchText(items: UIMessage[]): string {
+function extractSearchText(items: ChatMessage[]): string {
   const parts: string[] = []
   for (const m of items) {
     for (const part of messagePartsForRender(m)) {

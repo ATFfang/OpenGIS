@@ -502,9 +502,8 @@ class SubprocessPythonExecutor:
             self._log_stderr(line)
 
     def _log_stderr(self, text: str) -> None:
-        # Forward the child's stderr through our own stderr so that
-        # existing Python logging (RotatingFileHandler in logging_setup.py)
-        # picks it up naturally.
+        # Forward the child's stderr through our own stderr so the runtime
+        # logging handlers pick it up naturally.
         try:
             sys.stderr.write(text)
             sys.stderr.flush()

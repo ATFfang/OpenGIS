@@ -460,7 +460,7 @@ def _format_results(results: list[Optional[dict]]) -> str:
     ],
     tags=["subagent", "delegate", "isolation", "context", "orchestration"],
     needs_context=True,
-    group="core",
+    group="subagent",
 )
 def run_subagent(
     ctx: ToolContext,
@@ -594,7 +594,7 @@ def run_subagent(
     ],
     tags=["subagent", "parallel", "fan-out", "delegate", "orchestration"],
     needs_context=True,
-    group="core",
+    group="subagent",
 )
 def run_subagents(
     ctx: ToolContext,

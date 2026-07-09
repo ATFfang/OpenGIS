@@ -588,4 +588,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Parent-side cancellation can interrupt the blocking stdin read.
+        # Treat that as a normal shutdown path for this helper process; the
+        # parent agent loop owns the user-visible cancellation message.
+        pass

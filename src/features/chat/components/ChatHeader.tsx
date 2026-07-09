@@ -2,7 +2,7 @@ import { type RefObject } from 'react'
 import { History, Plus, Search } from 'lucide-react'
 import { useChatStore } from '@/stores/chatStore'
 import { useT } from '@/i18n'
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 import appIconImg from '../../../../resources/icons/app-icon.png'
 import { ConversationListDropdown } from './ConversationListDropdown'
 
@@ -10,8 +10,8 @@ interface ChatHeaderProps {
   variant: 'default' | 'floating'
   hasTask: boolean
   isStreaming: boolean
-  conversation: { id: string; title: string; messages: UIMessage[]; updatedAt: number } | null
-  conversations: { id: string; title: string; messages: UIMessage[]; updatedAt: number }[]
+  conversation: { id: string; title: string; messages: ChatMessage[]; updatedAt: number } | null
+  conversations: { id: string; title: string; messages: ChatMessage[]; updatedAt: number }[]
   activeConversationId: string | null
   isEditingTitle: boolean
   editingTitle: string
@@ -56,7 +56,7 @@ export function ChatHeader({
   }
 
   return (
-    <header className={`shrink-0 bg-bg-primary/80 backdrop-blur-sm relative z-50 ${
+    <header className={`shrink-0 bg-[var(--chat-header-bg)] backdrop-blur-sm relative z-50 ${
       variant === 'floating' ? 'rounded-t-2xl' : 'border-b border-border'
     }`}>
       <div className="px-4 py-2 flex items-center justify-between">
@@ -66,7 +66,7 @@ export function ChatHeader({
               <img src={appIconImg} alt="OpenGIS" className="w-7 h-7 object-contain" />
             </div>
             {isStreaming && (
-              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-accent-success ring-2 ring-bg-primary animate-pulse" />
+              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-accent-success ring-2 ring-[var(--chat-header-bg)] animate-pulse" />
             )}
           </div>
           <div className="flex flex-col">

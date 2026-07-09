@@ -1,23 +1,21 @@
 import { memo } from 'react'
-import type { MessagePart, UIMessage } from '@/types/chat'
+import type { MessagePart, ChatMessage } from '@/types/chat'
 import { messagePartsForRender } from '@/services/chatMessageParts'
 import { MessagePartRow } from './MessagePartRow'
 
 interface ChatRowProps {
-  message: UIMessage
+  message: ChatMessage
   isExpanded: boolean
   onToggleExpand: (ts: number) => void
-  isLast: boolean
 }
 
-const ChatRow = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowProps) => {
+const ChatRow = memo(({ message, isExpanded, onToggleExpand }: ChatRowProps) => {
   return (
     <div className="relative">
       <ChatRowContent
         message={message}
         isExpanded={isExpanded}
         onToggleExpand={onToggleExpand}
-        isLast={isLast}
       />
     </div>
   )
@@ -26,7 +24,7 @@ const ChatRow = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowPr
 ChatRow.displayName = 'ChatRow'
 export default ChatRow
 
-const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: ChatRowProps) => {
+const ChatRowContent = memo(({ message, isExpanded, onToggleExpand }: ChatRowProps) => {
   const parts = messagePartsForRender(message)
   const handleToggle = () => onToggleExpand(message.ts)
 
@@ -37,7 +35,6 @@ const ChatRowContent = memo(({ message, isExpanded, onToggleExpand, isLast }: Ch
       parts={parts}
       isExpanded={isExpanded}
       onToggleExpand={handleToggle}
-      isLast={isLast}
     />
   )
 })
@@ -49,13 +46,11 @@ function MessagePartsRenderer({
   parts,
   isExpanded,
   onToggleExpand,
-  isLast,
 }: {
-  message: UIMessage
+  message: ChatMessage
   parts: MessagePart[]
   isExpanded: boolean
   onToggleExpand: () => void
-  isLast: boolean
 }) {
   return (
     <div className="space-y-2">
@@ -66,7 +61,6 @@ function MessagePartsRenderer({
           part={part}
           isExpanded={isExpanded}
           onToggleExpand={onToggleExpand}
-          isLast={isLast}
         />
       ))}
     </div>

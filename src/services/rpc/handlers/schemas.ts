@@ -407,7 +407,7 @@ export const PlanUpdateSchema = z.object({
 });
 
 /**
- * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents skill
+ * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents tool
  * 在委派子任务时调用本 method，前端按 `subagent_id` upsert 同一张卡片。
  * 只携带任务标题与状态，不携带子智能体的内部步骤/输出（上下文隔离的本意）。
  */

@@ -38,8 +38,6 @@ class LoopKernelHooks:
     on_code_start: Callable[[int], None] | None = None
     on_code_delta: Callable[[int, str], None] | None = None
     on_code_end: Callable[[int], None] | None = None
-    on_reasoning_start: Callable[[int], None] | None = None
-    on_reasoning_end: Callable[[int], None] | None = None
     on_tool_start: Callable[[str, dict, str], None] | None = None
     on_tool_result: Callable[..., Any] | None = None
 
@@ -55,9 +53,7 @@ class LoopTurnRequest:
     user_instructions: str | None = None
     exclude_workflow_context: bool = False
     progress_stage: str = "calling_llm"
-    progress_detail: str = "Calling LLM..."
-    reasoning_round_seq: int | None = None
-    enable_reasoning_lifecycle: bool = False
+    progress_detail: str = "Thinking..."
     retry_detail: str = "Connection error"
     logger_prefix: str = "LOOP"
     scope: str | None = None
@@ -66,12 +62,15 @@ class LoopTurnRequest:
     compress_context: bool = True
     tool_progress_label: str | None = None
     force_all_tools: bool = False
+    disable_tools: bool = False
+    disabled_tools_reason: str = ""
+    materialization_options: dict[str, Any] | None = None
+    extra_system_messages: list[str] | None = None
 
 
 @dataclass
 class LoopTurnOutcome:
     provider_result: ProviderTurnResult
-    updated_reasoning_round: int | None
     settlements: list[ToolSettlement]
     telemetry: LoopTurnTelemetry
     materialization: ToolMaterialization | None
@@ -99,7 +98,6 @@ class LoopKernel:
         context: ContextManager,
         tool_runtime: ToolRuntime | None,
         tool_schemas: list[dict] | None,
-        streaming_parser_factory: Callable[..., Any],
         retryable_exceptions: tuple[type[BaseException], ...],
         max_retries: int,
         base_delay: float,
@@ -112,7 +110,6 @@ class LoopKernel:
         self.context = context
         self.tool_runtime = tool_runtime
         self.tool_schemas = list(tool_schemas or [])
-        self.streaming_parser_factory = streaming_parser_factory
         self.retryable_exceptions = retryable_exceptions
         self.max_retries = max_retries
         self.base_delay = base_delay
@@ -136,21 +133,37 @@ class LoopKernel:
         )
         context_build_ms = (time.monotonic() - context_t0) * 1000
 
-        materialization = (
-            self.tool_materializer.materialize(messages, force_all=request.force_all_tools)
-            if self.tool_materializer is not None
-            else None
-        )
+        materialization_options = dict(request.materialization_options or {})
+        if request.disable_tools:
+            materialization = ToolMaterialization(
+                schemas=[],
+                selected_names=[],
+                total_count=len(self.tool_schemas),
+                reason="disabled:" + (request.disabled_tools_reason or "loop_policy"),
+            )
+        else:
+            materialization = (
+                self.tool_materializer.materialize(
+                    messages,
+                    force_all=request.force_all_tools,
+                    **materialization_options,
+                )
+                if self.tool_materializer is not None
+                else None
+            )
         active_tool_schemas = (
             materialization.schemas
             if materialization is not None
             else self.tool_schemas
         )
         active_tool_prompt = format_active_tool_prompt(materialization)
+        system_inserts = list(request.extra_system_messages or [])
         if active_tool_prompt:
+            system_inserts.append(active_tool_prompt)
+        if system_inserts:
             messages = [
                 messages[0],
-                {"role": "system", "content": active_tool_prompt},
+                *({"role": "system", "content": content} for content in system_inserts if content),
                 *messages[1:],
             ]
 
@@ -172,10 +185,9 @@ class LoopKernel:
             except Exception:
                 logger.exception("progress_callback failed before provider turn")
 
-        provider_result, updated_round = ProviderTurnCaller(
+        provider_result = ProviderTurnCaller(
             llm_call=self.llm_call,
             tool_schemas=active_tool_schemas,
-            streaming_parser_factory=self.streaming_parser_factory,
             retryable_exceptions=self.retryable_exceptions,
             max_retries=self.max_retries,
             base_delay=self.base_delay,
@@ -185,17 +197,11 @@ class LoopKernel:
         ).call(
             messages,
             callbacks=ProviderTurnCallbacks(
-                on_thought_delta=self.hooks.on_thought_delta,
                 on_code_start=self.hooks.on_code_start,
                 on_code_delta=self.hooks.on_code_delta,
                 on_code_end=self.hooks.on_code_end,
-                on_reasoning_start=self.hooks.on_reasoning_start,
-                on_reasoning_end=self.hooks.on_reasoning_end,
             ),
             code_step_for_tool=request.code_step_for_tool,
-            text_code_step=request.text_code_step,
-            reasoning_round_seq=request.reasoning_round_seq,
-            enable_reasoning_lifecycle=request.enable_reasoning_lifecycle,
             retry_detail=request.retry_detail,
         )
 
@@ -205,6 +211,18 @@ class LoopKernel:
         provider_result.tool_schema_count = len(active_tool_schemas or [])
         provider_result.tool_schema_total = telemetry.tool_schema_total
         provider_result.tool_schema_reason = telemetry.tool_schema_reason
+        if request.disable_tools and provider_result.tool_calls:
+            logger.warning(
+                "Provider returned %d tool call(s) during disabled-tools final turn; discarding.",
+                len(provider_result.tool_calls),
+            )
+            provider_result.tool_calls = None
+            if not provider_result.response_text:
+                provider_result.response_text = (
+                    "本轮执行达到预算上限，模型仍请求继续调用工具，Runner 已停止新的工具执行。"
+                    "请提高 Agent 执行预算或发送“继续”让 Agent 基于当前结果接着完成。"
+                )
+            telemetry.tool_call_count = 0
 
         settlements: list[ToolSettlement] = []
         if provider_result.tool_calls:
@@ -252,7 +270,6 @@ class LoopKernel:
 
         return LoopTurnOutcome(
             provider_result=provider_result,
-            updated_reasoning_round=updated_round,
             settlements=settlements,
             telemetry=telemetry,
             materialization=materialization,

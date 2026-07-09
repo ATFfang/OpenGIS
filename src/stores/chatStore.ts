@@ -1,7 +1,7 @@
 /** Chat store. 对话状态管理：消息列表、附件、流式输出。 */
 import { create } from 'zustand'
 import { v4 as uuid } from 'uuid'
-import type { MessagePart, UIMessage } from '@/types/chat'
+import type { MessagePart, ChatMessage } from '@/types/chat'
 import { pythonClient } from '@/services/pythonClient'
 import {
   loadConversations,
@@ -29,7 +29,7 @@ export interface ChatAttachment {
 export interface Conversation {
   id: string
   title: string
-  messages: UIMessage[]
+  messages: ChatMessage[]
   createdAt: number
   updatedAt: number
 }
@@ -63,54 +63,137 @@ interface ChatStore {
   sendMessage: (text: string, images?: string[], attachments?: ChatAttachment[]) => Promise<void>
   abortTask: (workspacePathOverride?: string | null) => Promise<void>
 
-  _addMessage: (message: UIMessage) => void
-  _updateMessage: (ts: number, updates: Partial<UIMessage>) => void
+  _addMessage: (message: ChatMessage) => void
+  _updateMessage: (ts: number, updates: Partial<ChatMessage>) => void
   _persistActive: () => void
 }
 
 // ─── 辅助函数：推送当前 LLM 设置到 Python 后端 ──────────────────────
 // 仅当配置自上次调用后实际更改时才发送。
 let _lastConfigHash: string | null = null
+let _pendingCodePart: MessagePart | null = null
+let _pendingCodePartTimer: ReturnType<typeof setTimeout> | null = null
+
+function codePartFlushMs(codeLength: number): number {
+  if (codeLength > 24_000) return 240
+  if (codeLength > 12_000) return 160
+  if (codeLength > 6_000) return 100
+  if (codeLength > 2_000) return 66
+  return 33
+}
+
+function isStreamingCodePart(part: MessagePart): boolean {
+  return part.type === 'code' && part.status === 'streaming'
+}
+
+function mergeBufferedCodePart(existing: MessagePart, incoming: MessagePart): MessagePart {
+  return {
+    ...existing,
+    ...incoming,
+    text: `${existing.text ?? ''}${incoming.text ?? ''}`,
+    data: {
+      ...(existing.data ?? {}),
+      ...(incoming.data ?? {}),
+    },
+  }
+}
+
+function flushBufferedCodePart(
+  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
+): void {
+  if (_pendingCodePartTimer) {
+    clearTimeout(_pendingCodePartTimer)
+    _pendingCodePartTimer = null
+  }
+  const part = _pendingCodePart
+  _pendingCodePart = null
+  if (!part) return
+  set((s) => ({
+    conversations: s.conversations.map((conversation) =>
+      conversation.id === s.activeConversationId
+        ? upsertNativePartIntoConversation(conversation, part)
+        : conversation
+    ),
+  }))
+}
+
+function enqueueStreamingCodePart(
+  part: MessagePart,
+  set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
+): void {
+  if (_pendingCodePart && _pendingCodePart.id !== part.id) {
+    flushBufferedCodePart(set)
+  }
+  _pendingCodePart = _pendingCodePart
+    ? mergeBufferedCodePart(_pendingCodePart, part)
+    : part
+  if (_pendingCodePartTimer) return
+  _pendingCodePartTimer = setTimeout(() => {
+    flushBufferedCodePart(set)
+  }, codePartFlushMs((_pendingCodePart.text ?? '').length))
+}
 
 function settleRunningStatusCards(
   conv: Conversation | null,
-  updateMessage: (ts: number, updates: Partial<UIMessage>) => void,
+  updateMessage: (ts: number, updates: Partial<ChatMessage>) => void,
   mode: 'completed' | 'failed' | 'cancelled',
 ): void {
   if (!conv) return
   for (const msg of conv.messages) {
     if (msg.say === 'plan' && msg.planData?.steps?.some((s: any) => s.status === 'in_progress')) {
+      const planData = {
+        ...msg.planData,
+        steps: msg.planData.steps.map((s: any) =>
+          s.status === 'in_progress'
+            ? { ...s, status: mode === 'completed' ? 'done' : 'failed' }
+            : s
+        ),
+        updatedAt: Date.now(),
+      }
       updateMessage(msg.ts, {
-        planData: {
-          ...msg.planData,
-          steps: msg.planData.steps.map((s: any) =>
-            s.status === 'in_progress'
-              ? { ...s, status: mode === 'completed' ? 'done' : 'failed' }
-              : s
-          ),
-          updatedAt: Date.now(),
-        },
+        planData,
+        parts: msg.parts?.map((part) =>
+          part.type === 'plan'
+            ? {
+                ...part,
+                status: mode === 'completed' ? 'completed' : 'failed',
+                data: { ...(part.data ?? {}), planData },
+              }
+            : part
+        ),
       })
     }
 
     if (msg.say === 'subagent' && msg.subagentData?.status === 'running') {
+      const finalStatus: NonNullable<ChatMessage['subagentData']>['status'] =
+        mode === 'completed' ? 'done' : mode
+      const subagentData = {
+        ...msg.subagentData,
+        status: finalStatus,
+        tasks: msg.subagentData.tasks.map((task: any) =>
+          task.status === 'running'
+            ? { ...task, status: mode === 'completed' ? 'done' : mode }
+            : task
+        ),
+        updatedAt: Date.now(),
+      }
       updateMessage(msg.ts, {
-        subagentData: {
-          ...msg.subagentData,
-          status: mode === 'completed' ? 'done' : mode,
-          tasks: msg.subagentData.tasks.map((task: any) =>
-            task.status === 'running'
-              ? { ...task, status: mode === 'completed' ? 'done' : mode }
-              : task
-          ),
-          updatedAt: Date.now(),
-        },
+        subagentData,
+        parts: msg.parts?.map((part) =>
+          part.type === 'progress' && part.data?.kind === 'subagent'
+            ? {
+                ...part,
+                status: mode === 'completed' ? 'completed' : mode,
+                data: { ...(part.data ?? {}), subagentData },
+              }
+            : part
+        ),
       })
     }
   }
 }
 
-function sayTypeForPart(part: MessagePart): UIMessage['say'] {
+function sayTypeForPart(part: MessagePart): ChatMessage['say'] {
   if (part.type === 'reasoning') return 'reasoning'
   if (part.type === 'tool') return 'tool'
   if (part.type === 'tool_output') return 'code_result'
@@ -122,7 +205,7 @@ function sayTypeForPart(part: MessagePart): UIMessage['say'] {
   return 'text'
 }
 
-function messageFromNativePart(part: MessagePart): UIMessage {
+function messageFromNativePart(part: MessagePart): ChatMessage {
   const data = part.data ?? {}
   const step = typeof data.step === 'number' ? data.step : data.stepNumber
   return {
@@ -144,6 +227,52 @@ function messageFromNativePart(part: MessagePart): UIMessage {
     progressStage: typeof data.stage === 'string' ? data.stage : undefined,
     progressDetail: part.text || (typeof data.detail === 'string' ? data.detail : undefined),
     parts: [part],
+  }
+}
+
+function createUserMessagePart({
+  text,
+  images,
+  files,
+  ts,
+}: {
+  text: string
+  images?: string[]
+  files?: string[]
+  ts: number
+}): MessagePart {
+  return {
+    id: `user:${ts}`,
+    type: 'text',
+    status: 'completed',
+    text,
+    data: {
+      role: 'user',
+      images: images ?? [],
+      files: files ?? [],
+    },
+    createdAt: ts,
+  }
+}
+
+function createSystemTextMessagePart(text: string, ts: number): MessagePart {
+  return {
+    id: `system:${ts}`,
+    type: 'text',
+    status: 'completed',
+    text,
+    data: { role: 'system' },
+    createdAt: ts,
+  }
+}
+
+function createErrorMessagePart(text: string, ts: number): MessagePart {
+  return {
+    id: `error:${ts}`,
+    type: 'error',
+    status: 'failed',
+    text,
+    createdAt: ts,
   }
 }
 
@@ -187,9 +316,9 @@ function settleMessagePartStatus(part: MessagePart, mode: 'completed' | 'failed'
 }
 
 function settledToolStatusForMode(
-  current: UIMessage['toolStatus'] | undefined,
+  current: ChatMessage['toolStatus'] | undefined,
   mode: 'completed' | 'failed' | 'cancelled',
-): UIMessage['toolStatus'] | undefined {
+): ChatMessage['toolStatus'] | undefined {
   if (current !== 'pending' && current !== 'running') return current
   return mode === 'failed' || mode === 'cancelled' ? 'failed' : 'completed'
 }
@@ -222,11 +351,11 @@ function settleConversationForTurnEnd(
   return changed ? { ...conv, messages, updatedAt: Date.now() } : conv
 }
 
-function applyNativePartToMessage(message: UIMessage, part: MessagePart): UIMessage {
+function applyNativePartToMessage(message: ChatMessage, part: MessagePart): ChatMessage {
   const mergedPart = message.parts?.find((candidate) => candidate.id === part.id) ?? part
   const partial = mergedPart.status === 'running' || mergedPart.status === 'streaming'
   const data = mergedPart.data ?? {}
-  const updates: Partial<UIMessage> = {
+  const updates: Partial<ChatMessage> = {
     partial,
     runId: mergedPart.runId || mergedPart.run_id || message.runId,
   }
@@ -261,6 +390,11 @@ function applyNativePartToMessage(message: UIMessage, part: MessagePart): UIMess
     updates.say = 'progress'
     updates.progressStage = typeof data.stage === 'string' ? data.stage : message.progressStage
     updates.progressDetail = mergedPart.text || (typeof data.detail === 'string' ? data.detail : message.progressDetail)
+  } else if (mergedPart.type === 'artifact') {
+    updates.say = 'image'
+    updates.text = mergedPart.text || message.text
+    if (Array.isArray(data.images)) updates.images = data.images as string[]
+    if (Array.isArray(data.files)) updates.files = data.files as string[]
   } else if (mergedPart.type === 'error') {
     updates.say = 'error'
     updates.text = mergedPart.text || message.text
@@ -273,7 +407,7 @@ async function configureBackendAgent(): Promise<void> {
   const settings = useSettingsStore.getState()
 
   // 计算简单哈希值以检测更改
-  const configStr = `${settings.model.protocol}|${settings.model.modelName}|${settings.model.apiKey}|${settings.model.baseURL || ''}|${settings.agent.maxIterations}`
+  const configStr = `${settings.model.protocol}|${settings.model.modelName}|${settings.model.apiKey}|${settings.model.baseURL || ''}`
   if (configStr === _lastConfigHash) {
     // 配置未更改 — 跳过 RPC 调用
     return
@@ -285,7 +419,6 @@ async function configureBackendAgent(): Promise<void> {
       model: settings.model.modelName,
       api_key: settings.model.apiKey,
       base_url: settings.model.baseURL || undefined,
-      max_iterations: settings.agent.maxIterations,
     })
     _lastConfigHash = configStr
   } catch (e) {
@@ -300,7 +433,7 @@ function installNotificationBridge(
   set: (partial: Partial<ChatStore> | ((state: ChatStore) => Partial<ChatStore>)) => void,
   get: () => ChatStore,
 ) {
-  // 如果已经安装，先取消旧的订阅，防止内存泄漏
+  // 如果已经安装，先取消上一份订阅，防止内存泄漏
   if (_unsubscribeBridge) {
     _unsubscribeBridge()
     _unsubscribeBridge = null
@@ -314,6 +447,11 @@ function installNotificationBridge(
       case 'chat.message_part': {
         const part = (params?.part ?? params) as MessagePart | undefined
         if (!part?.id || !part.type) break
+        if (isStreamingCodePart(part)) {
+          enqueueStreamingCodePart(part, set)
+          break
+        }
+        flushBufferedCodePart(set)
         if (part.type === 'turn' && part.data?.kind === 'stream_end') {
           const activeConversationId = state.activeConversationId
           if (activeConversationId) {
@@ -382,6 +520,7 @@ function installNotificationBridge(
         break
       }
       case 'chat.cancelled': {
+        flushBufferedCodePart(set)
         const activeConversationId = state.activeConversationId
         if (activeConversationId) {
           const cancelConv = state.activeConversation()
@@ -587,13 +726,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
 
       // 立即回显用户消息
+      const userMessageTs = Date.now()
+      const userFiles = attachments?.map((a) => a.name)
       get()._addMessage({
-        ts: Date.now(),
+        ts: userMessageTs,
         type: 'say',
         say: 'user_feedback',
         text,
         images,
-        files: attachments?.map((a) => a.name),
+        files: userFiles,
+        parts: [createUserMessagePart({
+          text,
+          images,
+          files: userFiles,
+          ts: userMessageTs,
+        })],
       })
 
       set({ isStreaming: true, isCancelling: false })
@@ -609,11 +756,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const workspacePath = useAssetStore.getState().workspacePath
 
         if (!workspacePath) {
+          const ts = Date.now()
+          const text = '⚠️ 请先打开一个工作目录。Agent 需要工作目录来存储脚本和分析结果。'
           get()._addMessage({
-            ts: Date.now(),
+            ts,
             type: 'say',
             say: 'error',
-            text: '⚠️ 请先打开一个工作目录。Agent 需要工作目录来存储脚本和分析结果。',
+            text,
+            parts: [createErrorMessagePart(text, ts)],
           })
           set({ isStreaming: false, isCancelling: false })
           return
@@ -650,11 +800,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
         } else {
           friendlyMsg = `⚠️ 发送失败：${rawMsg}`
         }
+        const ts = Date.now()
         get()._addMessage({
-          ts: Date.now(),
+          ts,
           type: 'say',
           say: 'error',
           text: friendlyMsg,
+          parts: [createErrorMessagePart(friendlyMsg, ts)],
         })
         set({ isStreaming: false, isCancelling: false, workflowPlanActive: false })
       }
@@ -664,11 +816,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // 立即设置 streaming 为 false 以提高 UI 响应速度
       set({ isStreaming: false, isCancelling: true })
       // 添加用户可见的取消消息
+      const ts = Date.now()
+      const text = '⏹️ Task cancelled by user.'
       get()._addMessage({
-        ts: Date.now(),
+        ts,
         type: 'say',
         say: 'text',
-        text: '⏹️ Task cancelled by user.',
+        text,
+        parts: [createSystemTextMessagePart(text, ts)],
       })
       // 告诉后端终止进程并释放锁
       // 我们等待此操作，以便后端有时间清理，
@@ -744,7 +899,7 @@ import { useAssetStore } from '@/stores/assetStore'
 useAssetStore.subscribe((state, prev) => {
   if (state.workspacePath !== prev.workspacePath) {
     const store = useChatStore.getState()
-    // 将旧工作区对话刷新到旧工作区路径，
+    // 将上一工作区对话刷新到上一工作区路径，
     // 然后在从新工作区加载之前清除内存状态。
     const doLoad = () => {
       // 清除内存中的对话，以便过期数据永远不会被待处理的防抖写入

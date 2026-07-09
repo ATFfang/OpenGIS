@@ -1,22 +1,21 @@
 import { ChevronRight } from 'lucide-react'
 import { useT } from '@/i18n'
-import { type MessagePart, type UIMessage } from '@/types/chat'
+import { type MessagePart, type ChatMessage } from '@/types/chat'
 import MarkdownBlock from './MarkdownBlock'
 import { ThinkingRow } from './ThinkingRow'
 import { ToolCallRow } from './ToolCallRow'
-import { CodeStepRow, CodeResultRow } from './CodeStepRow'
+import { CodeStepRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
 import PlanRow from './PlanRow'
 import { SubagentRow } from './SubagentRow'
 import { ScreenshotRow } from './ScreenshotRow'
-import { ErrorRow, MaxStepsReachedRow, ProgressRow, UserMessageRow, markdownBaseDirFor } from './MessagePartRows'
+import { ErrorRow, UserMessageRow, markdownBaseDirFor } from './MessagePartRows'
 
 interface MessagePartRowProps {
-  message: UIMessage
+  message: ChatMessage
   part: MessagePart
   isExpanded: boolean
   onToggleExpand: () => void
-  isLast: boolean
 }
 
 export function MessagePartRow({
@@ -24,7 +23,6 @@ export function MessagePartRow({
   part,
   isExpanded,
   onToggleExpand,
-  isLast,
 }: MessagePartRowProps) {
   const t = useT()
   const data = part.data ?? {}
@@ -92,15 +90,8 @@ export function MessagePartRow({
   }
 
   if (part.type === 'tool_output') {
-    if (part.tool === 'execute_code' || data.stepNumber != null || data.error != null) {
-      return (
-        <CodeResultRow
-          output={part.text || valueToString(data.output)}
-          error={typeof data.error === 'string' ? data.error : message.codeError}
-          durationMs={typeof data.durationMs === 'number' ? data.durationMs : message.durationMs}
-          stepNumber={typeof data.stepNumber === 'number' ? data.stepNumber : message.stepNumber}
-        />
-      )
+    if (isCodeExecutionOutput(part)) {
+      return <div className="h-px" aria-hidden />
     }
     if (!partText.trim()) return <div className="h-px" aria-hidden />
     return (
@@ -141,33 +132,19 @@ export function MessagePartRow({
   }
 
   if (part.type === 'plan') {
-    return <PlanRow planData={data.planData as UIMessage['planData']} />
+    return <PlanRow planData={data.planData as ChatMessage['planData']} />
   }
 
   if (part.type === 'progress') {
     if (data.kind === 'subagent') {
-      return <SubagentRow data={data.subagentData as UIMessage['subagentData']} />
+      return <SubagentRow data={data.subagentData as ChatMessage['subagentData']} />
     }
-    if (data.kind === 'max_steps_reached') {
-      return (
-        <MaxStepsReachedRow
-          maxSteps={(data.maxStepsInfo as UIMessage['maxStepsInfo'] | undefined)?.maxSteps}
-          isLast={isLast}
-        />
-      )
-    }
-    if (status !== 'running' && !message.partial) return <div className="h-px" aria-hidden />
-    return (
-      <ProgressRow
-        stage={typeof data.stage === 'string' ? data.stage : message.progressStage}
-        detail={partText || (typeof data.detail === 'string' ? data.detail : message.progressDetail)}
-      />
-    )
+    return <div className="h-px" aria-hidden />
   }
 
   if (part.type === 'approval') {
     if (data.kind === 'screenshot') {
-      const screenshotData = data.screenshotData as UIMessage['screenshotData']
+      const screenshotData = data.screenshotData as ChatMessage['screenshotData']
       if (!screenshotData) return <div className="h-px" aria-hidden />
       return (
         <ScreenshotRow
@@ -203,4 +180,14 @@ function valueToString(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function isCodeExecutionOutput(part: MessagePart): boolean {
+  const data = part.data ?? {}
+  return (
+    part.tool === 'execute_code'
+    || part.tool === 'gis_execute_python'
+    || data.stepNumber != null
+    || data.step != null
+  )
 }

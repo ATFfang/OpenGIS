@@ -2,12 +2,12 @@ import { type ReactNode, useCallback, useState } from 'react'
 import { Check, Copy, Pencil } from 'lucide-react'
 import { useT } from '@/i18n'
 import { messagePartsForRender } from '@/services/chatMessageParts'
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 import type { MessageRole } from '../groupMessages'
 
 interface MessageGroupProps {
   role: MessageRole
-  items: UIMessage[]
+  items: ChatMessage[]
   onEditUser?: (text: string) => void
   highlighted?: boolean
   children: ReactNode
@@ -64,7 +64,7 @@ export function MessageGroup({
   )
 }
 
-export function extractGroupText(items: UIMessage[]): string {
+export function extractGroupText(items: ChatMessage[]): string {
   const parts: string[] = []
   for (const message of items) {
     const messageParts = messagePartsForRender(message)
@@ -74,7 +74,7 @@ export function extractGroupText(items: UIMessage[]): string {
           parts.push(part.text.trim())
         } else if (part.type === 'code' && part.text?.trim()) {
           parts.push('```python\n' + part.text.trim() + '\n```')
-        } else if (part.type === 'tool_output' && part.text?.trim()) {
+        } else if (part.type === 'tool_output' && part.text?.trim() && !isCodeExecutionOutput(part)) {
           parts.push(part.text.trim())
         }
       }
@@ -84,7 +84,17 @@ export function extractGroupText(items: UIMessage[]): string {
   return parts.join('\n\n')
 }
 
-function extractUserText(items: UIMessage[]): string {
+function isCodeExecutionOutput(part: ReturnType<typeof messagePartsForRender>[number]): boolean {
+  const data = part.data ?? {}
+  return (
+    part.tool === 'execute_code'
+    || part.tool === 'gis_execute_python'
+    || data.stepNumber != null
+    || data.step != null
+  )
+}
+
+function extractUserText(items: ChatMessage[]): string {
   for (const message of items) {
     for (const part of messagePartsForRender(message)) {
       if (part.type === 'text' && part.data?.role === 'user' && part.text?.trim()) {

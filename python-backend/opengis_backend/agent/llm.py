@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from html import unescape
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -196,6 +198,95 @@ def _extract_tool_calls(message: Any) -> list[dict] | None:
     return result if result else None
 
 
+_XMLISH_TOOL_CALL_RE = re.compile(
+    r"<tool_call\b[^>]*>(?P<body>.*?)</tool_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+_XMLISH_FUNCTION_RE = re.compile(
+    r"<function\s*=\s*[\"']?(?P<name>[A-Za-z_][\w.-]*)[\"']?\s*>",
+    re.IGNORECASE,
+)
+_XMLISH_PARAMETER_RE = re.compile(
+    r"<parameter\s*=\s*[\"']?(?P<name>[A-Za-z_][\w.-]*)[\"']?\s*>"
+    r"(?P<value>.*?)"
+    r"</parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_xmlish_tool_calls(content: str | None) -> tuple[str | None, list[dict] | None]:
+    """Normalize provider-emitted XML-ish tool calls into OpenAI tool_calls.
+
+    Some OpenAI-compatible providers occasionally stream tool calls as plain
+    text blocks such as ``<tool_call><function=execute_code>...`` instead of
+    populating ``message.tool_calls``. Treating that text as an assistant reply
+    leaks protocol markup into chat and prevents the tool from running. This
+    adapter keeps the loop protocol clean by repairing the response at the LLM
+    boundary.
+    """
+    if not content or "<tool_call" not in content.lower():
+        return content, None
+
+    parsed_calls: list[dict] = []
+    parsed_index = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal parsed_index
+        body = match.group("body") or ""
+        function_match = _XMLISH_FUNCTION_RE.search(body)
+        if not function_match:
+            return match.group(0)
+
+        function_name = function_match.group("name").strip()
+        arguments: dict[str, Any] = {}
+        for param_match in _XMLISH_PARAMETER_RE.finditer(body):
+            param_name = param_match.group("name").strip()
+            value = unescape(param_match.group("value")).strip()
+            arguments[param_name] = value
+
+        parsed_index += 1
+        parsed_calls.append(
+            {
+                "id": f"xmlish_call_{parsed_index}",
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                },
+            }
+        )
+        return ""
+
+    cleaned = _XMLISH_TOOL_CALL_RE.sub(_replace, content)
+    if not parsed_calls:
+        return content, None
+    cleaned = cleaned.strip()
+    return cleaned or None, parsed_calls
+
+
+def _normalize_llm_message(
+    content: str | None,
+    tool_calls: list[dict] | None,
+    *,
+    finish_reason: str,
+) -> LLMResponse:
+    """Build an LLMResponse, repairing text-encoded tool calls if needed."""
+    if tool_calls:
+        return LLMResponse(content=content or None, tool_calls=tool_calls, finish_reason=finish_reason)
+    _, xmlish_tool_calls = _extract_xmlish_tool_calls(content)
+    if xmlish_tool_calls:
+        logger.warning(
+            "[LLM] Parsed %d XML-ish tool_call block(s) from assistant content.",
+            len(xmlish_tool_calls),
+        )
+        return LLMResponse(
+            content=None,
+            tool_calls=xmlish_tool_calls,
+            finish_reason="tool_calls",
+        )
+    return LLMResponse(content=content or None, tool_calls=None, finish_reason=finish_reason)
+
+
 def _extract_partial_json_string_field(raw: str, field: str) -> str | None:
     """Best-effort extraction of a string field from partial JSON."""
     if not raw:
@@ -294,9 +385,9 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
             response = litellm.completion(**kwargs)
             choice = response.choices[0]
             msg = choice.message
-            return LLMResponse(
-                content=msg.content or None,
-                tool_calls=_extract_tool_calls(msg),
+            return _normalize_llm_message(
+                msg.content or None,
+                _extract_tool_calls(msg),
                 finish_reason=_extract_finish_reason(choice),
             )
 
@@ -310,17 +401,18 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
             response = litellm.completion(**kwargs)
             choice = response.choices[0]
             msg = choice.message
-            full = msg.content or ""
-            if full:
-                try:
-                    on_delta(full)
-                except Exception:
-                    logger.exception("on_delta callback raised on fallback path")
-            return LLMResponse(
-                content=full or None,
-                tool_calls=_extract_tool_calls(msg),
+            full = msg.content or None
+            repaired = _normalize_llm_message(
+                full,
+                _extract_tool_calls(msg),
                 finish_reason=_extract_finish_reason(choice),
             )
+            if repaired.content:
+                try:
+                    on_delta(repaired.content)
+                except Exception:
+                    logger.exception("on_delta callback raised on fallback path")
+            return repaired
 
         # Collect streaming chunks
         parts: list[str] = []
@@ -410,16 +502,18 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
                        len(tool_calls),
                        [tc.get("function", {}).get("name", "?") for tc in tool_calls])
 
-        logger.info("[LLM] Response: content_len=%d, tool_calls=%d, finish_reason=%s",
-                   len(content) if content else 0,
-                   len(tool_calls) if tool_calls else 0,
-                   finish_reason)
-
-        return LLMResponse(
-            content=content,
-            tool_calls=tool_calls,
+        response = _normalize_llm_message(
+            content,
+            tool_calls,
             finish_reason=finish_reason,
         )
+
+        logger.info("[LLM] Response: content_len=%d, tool_calls=%d, finish_reason=%s",
+                   len(response.content) if response.content else 0,
+                   len(response.tool_calls) if response.tool_calls else 0,
+                   response.finish_reason)
+
+        return response
 
     return _call
 

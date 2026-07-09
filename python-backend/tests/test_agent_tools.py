@@ -27,6 +27,7 @@ from opengis_backend.tools.builtin.script_tools import list_scripts as list_scri
 from opengis_backend.tools.builtin.script_tools import read_script as read_script_tool
 from opengis_backend.agent.factory_common import compose_system_prompt
 from opengis_backend.agent.tools import filter_agent_tools
+from opengis_backend.agent.governance.profile import AgentProfile
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas, validate_execute_code_payload
 from opengis_backend.agent.session.session import SessionStore
 from opengis_backend.integrations.osm.overpass import _normalize_overpass_query
@@ -68,6 +69,27 @@ class AgentToolUpgradeTests(unittest.TestCase):
         filtered = filter_agent_tools([set_basemap_record, list_layers_record])
 
         self.assertEqual([item.schema.name for item in filtered], ["list_layers"])
+
+    def test_default_build_profile_excludes_orchestration_tool_groups(self) -> None:
+        profile = AgentProfile.gis_build(max_steps=4)
+        records = [
+            SimpleNamespace(schema=SimpleNamespace(name="execute_code", group="core")),
+            SimpleNamespace(schema=SimpleNamespace(name="osm_call", group="osm")),
+            SimpleNamespace(schema=SimpleNamespace(name="run_subagent", group="subagent")),
+            SimpleNamespace(schema=SimpleNamespace(name="start_worker", group="worker")),
+            SimpleNamespace(schema=SimpleNamespace(name="create_workflow", group="workflow")),
+            SimpleNamespace(schema=SimpleNamespace(name="report_write", group="report")),
+        ]
+
+        selected = [
+            item for item in records
+            if profile.tool_groups is None or item.schema.group in profile.tool_groups
+        ]
+
+        self.assertEqual(
+            [item.schema.name for item in selected],
+            ["execute_code", "osm_call"],
+        )
 
     def test_set_basemap_tool_rejects_agent_initiated_switches(self) -> None:
         ctx = ToolContext(meta={})

@@ -107,6 +107,7 @@ def _workspace(ctx: ToolContext) -> str:
         "but has not produced enough evidence yet."
     ),
     needs_context=True,
+    group="worker",
 )
 def start_worker(
     ctx: ToolContext,
@@ -201,6 +202,7 @@ def start_worker(
         "Only report success when health.state is ok."
     ),
     needs_context=True,
+    group="worker",
 )
 def start_dynamic_map_worker(
     ctx: ToolContext,
@@ -250,6 +252,7 @@ def start_dynamic_map_worker(
     ],
     returns="Worker metadata including health.state, resources, last_error, and logs.",
     needs_context=True,
+    group="worker",
 )
 def get_worker(ctx: ToolContext, worker_id: str, include_logs: bool = True) -> dict[str, Any]:
     workspace = _workspace(ctx)
@@ -284,6 +287,7 @@ def get_worker(ctx: ToolContext, worker_id: str, include_logs: bool = True) -> d
     ],
     returns="Worker metadata plus wait.changed/timed_out/status_changed.",
     needs_context=True,
+    group="worker",
 )
 def wait_worker_update(
     ctx: ToolContext,
@@ -345,6 +349,7 @@ def wait_worker_update(
         "Only treat the restart as healthy when health.state is ok."
     ),
     needs_context=True,
+    group="worker",
 )
 def restart_worker(
     ctx: ToolContext,
@@ -380,6 +385,7 @@ def restart_worker(
     ],
     returns="List of worker metadata records.",
     needs_context=True,
+    group="worker",
 )
 def list_workers(ctx: ToolContext, include_logs: bool = False) -> dict[str, Any]:
     return {
@@ -401,6 +407,7 @@ def list_workers(ctx: ToolContext, include_logs: bool = False) -> dict[str, Any]
     ],
     returns="Updated worker metadata.",
     needs_context=True,
+    group="worker",
 )
 def pause_worker(ctx: ToolContext, worker_id: str, reason: str = "agent_pause") -> dict[str, Any]:
     workspace = _workspace(ctx)
@@ -421,6 +428,7 @@ def pause_worker(ctx: ToolContext, worker_id: str, reason: str = "agent_pause") 
     ],
     returns="Deleted worker metadata including folder_deleted.",
     needs_context=True,
+    group="worker",
 )
 def delete_worker(ctx: ToolContext, worker_id: str) -> dict[str, Any]:
     workspace = _workspace(ctx)

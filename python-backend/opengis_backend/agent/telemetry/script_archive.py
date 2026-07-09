@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 def _app_data_base() -> Path:
-    """Return the OpenGIS app data root (same place logging_setup uses)."""
+    """Return the OpenGIS app data root used by runtime logging."""
     # default_log_dir() returns ``<app_data>/opengis/logs``; drop the trailing
     # ``logs`` segment so we can sibling-mount ``agent-runs/``.
     return default_log_dir().parent

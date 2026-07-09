@@ -110,20 +110,26 @@ function ResolvedImage({ src, alt, resolveImageSrc, releasePath, onClick }: {
   }
 
   if (!resolvedSrc) {
-    return <div className="w-full h-20 rounded-lg bg-bg-tertiary/30 animate-pulse my-2" />
+    return (
+      <div className="my-2 flex w-full justify-center">
+        <div className="h-20 w-full max-w-[min(560px,100%)] rounded-lg bg-bg-tertiary/30 animate-pulse" />
+      </div>
+    )
   }
 
   return (
-    <img
-      src={resolvedSrc}
-      alt={alt}
-      className="max-w-full rounded-lg my-2 cursor-zoom-in"
-      onClick={() => onClick?.(resolvedSrc)}
-      onError={(e) => {
-        // Fallback: hide the image if it fails to load
-        ;(e.target as HTMLImageElement).style.display = 'none'
-      }}
-    />
+    <span className="my-2 flex w-full justify-center">
+      <img
+        src={resolvedSrc}
+        alt={alt}
+        className="block h-auto max-h-[360px] w-auto max-w-[min(560px,100%)] rounded-lg cursor-zoom-in object-contain"
+        onClick={() => onClick?.(resolvedSrc)}
+        onError={(e) => {
+          // Fallback: hide the image if it fails to load
+          ;(e.target as HTMLImageElement).style.display = 'none'
+        }}
+      />
+    </span>
   )
 }
 
@@ -164,13 +170,15 @@ const MarkdownBlock = memo(({ markdown, showCursor, baseDir, resolveImageSrc }: 
                 )
               }
               return (
-                <img
-                  src={src}
-                  alt={alt}
-                  className="max-w-full rounded-lg my-2 cursor-zoom-in"
-                  onClick={() => src && handleClick(src)}
-                  {...props}
-                />
+                <span className="my-2 flex w-full justify-center">
+                  <img
+                    src={src}
+                    alt={alt}
+                    className="block h-auto max-h-[360px] w-auto max-w-[min(560px,100%)] rounded-lg cursor-zoom-in object-contain"
+                    onClick={() => src && handleClick(src)}
+                    {...props}
+                  />
+                </span>
               )
             },
             code({ className, children, node, ...props }) {
@@ -328,11 +336,11 @@ export default MarkdownBlock
 
 function StreamingCodeBlock({ language, code }: { language: string; code: string }) {
   return (
-    <div className="relative my-3 overflow-hidden rounded-lg border border-border/15">
-      <div className="flex items-center justify-between border-b border-border/15 bg-bg-tertiary/80 px-3 py-1.5">
+    <div className="relative my-2 overflow-hidden rounded-lg border border-border/10 bg-bg-secondary/55">
+      <div className="flex items-center justify-between border-b border-border/10 bg-bg-tertiary/50 px-3 py-1.5">
         <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted">{language}</span>
       </div>
-      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words bg-bg-tertiary px-4 py-3 font-mono text-[12px] leading-[1.6] text-text-secondary">
+      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words bg-bg-tertiary/55 px-3.5 py-3 font-mono text-[11.75px] leading-[1.58] text-text-secondary">
         <code>{code || ' '}</code>
       </pre>
     </div>
@@ -350,13 +358,13 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }, [code])
 
   return (
-    <div className="relative group my-3 rounded-lg overflow-hidden border border-border/15">
+    <div className="relative group my-2 rounded-lg overflow-hidden border border-border/10 bg-bg-secondary/55">
       {/* Language badge + copy button */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-bg-tertiary/80 border-b border-border/15">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-bg-tertiary/50 border-b border-border/10">
         <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">{language}</span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover transition-all duration-150"
+          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-all duration-150"
         >
           {copied ? (
             <>
@@ -378,10 +386,10 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         customStyle={{
           margin: 0,
           borderRadius: 0,
-          fontSize: '12px',
-          lineHeight: '1.6',
-          padding: '12px 16px',
-          background: 'var(--bg-tertiary)',
+          fontSize: '11.75px',
+          lineHeight: '1.58',
+          padding: '12px 14px',
+          background: 'color-mix(in srgb, var(--bg-tertiary) 58%, transparent)',
           border: 'none',
           textShadow: 'none',
         }}

@@ -1,5 +1,4 @@
-import { AlertTriangle, Hourglass } from 'lucide-react'
-import { useChatStore } from '@/stores/chatStore'
+import { AlertTriangle } from 'lucide-react'
 import { useT } from '@/i18n'
 export function dirname(path: string): string {
   const normalized = path.replace(/\\/g, '/')
@@ -89,6 +88,9 @@ export function ProgressRow({
 }) {
   const labels = useProgressLabels()
   const label = labels[stage] || labels.processing
+  const displayDetail = stage === 'calling_llm' || stage === 'thinking_next_step'
+    ? label
+    : detail || label
 
   return (
     <div className="flex items-center gap-2.5 py-1.5 animate-fade-in">
@@ -97,49 +99,8 @@ export function ProgressRow({
         <div className="absolute inset-0 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
       </div>
       <span className="text-[12px] text-text-muted font-medium">
-        {detail || label}
+        {displayDetail}
       </span>
-    </div>
-  )
-}
-
-export function MaxStepsReachedRow({
-  maxSteps,
-  isLast,
-}: {
-  maxSteps?: number
-  isLast: boolean
-}) {
-  const t = useT()
-  const isStreaming = useChatStore((state) => state.isStreaming)
-  const sendMessage = useChatStore((state) => state.sendMessage)
-  const canContinue = isLast && !isStreaming
-
-  const handleContinue = () => {
-    if (canContinue) sendMessage(t.chat.continue)
-  }
-
-  return (
-    <div className="flex items-start gap-3 bg-bg-tertiary/40 border border-border/30 rounded-xl px-4 py-3">
-      <Hourglass className="w-4 h-4 shrink-0 mt-0.5 text-text-muted" />
-      <div className="flex-1 min-w-0">
-        <div className="text-[13px] text-text-primary leading-relaxed">
-          {t.chat.maxStepsReached.replace('{maxSteps}', String(maxSteps ?? '?'))}
-        </div>
-        <div className="text-[11px] text-text-muted mt-1">
-          {t.chat.maxStepsHint}
-        </div>
-        <div className="mt-2.5 flex gap-2">
-          <button
-            type="button"
-            onClick={handleContinue}
-            disabled={!canContinue}
-            className="px-3 py-1.5 rounded-md text-[12px] font-medium bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary border border-accent-primary/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {t.chat.continue}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }
@@ -147,6 +108,8 @@ export function MaxStepsReachedRow({
 function useProgressLabels(): Record<string, string> {
   const t = useT()
   return {
+    calling_llm: t.chat.thinking,
+    thinking_next_step: t.chat.thinking,
     installing_packages: `📦 ${t.chat.progressInstalling}`,
     loading_geodata: `🗺️ ${t.chat.progressLoadingGeodata}`,
     loading_raster: `🛰️ ${t.chat.progressLoadingRaster}`,

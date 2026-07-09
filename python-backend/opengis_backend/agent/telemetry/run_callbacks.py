@@ -164,36 +164,6 @@ class AgentRunCallbacks:
             },
         )
 
-    def on_reasoning_start(self, round_id: int) -> None:
-        self._emit(AgentEventType.PROGRESS, {"stage": "reasoning"})
-        self._emit(
-            AgentEventType.REASONING_DELTA,
-            {
-                "delta": "",
-                "round": round_id,
-                "open": True,
-                "run_id": self.archive.run_id,
-            },
-        )
-
-    def on_reasoning_end(self, round_id: int) -> None:
-        self._emit(
-            AgentEventType.REASONING_END,
-            {
-                "round": round_id,
-                "run_id": self.archive.run_id,
-            },
-        )
-
-    def on_reasoning_promote(self, round_id: int) -> None:
-        self._emit(
-            AgentEventType.REASONING_PROMOTE,
-            {
-                "round": round_id,
-                "run_id": self.archive.run_id,
-            },
-        )
-
     def on_code_start(self, step_num: int) -> None:
         self._emit(
             AgentEventType.CODE_BLOCK_START,

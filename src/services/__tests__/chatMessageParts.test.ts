@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 import {
   messagePartsForRender,
   upsertMessagePart,
@@ -7,11 +7,11 @@ import {
 
 describe('chatMessageParts', () => {
   it('renders only native MessagePart[] from the message envelope', () => {
-    const message: UIMessage = {
+    const message: ChatMessage = {
       ts: 1000,
       type: 'say',
       say: 'text',
-      text: 'legacy envelope text',
+      text: 'native envelope text',
       parts: [
         {
           id: 'native',
@@ -26,12 +26,12 @@ describe('chatMessageParts', () => {
     expect(messagePartsForRender(message)).toEqual(message.parts)
   })
 
-  it('does not synthesize fallback parts for legacy envelope-only messages', () => {
-    const message: UIMessage = {
+  it('does not synthesize fallback parts for message envelopes without parts', () => {
+    const message: ChatMessage = {
       ts: 2000,
       type: 'say',
       say: 'text',
-      text: 'old text',
+      text: 'envelope text',
       partial: true,
     }
 
@@ -39,7 +39,7 @@ describe('chatMessageParts', () => {
   })
 
   it('upserts native streaming parts by stable id', () => {
-    const message: UIMessage = {
+    const message: ChatMessage = {
       ts: 4000,
       type: 'say',
       say: 'text',
@@ -76,7 +76,7 @@ describe('chatMessageParts', () => {
   })
 
   it('keeps reasoning and text as separate native parts', () => {
-    const message: UIMessage = {
+    const message: ChatMessage = {
       ts: 5000,
       type: 'say',
       say: 'reasoning',
@@ -106,6 +106,38 @@ describe('chatMessageParts', () => {
       id: 'run:text:final',
       type: 'text',
       text: 'final answer',
+    })
+  })
+
+  it('keeps artifact image data in native parts', () => {
+    const message: ChatMessage = {
+      ts: 6000,
+      type: 'say',
+      say: 'image',
+      text: '',
+    }
+
+    const withArtifact = upsertMessagePart(message, {
+      id: 'run:artifact:image:plot.png',
+      type: 'artifact',
+      status: 'completed',
+      text: 'Plot',
+      data: {
+        kind: 'image',
+        images: ['/tmp/plot.png'],
+        files: ['/tmp/plot.png'],
+      },
+    })
+
+    expect(messagePartsForRender(withArtifact)).toHaveLength(1)
+    expect(messagePartsForRender(withArtifact)[0]).toMatchObject({
+      type: 'artifact',
+      text: 'Plot',
+      data: {
+        kind: 'image',
+        images: ['/tmp/plot.png'],
+        files: ['/tmp/plot.png'],
+      },
     })
   })
 })

@@ -1,5 +1,5 @@
 /**
- * rpc.ui.chat.* handlers — 3 个
+ * rpc.ui.chat.* handlers.
  *
  * show_text / show_table remain lightweight stubs; normal assistant text
  * arrives through MessagePart events. show_image is implemented: the backend
@@ -19,7 +19,13 @@ import {
 } from './schemas';
 import { useChatStore } from '@/stores/chatStore';
 import { pathToImageUrl } from './_image_url';
-import type { PlanData, SubagentData } from '@/types/chat';
+import type { MessagePart, PlanData, SubagentData } from '@/types/chat';
+
+type ScreenshotData = {
+  requestId: string
+  savePath: string
+  prompt: string
+}
 
 export const chatHandlers: Record<string, RpcHandler> = {
   'rpc.ui.chat.show_text': (params) => {
@@ -61,6 +67,12 @@ export const chatHandlers: Record<string, RpcHandler> = {
       // the map handler without re-reading the blob URL.
       files: [parsed.path],
       runId: parsed.run_id,
+      parts: [imageMessagePart({
+        caption: parsed.caption ?? '',
+        images: [url],
+        files: [parsed.path],
+        runId: parsed.run_id,
+      })],
     });
 
     return { ok: true, path: parsed.path };
@@ -107,13 +119,15 @@ export const chatHandlers: Record<string, RpcHandler> = {
     }
 
     if (existingTs != null) {
-      store._updateMessage(existingTs, { planData });
+      store._updateMessage(existingTs, { planData, parts: [planMessagePart(planData)] });
     } else {
       store._addMessage({
         ts: Date.now(),
         type: 'say',
         say: 'plan',
         planData,
+        runId: parsed.run_id,
+        parts: [planMessagePart(planData)],
       });
     }
 
@@ -172,7 +186,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
     };
 
     if (existingTs != null) {
-      store._updateMessage(existingTs, { subagentData });
+      store._updateMessage(existingTs, { subagentData, parts: [subagentMessagePart(subagentData)] });
     } else {
       store._addMessage({
         ts: now,
@@ -180,6 +194,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
         say: 'subagent',
         subagentData,
         runId: parsed.run_id,
+        parts: [subagentMessagePart(subagentData)],
       });
     }
 
@@ -203,13 +218,79 @@ export const chatHandlers: Record<string, RpcHandler> = {
     }
 
     const store = useChatStore.getState();
+    const screenshotData = { requestId, savePath, prompt: prompt || '' };
     store._addMessage({
       ts: Date.now(),
       type: 'say',
       say: 'screenshot',
-      screenshotData: { requestId, savePath, prompt: prompt || '' },
+      screenshotData,
+      parts: [screenshotMessagePart(screenshotData)],
     });
 
     return { ok: true, request_id: requestId };
   },
 };
+
+function planMessagePart(planData: PlanData): MessagePart {
+  return {
+    id: `plan:${planData.planId}`,
+    type: 'plan',
+    status: planData.steps.some((step) => step.status === 'in_progress')
+      ? 'running'
+      : planData.steps.some((step) => step.status === 'failed')
+        ? 'failed'
+        : 'completed',
+    runId: planData.runId,
+    data: { planData },
+    createdAt: planData.updatedAt,
+  }
+}
+
+function subagentMessagePart(subagentData: SubagentData): MessagePart {
+  return {
+    id: `subagent:${subagentData.subagentId}`,
+    type: 'progress',
+    status: subagentData.status === 'running'
+      ? 'running'
+      : subagentData.status === 'failed'
+        ? 'failed'
+        : subagentData.status === 'cancelled'
+          ? 'cancelled'
+          : 'completed',
+    runId: subagentData.runId,
+    data: { kind: 'subagent', subagentData },
+    createdAt: subagentData.updatedAt,
+  }
+}
+
+function imageMessagePart({
+  caption,
+  images,
+  files,
+  runId,
+}: {
+  caption: string
+  images: string[]
+  files: string[]
+  runId?: string
+}): MessagePart {
+  return {
+    id: `image:${runId ?? 'no-run'}:${files[0] ?? images[0] ?? Date.now()}`,
+    type: 'artifact',
+    status: 'completed',
+    text: caption,
+    runId,
+    data: { kind: 'image', images, files },
+    createdAt: Date.now(),
+  }
+}
+
+function screenshotMessagePart(screenshotData: ScreenshotData): MessagePart {
+  return {
+    id: `screenshot:${screenshotData.requestId}`,
+    type: 'approval',
+    status: 'pending',
+    data: { kind: 'screenshot', screenshotData },
+    createdAt: Date.now(),
+  }
+}

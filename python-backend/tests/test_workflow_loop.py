@@ -3,7 +3,6 @@ import unittest
 from opengis_backend.agent.context.context_manager import ContextManager
 from opengis_backend.agent.llm import LLMResponse
 from opengis_backend.agent.loop.loop_kernel import LoopKernel, LoopTurnRequest
-from opengis_backend.agent.loop.streaming import StreamingParser
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime
 from opengis_backend.agent.execution.tool_materializer import ToolMaterializer
 from opengis_backend.agent.loop.turn_runner import decide_text_continuation
@@ -13,7 +12,7 @@ from opengis_backend.agent.workflow.workflow_model import WorkflowDocument
 
 
 class WorkflowLoopFunctionCallTests(unittest.TestCase):
-    def test_loop_kernel_injects_active_tool_prompt_and_materialized_tools(self) -> None:
+    def test_loop_kernel_injects_profile_materialized_tool_prompt(self) -> None:
         schemas = [
             {"type": "function", "function": {"name": "read_file", "description": "Read file", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "execute_code", "description": "Run Python", "parameters": {"type": "object", "properties": {}}}},
@@ -38,7 +37,6 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
             tool_runtime=None,
             tool_schemas=schemas,
             tool_materializer=ToolMaterializer(schemas, max_tools=8),
-            streaming_parser_factory=StreamingParser,
             retryable_exceptions=(ConnectionError,),
             max_retries=0,
             base_delay=0,
@@ -56,13 +54,13 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         )
 
         self.assertEqual(outcome.response_text, "done")
-        self.assertIn("Active Function Tools", captured["messages"][1]["content"])
+        self.assertIn("Active Function Tools For This Agent Profile", captured["messages"][1]["content"])
         tool_names = [item["function"]["name"] for item in captured["tools"]]
         self.assertIn("start_worker", tool_names)
         self.assertIn("execute_code", tool_names)
-        self.assertNotIn("layout_export", tool_names)
+        self.assertIn("layout_export", tool_names)
 
-    def test_tool_materializer_keeps_core_and_selects_worker_domain(self) -> None:
+    def test_tool_materializer_is_profile_bounded_not_prompt_classified(self) -> None:
         schemas = [
             {"type": "function", "function": {"name": "read_file", "description": "Read file", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "execute_code", "description": "Run Python", "parameters": {"type": "object", "properties": {}}}},
@@ -83,7 +81,8 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         self.assertIn("read_file", materialized.selected_names)
         self.assertIn("execute_code", materialized.selected_names)
         self.assertIn("start_worker", materialized.selected_names)
-        self.assertNotIn("layout_export", materialized.selected_names)
+        self.assertIn("layout_export", materialized.selected_names)
+        self.assertEqual(materialized.reason, "profile_bounded")
 
     def test_tool_materializer_never_truncates_core_tools_at_tail(self) -> None:
         schemas = [

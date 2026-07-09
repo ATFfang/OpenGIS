@@ -26,7 +26,7 @@ export function ChatSearchCapsule({
   const hasResults = total > 0
 
   return (
-    <div className="shrink-0 bg-bg-primary px-3 py-1.5">
+    <div className="shrink-0 bg-[var(--chat-bg)] px-3 py-1.5">
       <div className="mx-auto flex w-full max-w-[520px] items-center gap-1.5 rounded-full bg-bg-secondary/85 px-2 py-1 shadow-[0_1px_10px_rgba(0,0,0,0.08)] ring-1 ring-black/5 dark:ring-white/5">
         <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" />
         <input

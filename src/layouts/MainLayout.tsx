@@ -133,7 +133,7 @@ export function MainLayout() {
   }
 
   // Determine if sidebar content panel should be shown
-  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'skills' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
+  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
@@ -154,7 +154,7 @@ export function MainLayout() {
         onToggleBoardMode={toggleBoardMode}
       />
 
-      {/* Sidebar Content Panel (Layer Panel, Files, Skills) — resizable */}
+      {/* Sidebar content panel (layers, files, tools, workflows, runs) */}
       {showSidebarContent && (
         <ResizableSidebarPanel activeTab={activeSidebarTab} />
       )}
@@ -397,7 +397,7 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
       return <RunsPanel />
     case 'workers':
       return <WorkersPanel />
-    case 'skills':
+    case 'tools':
       return <ToolAndSkillPanel />
     default:
       return null

@@ -34,6 +34,13 @@ from opengis_backend.agent.context.token_utils import (
 
 logger = logging.getLogger(__name__)
 
+_PRUNE_PROTECTED_TOOLS = frozenset({
+    # Skill instructions are injected through a tool result. If the body is
+    # pruned, later turns may keep acting as if a skill was loaded while losing
+    # the actual operating instructions.
+    "load_skill",
+})
+
 
 @dataclass
 class ContextManager:

@@ -73,36 +73,6 @@ def event_to_message_part(event: AgentEvent) -> MessagePart | None:
             text=text,
             run_id=run_id,
         )
-    if event.type == AgentEventType.REASONING_DELTA:
-        round_id = data.get("round", "current")
-        return MessagePart.create(
-            id=f"{prefix}:reasoning:{round_id}",
-            type="reasoning",
-            status="streaming" if data.get("open") or data.get("delta") else "running",
-            text=str(data.get("delta") or ""),
-            run_id=run_id,
-            data=data,
-        )
-    if event.type == AgentEventType.REASONING_END:
-        round_id = data.get("round", "current")
-        return MessagePart.create(
-            id=f"{prefix}:reasoning:{round_id}",
-            type="reasoning",
-            status="completed",
-            run_id=run_id,
-            data=data,
-        )
-    if event.type == AgentEventType.REASONING_PROMOTE:
-        round_id = data.get("round", "current")
-        promoted = dict(data)
-        promoted["kind"] = "reasoning_promote"
-        return MessagePart.create(
-            id=f"{prefix}:reasoning:{round_id}",
-            type="text",
-            status="completed",
-            run_id=run_id,
-            data=promoted,
-        )
     if event.type == AgentEventType.CODE_BLOCK_START:
         step = data.get("step", "unknown")
         return MessagePart.create(id=f"{prefix}:code:{step}", type="code", status="running", run_id=run_id, data=data)
@@ -184,10 +154,7 @@ def event_to_message_part(event: AgentEvent) -> MessagePart | None:
             data=data,
         )
     if event.type == AgentEventType.PROGRESS:
-        stage = data.get("stage", "processing")
-        return MessagePart.create(id=f"{prefix}:progress:{stage}", type="progress", status="running", run_id=run_id, data=data)
-    if event.type == AgentEventType.THINKING:
-        return None
+        return MessagePart.create(id=f"{prefix}:progress:live", type="progress", status="running", run_id=run_id, data=data)
     if event.type == AgentEventType.ERROR:
         text = str(data.get("error") or "") if isinstance(event.data, dict) else str(event.data or "")
         return MessagePart.create(id=f"{prefix}:error", type="error", status="failed", text=text, run_id=run_id, data=data)

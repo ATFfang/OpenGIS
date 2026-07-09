@@ -50,7 +50,7 @@ export const zh = {
     workers: 'Worker',
     workflows: '工作流',
     runs: '运行记录',
-    skills: '工具',
+    tools: '工具',
     settings: '设置',
     switchProject: '切换工程',
     board: '看板模式',
@@ -148,9 +148,6 @@ export const zh = {
     datasourceCatalog: '预设 GeoJSON 数据源',
     dataSources: '数据源',
     dataSourcesGuide: '地理空间数据源参考指南',
-    // MaxStepsReachedRow
-    maxStepsReached: '已达到本轮 max_iterations = {maxSteps} 上限，Agent 给了一个阶段性总结（见上方）。',
-    maxStepsHint: '想继续的话点下方按钮，或在 Settings → Agent → Max Iterations 调高上限再试。',
     continue: '继续',
     // SubagentRow
     subagents: '子任务',
@@ -339,8 +336,6 @@ export const zh = {
     createPreset: '创建',
     deletePreset: '删除预设',
     updatePreset: '更新当前预设',
-    maxIterations: '最大迭代次数',
-    maxIterationsDesc: '每次运行的最大智能体迭代次数。',
     maxConsecutiveMistakes: '最大连续错误',
     maxConsecutiveMistakesDesc: '连续工具调用失败多少次后停止智能体。',
     requireConfirmation: '需要确认',

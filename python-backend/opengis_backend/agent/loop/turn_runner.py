@@ -86,11 +86,10 @@ class ProviderTurnResult:
     tool_calls: list[dict[str, Any]] | None
     duration_ms: float
     streamed_tool_code: dict[int, dict[str, Any]]
+    draft_text_parts: list[str] = field(default_factory=list)
     tool_schema_count: int = 0
     tool_schema_total: int = 0
     tool_schema_reason: str = ""
-    reasoning_open: bool = False
-    current_reasoning_round: int | None = None
 
 
 @dataclass(frozen=True)
@@ -109,12 +108,9 @@ class ContinuationDecision:
 
 @dataclass
 class ProviderTurnCallbacks:
-    on_thought_delta: Callable[[str], None] | None = None
     on_code_start: Callable[[int], None] | None = None
     on_code_delta: Callable[[int, str], None] | None = None
     on_code_end: Callable[[int], None] | None = None
-    on_reasoning_start: Callable[[int], None] | None = None
-    on_reasoning_end: Callable[[int], None] | None = None
 
 
 CONTINUATION_MARKERS = (
@@ -250,7 +246,7 @@ def decide_text_continuation(
 
 
 class ProviderTurnCaller:
-    """Call the LLM once with streaming/parser/retry handling."""
+    """Call the LLM once and collect draft text/tool-input fragments."""
 
     def __init__(
         self,
@@ -258,7 +254,6 @@ class ProviderTurnCaller:
         llm_call: Callable[..., Any],
         tool_schemas: list[dict] | None,
         tool_materializer: ToolMaterializer | None = None,
-        streaming_parser_factory: Callable[..., Any],
         retryable_exceptions: tuple[type[BaseException], ...],
         max_retries: int,
         base_delay: float,
@@ -269,7 +264,6 @@ class ProviderTurnCaller:
         self.llm_call = llm_call
         self.tool_schemas = tool_schemas
         self.tool_materializer = tool_materializer
-        self.streaming_parser_factory = streaming_parser_factory
         self.retryable_exceptions = retryable_exceptions
         self.max_retries = max_retries
         self.base_delay = base_delay
@@ -283,11 +277,8 @@ class ProviderTurnCaller:
         *,
         callbacks: ProviderTurnCallbacks,
         code_step_for_tool: Callable[[int], int],
-        text_code_step: int,
-        reasoning_round_seq: int | None = None,
-        enable_reasoning_lifecycle: bool = False,
         retry_detail: str = "Connection error",
-    ) -> tuple[ProviderTurnResult, int | None]:
+    ) -> ProviderTurnResult:
         t0 = time.monotonic()
         materialized_tools = (
             self.tool_materializer.materialize(messages)
@@ -300,72 +291,6 @@ class ProviderTurnCaller:
             else self.tool_schemas
         )
         streamed_tool_code: dict[int, dict[str, Any]] = {}
-        current_round = {"id": reasoning_round_seq}
-        reasoning_open = {"v": False}
-
-        def _bump_round() -> None:
-            if current_round["id"] is not None:
-                current_round["id"] = int(current_round["id"]) + 1
-
-        def _open_reasoning_if_needed() -> None:
-            if not enable_reasoning_lifecycle or current_round["id"] is None:
-                return
-            if reasoning_open["v"]:
-                return
-            reasoning_open["v"] = True
-            if callbacks.on_reasoning_start:
-                try:
-                    callbacks.on_reasoning_start(int(current_round["id"]))
-                except Exception:
-                    logger.exception("on_reasoning_start failed")
-
-        def _close_reasoning_if_open() -> None:
-            if not reasoning_open["v"] or current_round["id"] is None:
-                return
-            if callbacks.on_reasoning_end:
-                try:
-                    callbacks.on_reasoning_end(int(current_round["id"]))
-                except Exception:
-                    logger.exception("on_reasoning_end failed")
-            reasoning_open["v"] = False
-
-        def _on_chunk_thought(text: str) -> None:
-            _open_reasoning_if_needed()
-            if callbacks.on_thought_delta:
-                try:
-                    callbacks.on_thought_delta(text)
-                except Exception:
-                    logger.exception("on_thought_delta failed")
-
-        def _on_chunk_code_start() -> None:
-            _close_reasoning_if_open()
-            _bump_round()
-            if callbacks.on_code_start:
-                try:
-                    callbacks.on_code_start(text_code_step)
-                except Exception:
-                    logger.exception("on_code_start failed")
-
-        def _on_chunk_code_delta(text: str) -> None:
-            if callbacks.on_code_delta:
-                try:
-                    callbacks.on_code_delta(text_code_step, text)
-                except Exception:
-                    logger.exception("on_code_delta failed")
-
-        def _on_chunk_code_end() -> None:
-            if callbacks.on_code_end:
-                try:
-                    callbacks.on_code_end(text_code_step)
-                except Exception:
-                    logger.exception("on_code_end failed")
-
-        parser = self.streaming_parser_factory(
-            on_thought_delta=_on_chunk_thought,
-            on_code_start=_on_chunk_code_start,
-            on_code_delta=_on_chunk_code_delta,
-            on_code_end=_on_chunk_code_end,
-        )
 
         def _on_tool_delta(tool_index: int, tool_name: str, payload: dict[str, Any]) -> None:
             if tool_name != "execute_code":
@@ -383,8 +308,6 @@ class ProviderTurnCaller:
                 state["invalid"] = True
                 return
             if not state["open"]:
-                _close_reasoning_if_open()
-                _bump_round()
                 if callbacks.on_code_start:
                     try:
                         callbacks.on_code_start(int(state["step"]))
@@ -399,8 +322,14 @@ class ProviderTurnCaller:
                     logger.exception("on_code_delta failed")
                 state["length"] = len(code)
 
+        draft_text_parts: list[str] = []
+
         def _on_llm_delta(piece: str) -> None:
-            parser.feed(piece)
+            # Provider text deltas are draft fragments until the turn is
+            # settled. The loop policy decides later whether they become a
+            # visible assistant text part or remain only model-visible
+            # assistant content owned by tool calls.
+            draft_text_parts.append(piece)
 
         response: LLMResponse | None = None
         for retry_attempt in range(self.max_retries + 1):
@@ -411,7 +340,6 @@ class ProviderTurnCaller:
                     on_tool_delta=_on_tool_delta,
                     tools=active_tool_schemas,
                 )
-                parser.finish()
                 break
             except self.retryable_exceptions as exc:
                 if self.interrupted():
@@ -442,12 +370,6 @@ class ProviderTurnCaller:
                     except Exception:
                         logger.exception("progress_callback failed on retry")
                 time.sleep(delay)
-                parser = self.streaming_parser_factory(
-                    on_thought_delta=_on_chunk_thought,
-                    on_code_start=_on_chunk_code_start,
-                    on_code_delta=_on_chunk_code_delta,
-                    on_code_end=_on_chunk_code_end,
-                )
 
         duration_ms = (time.monotonic() - t0) * 1000
         if response is None:
@@ -462,24 +384,20 @@ class ProviderTurnCaller:
                 except Exception:
                     logger.exception("on_code_end failed")
 
-        return (
-            ProviderTurnResult(
-                response=response,
-                response_text=response_text,
-                tool_calls=tool_calls,
-                duration_ms=duration_ms,
-                streamed_tool_code=streamed_tool_code,
-                tool_schema_count=len(active_tool_schemas or []),
-                tool_schema_total=(
-                    materialized_tools.total_count
-                    if materialized_tools is not None
-                    else len(active_tool_schemas or [])
-                ),
-                tool_schema_reason=materialized_tools.reason if materialized_tools is not None else "static",
-                reasoning_open=reasoning_open["v"],
-                current_reasoning_round=current_round["id"],
+        return ProviderTurnResult(
+            response=response,
+            response_text=response_text,
+            tool_calls=tool_calls,
+            duration_ms=duration_ms,
+            streamed_tool_code=streamed_tool_code,
+            draft_text_parts=draft_text_parts,
+            tool_schema_count=len(active_tool_schemas or []),
+            tool_schema_total=(
+                materialized_tools.total_count
+                if materialized_tools is not None
+                else len(active_tool_schemas or [])
             ),
-            current_round["id"],
+            tool_schema_reason=materialized_tools.reason if materialized_tools is not None else "static",
         )
 
 

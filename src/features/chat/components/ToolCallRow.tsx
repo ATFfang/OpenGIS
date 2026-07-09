@@ -71,18 +71,14 @@ export const ToolCallRow = memo(({
   const isRunning = status === 'running'
   const isFailed = status === 'failed'
   const isCompleted = status === 'completed'
-  const isCodeTool = isCodeExecutionTool(tool.tool)
-  const codeExecution = isCodeTool ? getCodeExecutionContent(toolArgs, output) : null
 
   const { icon, title, content } = getToolDisplay(tool, status)
-  const showDetails = shouldShowToolDetails(tool.tool, status, output, editResult)
+  const showDetails = shouldShowToolDetails(tool.tool, status, editResult)
   const detailLabel = getDetailLabel(tool.tool, tool)
   const durationLabel = formatDuration(durationMs ?? 0)
   const effectiveExpanded = editResult
     ? editDiffExpanded
-    : isCodeTool && isRunning && !!codeExecution?.output.trim()
-      ? true
-      : isExpanded
+    : isExpanded
 
   const handleToggleDetails = () => {
     if (editResult) {
@@ -95,8 +91,8 @@ export const ToolCallRow = memo(({
   return (
     <div className="group">
       {/* Header */}
-      <div className="flex items-center gap-2.5 mb-2">
-        <div className={`w-5 h-5 rounded-md flex items-center justify-center ${
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className={`w-[18px] h-[18px] rounded flex items-center justify-center ${
           isRunning ? 'bg-accent-primary/10' :
           isFailed ? 'bg-accent-danger/10' :
           isCompleted ? 'bg-accent-success/10' :
@@ -108,7 +104,7 @@ export const ToolCallRow = memo(({
             <span className={isFailed ? 'text-accent-danger' : 'text-text-secondary'}>{icon}</span>
           )}
         </div>
-        <span className={`font-semibold text-[13px] ${
+        <span className={`font-semibold text-[12px] ${
           isFailed ? 'text-accent-danger' : 'text-text-primary'
         }`}>
           {title}
@@ -123,37 +119,29 @@ export const ToolCallRow = memo(({
 
       {/* Collapsible content */}
       {showDetails && content && (
-        <div className="bg-bg-tertiary/50 rounded-xl overflow-hidden border border-border/30 ml-[30px]">
+        <div className="bg-bg-secondary/65 rounded-lg overflow-hidden border border-border/12 ml-6">
           <button
             onClick={handleToggleDetails}
-            className="w-full flex items-center text-text-muted py-2 px-3 cursor-pointer select-none bg-transparent border-none text-left text-[12px] hover:text-text-secondary hover:bg-bg-hover/50 transition-all duration-150"
+            className="w-full flex items-center text-text-muted py-1.5 px-3 cursor-pointer select-none bg-transparent border-none text-left text-[11px] hover:text-text-secondary hover:bg-bg-hover/35 transition-all duration-150"
           >
             <span className="whitespace-nowrap overflow-hidden text-ellipsis mr-2 flex-1 text-left font-mono [direction:rtl]">
               {detailLabel}
             </span>
             <span className="transition-transform duration-150">
               {effectiveExpanded ? (
-                <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                <ChevronDown className="w-3 h-3 shrink-0" />
               ) : (
-                <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+                <ChevronRight className="w-3 h-3 shrink-0" />
               )}
             </span>
           </button>
 
           {effectiveExpanded && (
-            <div className="border-t border-border/25">
-              {isCodeTool && codeExecution ? (
-                <div className="max-h-[420px] overflow-y-auto scrollbar-thin">
-                  {codeExecution.output && (
-                    <pre className="m-0 text-[12px] text-text-secondary p-3 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-relaxed bg-bg-tertiary/50">
-                      <code>{codeExecution.output}</code>
-                    </pre>
-                  )}
-                </div>
-              ) : editResult ? (
+            <div className="border-t border-border/12">
+              {editResult ? (
                 <EditFileDiff result={editResult} />
               ) : (
-                <pre className="text-[12px] text-text-secondary p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto scrollbar-thin font-mono leading-relaxed">
+                <pre className="text-[11.5px] text-text-secondary p-3 overflow-x-auto whitespace-pre-wrap break-words max-h-[280px] overflow-y-auto scrollbar-thin font-mono leading-relaxed">
                   <code>{content}</code>
                 </pre>
               )}
@@ -220,17 +208,6 @@ function buildToolContent(
   return ''
 }
 
-function getCodeExecutionContent(
-  args: Record<string, unknown> | undefined,
-  output: string,
-): { code: string; output: string } {
-  const safeArgs = args || {}
-  return {
-    code: typeof safeArgs.code === 'string' ? safeArgs.code.trim() : '',
-    output,
-  }
-}
-
 function isCodeExecutionTool(toolName: string): boolean {
   return toolName === 'execute_code' || toolName === 'gis_execute_python'
 }
@@ -242,11 +219,10 @@ function isEditFileTool(toolName: string): boolean {
 function shouldShowToolDetails(
   toolName: string,
   status: ToolCallStatus | undefined,
-  output: string,
   editResult?: EditFileResult | null,
 ): boolean {
   if (isCodeExecutionTool(toolName)) {
-    return !!output.trim()
+    return false
   }
   if (isEditFileTool(toolName)) {
     return !!editResult?.diff || status === 'failed'

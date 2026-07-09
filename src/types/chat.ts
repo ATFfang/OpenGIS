@@ -41,7 +41,6 @@ export type SayType =
   | 'subagent'         // Isolated sub-agent delegation card (run_subagent / run_subagents)
   | 'thinking'         // transient work indicator, not rendered as assistant content
   | 'error'
-  | 'max_steps_reached'
   | 'screenshot'
 
 export type AskType =
@@ -138,7 +137,7 @@ export interface MessagePart {
   created_at?: number
 }
 
-export interface UIMessage {
+export interface ChatMessage {
   ts: number
   type: 'say' | 'ask'
   say?: SayType
@@ -174,13 +173,6 @@ export interface UIMessage {
 
   // Whether a backend command finished (for command-type messages)
   commandCompleted?: boolean
-
-  // Soft-stop payload — filled for say='max_steps_reached'.
-  maxStepsInfo?: {
-    maxSteps: number
-    stepCount: number
-    summary: string
-  }
 
   // Progress indicator — filled for say='progress'.
   progressStage?: string

@@ -12,21 +12,21 @@
  * 纯函数，无副作用，单元可测。
  */
 
-import type { UIMessage } from '@/types/chat'
+import type { ChatMessage } from '@/types/chat'
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export interface MessageGroupData {
   role: MessageRole
-  items: UIMessage[]
+  items: ChatMessage[]
 }
 
-export function roleOf(msg: UIMessage): MessageRole {
+export function roleOf(msg: ChatMessage): MessageRole {
   if (msg.say === 'user_feedback') return 'user'
   return 'assistant'
 }
 
-export function groupMessages(messages: UIMessage[]): MessageGroupData[] {
+export function groupMessages(messages: ChatMessage[]): MessageGroupData[] {
   const groups: MessageGroupData[] = []
   for (const msg of messages) {
     const role = roleOf(msg)

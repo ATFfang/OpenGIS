@@ -17,20 +17,6 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(event.params["layer_id"], "live")
         self.assertEqual(event.params["sequence"], 3)
 
-    def test_parse_legacy_dynamic_layer_event_shape(self):
-        event = parse_worker_event(json.dumps({
-            "opengis_event": "dynamic_layer_update",
-            "layer_id": "tracks",
-            "mode": "diff",
-            "diff": {"update": []},
-        }))
-
-        self.assertIsNotNone(event)
-        assert event is not None
-        self.assertEqual(event.method, DYNAMIC_LAYER_METHOD)
-        self.assertEqual(event.params["layer_id"], "tracks")
-        self.assertEqual(event.params["mode"], "diff")
-
     def test_rejects_non_ui_or_invalid_lines(self):
         self.assertIsNone(parse_worker_event("not-json"))
         self.assertIsNone(parse_worker_event(json.dumps({"opengis_method": "rpc.agent.stop"})))

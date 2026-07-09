@@ -7,24 +7,24 @@
    ============================================ */
 
 :root {
-  /* Dark theme (default) — inspired by VS Code / GitHub Dark */
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-sidebar: #161b22;
-  --bg-tertiary: #1c2128;
-  --bg-hover: #252c35;
+  /* Dark theme (default) — neutral graphite, with restrained accents. */
+  --bg-primary: #151515;
+  --bg-secondary: #1d1d1d;
+  --bg-sidebar: #1d1d1d;
+  --bg-tertiary: #262626;
+  --bg-hover: #303030;
 
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #5f6573;
+  --text-primary: #e7e7e7;
+  --text-secondary: #a3a3a3;
+  --text-muted: #717171;
 
-  --accent-primary: #3b82f6;
+  --accent-primary: #4f7db8;
   --accent-success: #22c55e;
   --accent-warning: #f59e0b;
   --accent-danger: #ef4444;
-  --accent-geo: #06b6d4;
+  --accent-geo: #2f9aa3;
 
-  --border-color: #2a2f3d;
+  --border-color: #383838;
 
   --sidebar-width: 52px;
   --sidebar-expanded-width: 240px;
@@ -32,11 +32,11 @@
   --titlebar-height: 32px;
 
   /* Orb animation colors */
-  --orb-color-1: rgba(59, 130, 246, 0.75);
-  --orb-color-2: rgba(99, 102, 241, 0.65);
-  --orb-color-3: rgba(6, 182, 212, 0.55);
+  --orb-color-1: rgba(79, 125, 184, 0.62);
+  --orb-color-2: rgba(118, 118, 128, 0.5);
+  --orb-color-3: rgba(47, 154, 163, 0.42);
   --orb-color-4: rgba(34, 197, 94, 0.45);
-  --orb-color-5: rgba(168, 85, 247, 0.6);
+  --orb-color-5: rgba(132, 112, 160, 0.42);
 }
 
 .light {
@@ -68,20 +68,23 @@
 
 /* Chat status cards: slightly separated from the chat surface. */
 :root {
-  --chat-plan-bg: #20262f;
-  --chat-plan-border: #343b49;
-  --chat-subagent-bg: #182832;
-  --chat-subagent-border: #2b4652;
+  --chat-plan-bg: #242424;
+  --chat-plan-border: #3b3b3b;
+  --chat-subagent-bg: #222525;
+  --chat-subagent-border: #373d3d;
+  --chat-bg: #1b1b1b;
+  --chat-header-bg: rgba(26, 26, 26, 0.88);
+  --chat-footer-bg: #1b1b1b;
 
-  --approval-bg: #242a33;
-  --approval-bg-strong: #2b323d;
-  --approval-bg-muted: #1f252d;
-  --approval-border: #3a424f;
+  --approval-bg: #292929;
+  --approval-bg-strong: #303030;
+  --approval-bg-muted: #232323;
+  --approval-border: #444444;
   --approval-shadow: rgba(0, 0, 0, 0.36);
 
-  --worker-surface: #1f2630;
-  --worker-surface-soft: #252d38;
-  --worker-surface-muted: #18202a;
+  --worker-surface: #242424;
+  --worker-surface-soft: #2c2c2c;
+  --worker-surface-muted: #1f1f1f;
 }
 
 .light {
@@ -89,6 +92,9 @@
   --chat-plan-border: #d9dee7;
   --chat-subagent-bg: #eaf4f6;
   --chat-subagent-border: #cfe2e7;
+  --chat-bg: #f8f9fb;
+  --chat-header-bg: rgba(248, 249, 251, 0.86);
+  --chat-footer-bg: #f8f9fb;
 
   --approval-bg: #e5e7ec;
   --approval-bg-strong: #dce0e7;
@@ -195,7 +201,7 @@ body {
 
 /* Scale bar */
 .maplibregl-ctrl-scale {
-  background: rgba(18, 21, 28, 0.75) !important;
+  background: rgba(24, 24, 24, 0.75) !important;
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-color) !important;
   border-top: none !important;
@@ -498,7 +504,7 @@ body {
 
   .glass {
     backdrop-filter: blur(12px);
-    background: rgba(18, 21, 28, 0.8);
+    background: rgba(24, 24, 24, 0.82);
     border: 1px solid var(--border-color);
   }
 
@@ -535,11 +541,11 @@ body {
   .dark .chat-thinking-text {
     background-image: linear-gradient(
       90deg,
-      #60a5fa 0%,
-      #a78bfa 24%,
-      #f8fafc 48%,
-      #22d3ee 72%,
-      #60a5fa 100%
+      #9ca3af 0%,
+      #c4c4c4 24%,
+      #f5f5f5 48%,
+      #a7b0b2 72%,
+      #9ca3af 100%
     );
   }
 
@@ -588,11 +594,11 @@ body {
     background:
       conic-gradient(
         from 120deg,
-        rgba(59, 130, 246, 0.0),
-        rgba(59, 130, 246, 0.58),
-        rgba(6, 182, 212, 0.36),
-        rgba(168, 85, 247, 0.48),
-        rgba(59, 130, 246, 0.0)
+        rgba(79, 125, 184, 0.0),
+        rgba(79, 125, 184, 0.42),
+        rgba(120, 120, 128, 0.34),
+        rgba(132, 112, 160, 0.32),
+        rgba(79, 125, 184, 0.0)
       );
     filter: blur(10px);
     animation: board-orb-halo 7.5s linear infinite;
@@ -602,7 +608,7 @@ body {
     position: absolute;
     inset: -18px;
     border-radius: 34px;
-    background: radial-gradient(circle, rgba(59, 130, 246, 0.38), transparent 64%);
+    background: radial-gradient(circle, rgba(120, 120, 128, 0.32), transparent 64%);
     filter: blur(14px);
     animation: board-orb-glow 3.8s ease-in-out infinite;
   }

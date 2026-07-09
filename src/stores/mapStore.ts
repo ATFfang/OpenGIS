@@ -267,7 +267,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
 //   2) 跨工作区泄漏：切换工作区时上一工作区的图层残留进新工作区。
 //
 // 图层是工作区作用域：打开工作区时从 `<workspace>/.opengis/map-layers.json`
-// 加载，变更时防抖写盘，切换工作区时先 flush 旧的、清空、再加载新的。
+// 加载，变更时防抖写盘，切换工作区时先 flush 上一份状态、清空、再加载新的。
 
 import { useAssetStore } from './assetStore'
 import { loadLayers, persistLayers, flushLayers } from '@/services/layerPersistence'
@@ -391,7 +391,7 @@ useMapStore.subscribe((state, prev) => {
   persistMapView(wp, state.viewState)
 })
 
-// 工作区切换 → flush 旧的 → 清空 → 加载新的。
+// 工作区切换 → flush 上一份状态 → 清空 → 加载新的。
 useAssetStore.subscribe((state, prev) => {
   if (state.workspacePath === prev.workspacePath) return
   const oldWp = prev.workspacePath
@@ -406,7 +406,7 @@ useAssetStore.subscribe((state, prev) => {
     ])
     : Promise.resolve()
   flushOld.finally(() => {
-    // 清空旧工作区图层，避免泄漏进新工作区
+    // 清空上一工作区图层，避免泄漏进新工作区
     useMapStore.getState().clearLayers()
     void _loadLayersForWorkspace(state.workspacePath)
   })

@@ -68,14 +68,12 @@ class OpenGISAgent:
         model: str = "gpt-4o",
         api_key: str = "",
         base_url: str = "",
-        max_iterations: int = 10,
     ):
         self.tool_registry = tool_registry
         self.protocol = protocol
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
-        self.max_iterations = max_iterations
 
         # Exposed so RpcHandler._handle_agent_cancel can interrupt
         # the subprocess across the asyncio boundary.
@@ -142,11 +140,10 @@ class OpenGISAgent:
         agent_profile = ctx.meta.get("agent_profile")
         if not isinstance(agent_profile, AgentProfile):
             agent_profile = (
-                AgentProfile.workflow_runner(max_steps=self.max_iterations)
+                AgentProfile.workflow_runner()
                 if workflow is not None
-                else AgentProfile.gis_build(max_steps=self.max_iterations)
+                else AgentProfile.gis_build()
             )
-        effective_max_steps = int(agent_profile.max_steps or self.max_iterations)
         ctx.meta.setdefault("run_id", archive.run_id)
         ctx.meta.setdefault("script_dir", str(archive.script_dir))
         session = create_run_session(
@@ -262,7 +259,6 @@ class OpenGISAgent:
                     base_url=self.base_url,
                         ),
                 ctx=ctx,
-                max_steps=effective_max_steps,
                 step_callback=callbacks.step_callback,
                 progress_callback=callbacks.progress_callback,
                 execution_output_callback=callbacks.execution_output_callback,
@@ -272,9 +268,6 @@ class OpenGISAgent:
                 on_code_start=callbacks.on_code_start,
                 on_code_delta=callbacks.on_code_delta,
                 on_code_end=callbacks.on_code_end,
-                on_reasoning_start=callbacks.on_reasoning_start,
-                on_reasoning_end=callbacks.on_reasoning_end,
-                on_reasoning_promote=callbacks.on_reasoning_promote,
                 on_tool_start=callbacks.on_tool_start,
                 on_tool_result=callbacks.on_tool_result,
                 tool_groups=active_tool_groups,
@@ -372,7 +365,6 @@ class OpenGISAgent:
                 logger.debug("session lease release failed", exc_info=True)
 
         runner = AgentRunner(
-            max_steps=effective_max_steps,
             run_id=archive.run_id,
             # AgentLoop streams its own tokens via callbacks.on_thought_delta;
             # WorkflowLoop doesn't, so it still needs the trailing emit.

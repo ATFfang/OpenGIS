@@ -1,10 +1,10 @@
-import type { MessagePart, UIMessage } from '@/types/chat'
+import type { MessagePart, ChatMessage } from '@/types/chat'
 
-export function messagePartsForRender(message: UIMessage): MessagePart[] {
+export function messagePartsForRender(message: ChatMessage): MessagePart[] {
   return message.parts ?? []
 }
 
-export function upsertMessagePart(message: UIMessage, incoming: MessagePart): UIMessage {
+export function upsertMessagePart(message: ChatMessage, incoming: MessagePart): ChatMessage {
   const current = message.parts ?? []
   const index = current.findIndex((part) => part.id === incoming.id)
   if (index < 0) {

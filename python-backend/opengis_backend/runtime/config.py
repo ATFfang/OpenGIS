@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
 
     # Agent
-    agent_max_iterations: int = 10
     agent_code_timeout: int = 60
     agent_require_confirmation: bool = True
 

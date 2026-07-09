@@ -22,16 +22,3 @@ TITLE_GEN_TIMEOUT: float = 3.0
 
 # Cleanup future wait timeout (10 s)
 CLEANUP_FUTURE_TIMEOUT: float = 10.0
-
-# Exec timeout step multiplier (max_steps * this = safety cap)
-EXEC_STEP_TIMEOUT_MULTIPLIER: float = 30.0
-
-# ─────────────────────────────────────────────────────────────────────
-# Iteration / step limits
-# ─────────────────────────────────────────────────────────────────────
-
-# Default max agent iterations
-DEFAULT_MAX_ITERATIONS: int = 10
-
-# Safety cap: actual loop runs up to max_steps * 2
-AGENT_LOOP_SAFETY_MULTIPLIER: int = 2

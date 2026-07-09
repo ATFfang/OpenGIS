@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_projector import ContextProjector
@@ -14,9 +15,10 @@ from opengis_backend.agent.governance.permission import PermissionRuntime
 from opengis_backend.agent.governance.profile import AgentProfile
 from opengis_backend.agent.llm import LLMConfig, build_llm_caller
 from opengis_backend.agent.prompts import OPENGIS_SYSTEM_PROMPT, build_tool_catalog_summary
+from opengis_backend.agent.telemetry.event_log import MessagePart
 from opengis_backend.agent.tools import build_tool_callables, filter_agent_tools
 from opengis_backend.skills.discovery import UserSkillDiscovery, format_available_skills
-from opengis_backend.tools.context import ToolContext
+from opengis_backend.tools.context import ToolContext, run_async_from_sync
 from opengis_backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -92,16 +94,27 @@ def build_loop_runtime_bundle(
     llm_call = build_llm_caller(llm_config)
 
     def _plot_saved_listener(msg: dict) -> None:
-        payload: dict = {"path": msg.get("path", "")}
-        caption = msg.get("caption")
-        if caption:
-            payload["caption"] = caption
         run_id = (getattr(ctx, "meta", None) or {}).get("run_id")
-        if run_id:
-            payload["run_id"] = run_id
+        path = str(msg.get("path") or "")
+        if not path:
+            return
+        caption = str(msg.get("caption") or Path(path).stem)
+        part = MessagePart.create(
+            id=f"{run_id or 'run'}:artifact:image:{Path(path).name}",
+            type="artifact",
+            status="completed",
+            text=caption,
+            run_id=str(run_id or ""),
+            data={
+                "kind": "image",
+                "images": [path],
+                "files": [path],
+                "path": path,
+                "title": caption,
+            },
+        )
         try:
-            from opengis_backend.tools.context import run_async_from_sync
-            run_async_from_sync(ctx.notify("rpc.ui.chat.show_image", payload))
+            run_async_from_sync(ctx.notify("chat.message_part", {"part": part.to_dict()}))
         except Exception as exc:
             logger.warning("plot_saved_listener notify failed: %s", exc)
 

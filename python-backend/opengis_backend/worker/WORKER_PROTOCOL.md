@@ -18,16 +18,10 @@ They are not one-off scripts.
 Workers communicate by printing one JSON line to stdout. The manager forwards
 only `rpc.ui.*` events to the frontend.
 
-Preferred shape:
+Required shape:
 
 ```json
 {"opengis_method":"rpc.ui.map.dynamic_layer_update","params":{"layer_id":"live","mode":"full"}}
-```
-
-Legacy shorthand still accepted:
-
-```json
-{"opengis_event":"dynamic_layer_update","layer_id":"live","mode":"diff"}
 ```
 
 Use the generated `opengis_worker.py` helper instead of manually printing JSON:

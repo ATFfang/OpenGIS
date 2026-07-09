@@ -71,8 +71,8 @@ def _compact_log_text(text: str) -> str:
 
     if isinstance(payload, dict):
         method = payload.get("opengis_method")
-        params = payload.get("params") if isinstance(payload.get("params"), dict) else payload
-        if method == "rpc.ui.map.dynamic_layer_update" or payload.get("opengis_event") == "dynamic_layer_update":
+        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        if method == "rpc.ui.map.dynamic_layer_update":
             layer_id = params.get("layer_id") or "-"
             mode = params.get("mode") or ("full" if "geojson" in params else "diff")
             sequence = params.get("sequence")
@@ -446,8 +446,8 @@ class ResidentWorkerManager:
         """Subscribe to worker-emitted frontend events.
 
         Worker scripts emit structured events by printing one JSON line with
-        either ``opengis_event`` or ``opengis_method``. The manager fans those
-        events out to all connected RPC handlers.
+        ``opengis_method`` and ``params``. The manager fans those events out to
+        all connected RPC handlers.
         """
         with self._lock:
             self._event_callbacks.add(callback)

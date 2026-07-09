@@ -35,6 +35,7 @@ from opengis_backend.tools.context import ToolContext
 from opengis_backend.skills.discovery import UserSkillDiscovery, add_source_path
 from opengis_backend.tools.registry import ToolRegistry
 from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
+from opengis_backend.rpc.workflow_detection import detect_pasted_workflow_message, workflow_run_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -652,7 +653,7 @@ class RpcHandler:
         """
         Configure / re-configure the LLM used by the agent.
 
-        Params: { protocol, model, api_key, base_url, max_iterations? }
+        Params: { protocol, model, api_key, base_url }
         Only rebuilds the agent if the config actually changed.
         """
         # Compute a hash of the incoming config to detect changes.
@@ -667,7 +668,6 @@ class RpcHandler:
             params.get("model", ""),
             key_hash,
             params.get("base_url", ""),
-            str(params.get("max_iterations", "")),
         ]
         config_str = "|".join(config_parts)
         config_hash = hashlib.md5(config_str.encode()).hexdigest()
@@ -680,9 +680,6 @@ class RpcHandler:
             settings.llm_api_key = params["api_key"]
         if "base_url" in params:
             settings.llm_base_url = params["base_url"]
-        if "max_iterations" in params:
-            settings.agent_max_iterations = int(params["max_iterations"])
-
         # Only rebuild agent if config actually changed.
         if config_hash != self._last_llm_config_hash:
             self._last_llm_config_hash = config_hash
@@ -790,6 +787,12 @@ class RpcHandler:
                     tool_groups = list(set(groups + ["core"]))
             else:
                 regular_attachments.append(att)
+
+        if workflow_doc is None:
+            pasted_workflow = detect_pasted_workflow_message(message)
+            if pasted_workflow is not None:
+                workflow_doc = pasted_workflow.workflow
+                message = workflow_run_prompt(workflow_doc, pasted_workflow.context)
 
         if regular_attachments:
             message = self._inject_attachments(message, regular_attachments)
@@ -1578,7 +1581,6 @@ class RpcHandler:
                 model=settings.llm_model,
                 api_key=settings.llm_api_key,
                 base_url=settings.llm_base_url,
-                max_iterations=settings.agent_max_iterations,
             )
         return self._agent
 
