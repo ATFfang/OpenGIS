@@ -13,13 +13,29 @@ import requests
 
 from opengis_backend.tools.context import ToolContext
 from opengis_backend.tools.builtin.bash_tool import _bash_sync
+from opengis_backend.tools.builtin.display import get_map_state as get_map_state_tool
+from opengis_backend.tools.builtin.display import highlight_features as highlight_features_tool
 from opengis_backend.tools.builtin.display import set_basemap as set_basemap_tool
+from opengis_backend.tools.builtin.display import set_categorized_style as set_categorized_style_tool
+from opengis_backend.tools.builtin.display import set_graduated_style as set_graduated_style_tool
+from opengis_backend.tools.builtin.display import set_layer_filter as set_layer_filter_tool
+from opengis_backend.tools.builtin.display import set_layer_label as set_layer_label_tool
+from opengis_backend.tools.builtin.display import set_layer_order as set_layer_order_tool
+from opengis_backend.tools.builtin.display import set_layer_visual_variables as set_layer_visual_variables_tool
+from opengis_backend.tools.builtin.display import update_legend_spec as update_legend_spec_tool
+from opengis_backend.tools.builtin.display import update_layer_style as update_layer_style_tool
 from opengis_backend.tools.builtin.csv_to_geojson import csv_to_geojson as csv_to_geojson_tool
 from opengis_backend.tools.builtin.edit_file_tool import edit_file as edit_file_tool
 from opengis_backend.tools.builtin.file_ops import file_exists as file_exists_tool
 from opengis_backend.tools.builtin.file_ops import list_directory as list_directory_tool
 from opengis_backend.tools.builtin.glob_tool import glob as glob_tool
 from opengis_backend.tools.builtin.grep_tool import grep as grep_tool
+from opengis_backend.tools.builtin.operation_tools import create_operation as create_operation_tool
+from opengis_backend.tools.builtin.operation_tools import edit_operation as edit_operation_tool
+from opengis_backend.tools.builtin.operation_tools import get_operation as get_operation_tool
+from opengis_backend.tools.builtin.operation_tools import list_operations as list_operations_tool
+from opengis_backend.tools.builtin.operation_tools import promote_script_to_operation as promote_script_to_operation_tool
+from opengis_backend.tools.builtin.operation_tools import run_operation as run_operation_tool
 from opengis_backend.tools.builtin.read_file_tool import read_file as read_file_tool
 from opengis_backend.tools.builtin.web_tools import webfetch as webfetch_tool
 from opengis_backend.tools.builtin.write_file_tool import write_file as write_file_tool
@@ -43,6 +59,16 @@ webfetch = webfetch_tool.__wrapped__
 list_scripts = list_scripts_tool.__wrapped__
 read_script = read_script_tool.__wrapped__
 set_basemap = set_basemap_tool.__wrapped__
+get_map_state = get_map_state_tool.__wrapped__
+update_layer_style = update_layer_style_tool.__wrapped__
+set_graduated_style = set_graduated_style_tool.__wrapped__
+set_categorized_style = set_categorized_style_tool.__wrapped__
+set_layer_filter = set_layer_filter_tool.__wrapped__
+set_layer_label = set_layer_label_tool.__wrapped__
+highlight_features = highlight_features_tool.__wrapped__
+set_layer_order = set_layer_order_tool.__wrapped__
+set_layer_visual_variables = set_layer_visual_variables_tool.__wrapped__
+update_legend_spec = update_legend_spec_tool.__wrapped__
 osm_call = osm_call_tool.__wrapped__
 datasource_call = datasource_call_tool.__wrapped__
 csv_to_geojson = csv_to_geojson_tool.__wrapped__
@@ -50,9 +76,108 @@ file_exists = file_exists_tool.__wrapped__
 list_directory = list_directory_tool.__wrapped__
 glob = glob_tool.__wrapped__
 grep = grep_tool.__wrapped__
+create_operation = create_operation_tool.__wrapped__
+edit_operation = edit_operation_tool.__wrapped__
+get_operation = get_operation_tool.__wrapped__
+list_operations = list_operations_tool.__wrapped__
+promote_script_to_operation = promote_script_to_operation_tool.__wrapped__
+run_operation = run_operation_tool.__wrapped__
 
 
 class AgentToolUpgradeTests(unittest.TestCase):
+    def test_operation_lifecycle_create_list_get_run_and_promote(self) -> None:
+        operation_code = """\
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", required=True)
+parser.add_argument("--output", required=True)
+args = parser.parse_args()
+
+payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+params = payload["params"]
+values = params["values"]
+result = {
+    "success": True,
+    "metrics": {"sum": sum(values)},
+    "artifacts": [],
+    "layers": [],
+    "summary": f"sum={sum(values)}",
+}
+Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+"""
+        with TemporaryDirectory() as tmp:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            input_schema = {
+                "type": "object",
+                "required": ["values"],
+                "properties": {"values": {"type": "array"}},
+            }
+
+            created = create_operation(
+                ctx,
+                operation_id="sum_values",
+                name="Sum Values",
+                description="Sum numeric values.",
+                code=operation_code,
+                input_schema=input_schema,
+                dependencies=["numpy"],
+            )
+            self.assertTrue(created["success"], created)
+            self.assertEqual(created["operation"]["id"], "sum_values")
+
+            listed = list_operations(ctx)
+            self.assertEqual(len(listed["operations"]), 1)
+            self.assertEqual(listed["operations"][0]["id"], "sum_values")
+
+            loaded = get_operation(ctx, "sum_values", include_code=True)
+            self.assertIn("--input", loaded["operation"]["code"])
+
+            edited_code = operation_code.replace('"sum": sum(values)', '"sum": sum(values), "count": len(values)')
+            edited = edit_operation(
+                ctx,
+                operation_id="sum_values",
+                code=edited_code,
+                description="Sum numeric values and count records.",
+                input_schema=input_schema,
+                dependencies=["numpy", "pandas"],
+                status="draft",
+            )
+            self.assertTrue(edited["success"], edited)
+            self.assertEqual(edited["operation"]["revision"], 2)
+            self.assertEqual(edited["operation"]["status"], "draft")
+            self.assertEqual(
+                edited["operation"]["runtime"]["dependencies"],
+                ["numpy", "pandas"],
+            )
+
+            run = run_operation(ctx, "sum_values", {"values": [1, 2, 3]})
+            self.assertTrue(run["success"], run)
+            self.assertEqual(run["output"]["metrics"]["sum"], 6)
+            self.assertEqual(run["output"]["metrics"]["count"], 3)
+
+            loaded_after_run = get_operation(ctx, "sum_values")
+            self.assertEqual(loaded_after_run["operation"]["status"], "validated")
+            self.assertEqual(
+                loaded_after_run["operation"]["provenance"]["last_success_run"],
+                run["run_id"],
+            )
+
+            script_dir = Path(tmp) / "script"
+            script_dir.mkdir()
+            script = script_dir / "demo_operation.py"
+            script.write_text(operation_code, encoding="utf-8")
+            promoted = promote_script_to_operation(
+                ctx,
+                script_path="script/demo_operation.py",
+                operation_id="demo_operation",
+                name="Demo Operation",
+            )
+            self.assertTrue(promoted["success"], promoted)
+            self.assertEqual(promoted["operation"]["id"], "demo_operation")
+
     def test_system_prompt_renders_literal_edit_file_batch_example(self) -> None:
         with TemporaryDirectory() as tmp:
             ctx = ToolContext(meta={"workspace_path": tmp})
@@ -97,6 +222,213 @@ class AgentToolUpgradeTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("disabled", result["error"])
+
+    def test_get_map_state_reads_frontend_state(self) -> None:
+        async def request(method: str, params: dict):
+            self.assertEqual(method, "rpc.ui.map.get_state")
+            self.assertEqual(params, {})
+            return {"basemap_visible": True, "layer_count": 2}
+
+        ctx = ToolContext(request_fn=request)
+
+        self.assertEqual(get_map_state(ctx), {"basemap_visible": True, "layer_count": 2})
+
+    def test_update_layer_style_uses_layer_geometry_for_point_paint(self) -> None:
+        notifications: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            self.assertEqual(method, "rpc.ui.map.get_layer")
+            self.assertEqual(params, {"layer_id": "poi"})
+            return {"geometry_type": "Point"}
+
+        async def notify(method: str, params: dict):
+            notifications.append((method, params))
+
+        ctx = ToolContext(request_fn=request, notify_fn=notify)
+
+        result = update_layer_style(
+            ctx,
+            "poi",
+            color="#ff0000",
+            opacity=0.4,
+            point_size=7,
+        )
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(notifications[0][0], "rpc.ui.map.set_layer_style")
+        self.assertEqual(
+            notifications[0][1]["style"]["paint"],
+            {
+                "circle-color": "#ff0000",
+                "circle-radius": 7.0,
+                "circle-opacity": 0.4,
+            },
+        )
+
+    def test_set_categorized_style_sends_explicit_categories_and_colors(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"renderer": "categorized", **params}
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_categorized_style(
+            ctx,
+            "poi",
+            "type",
+            max_categories=3,
+            colors={"咖啡": "#ef4444", "茶饮": "#22c55e"},
+            categories=["茶饮", "咖啡"],
+            other_color="#64748b",
+        )
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(requests_seen[0][0], "rpc.ui.map.set_layer_renderer")
+        self.assertEqual(
+            requests_seen[0][1]["categorized"],
+            {
+                "field": "type",
+                "maxCategories": 3,
+                "otherColor": "#64748b",
+                "colors": {"咖啡": "#ef4444", "茶饮": "#22c55e"},
+                "categories": ["茶饮", "咖啡"],
+            },
+        )
+
+    def test_set_graduated_style_expands_named_palette_and_manual_breaks(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"renderer": "graduated", **params}
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_graduated_style(
+            ctx,
+            "districts",
+            "population",
+            classes=4,
+            palette="purples",
+            breaks=[100, 200, 300],
+        )
+
+        graduated = requests_seen[0][1]["graduated"]
+        self.assertTrue(result["success"], result)
+        self.assertEqual(graduated["method"], "manual")
+        self.assertEqual(graduated["breaks"], [100.0, 200.0, 300.0])
+        self.assertEqual(len(graduated["palette"]), 4)
+        self.assertTrue(all(color.startswith("#") for color in graduated["palette"]))
+        self.assertEqual(graduated["palette"][0], "#f3e8ff")
+        self.assertEqual(graduated["palette"][-1], "#581c87")
+
+    def test_layer_filter_label_order_and_legend_tools_emit_canonical_rpc(self) -> None:
+        notifications: list[tuple[str, dict]] = []
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def notify(method: str, params: dict):
+            notifications.append((method, params))
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"ok": True, **params}
+
+        ctx = ToolContext(request_fn=request, notify_fn=notify)
+
+        set_layer_filter(ctx, "poi", [{"field": "rating", "op": ">=", "value": 4.5}])
+        set_layer_label(ctx, "poi", field="name", font_size=12, color="#111827", halo_color="#ffffff", halo_width=2)
+        order = set_layer_order(ctx, "poi", "above", "roads")
+        legend = update_legend_spec(
+            ctx,
+            "poi",
+            title="POI 类型",
+            labels={"cafe": "咖啡"},
+            order=["cafe"],
+            visible=True,
+        )
+
+        self.assertEqual(notifications[0][0], "rpc.ui.map.set_layer_filter")
+        self.assertEqual(
+            notifications[0][1],
+            {
+                "layer_id": "poi",
+                "filter": {"attribute": [{"field": "rating", "op": ">=", "value": 4.5}]},
+            },
+        )
+        self.assertEqual(notifications[1][0], "rpc.ui.map.set_layer_label")
+        self.assertEqual(notifications[1][1]["field"], "name")
+        self.assertEqual(requests_seen[0], ("rpc.ui.map.set_layer_order", {
+            "layer_id": "poi",
+            "position": "above",
+            "target_layer_id": "roads",
+        }))
+        self.assertEqual(requests_seen[1][0], "rpc.ui.map.update_legend_spec")
+        self.assertEqual(requests_seen[1][1]["legend"]["labels"], {"cafe": "咖啡"})
+        self.assertEqual(order["position"], "above")
+        self.assertEqual(legend["legend"]["title"], "POI 类型")
+
+    def test_set_layer_visual_variables_requests_semantic_rpc(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {
+                "layer_id": params["layer_id"],
+                "size_variable": params.get("size_variable"),
+                "opacity_variable": params.get("opacity_variable"),
+            }
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_layer_visual_variables(
+            ctx,
+            "poi",
+            size_field="评论数",
+            size_method="equal_interval",
+            size_classes=4,
+            size_range=[4, 18],
+            opacity_field="评分",
+            opacity_classes=5,
+            opacity_values=[0.25, 0.4, 0.55, 0.7, 0.9],
+        )
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(requests_seen[0][0], "rpc.ui.map.update_visual_variables")
+        self.assertEqual(requests_seen[0][1]["size_variable"], {
+            "field": "评论数",
+            "method": "equal-interval",
+            "classes": 4,
+            "range": [4.0, 18.0],
+        })
+        self.assertEqual(requests_seen[0][1]["opacity_variable"]["field"], "评分")
+        self.assertEqual(requests_seen[0][1]["opacity_variable"]["values"], [0.25, 0.4, 0.55, 0.7, 0.9])
+
+    def test_highlight_features_requests_overlay_with_style(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"highlight_layer_id": "highlight_poi", "feature_count": 2}
+
+        ctx = ToolContext(request_fn=request)
+
+        result = highlight_features(
+            ctx,
+            "poi",
+            attribute_filter=json.dumps({"attribute": [{"field": "type", "op": "in", "value": ["咖啡", "茶饮"]}]}),
+            name="高亮饮品",
+            color="#f59e0b",
+            opacity=0.8,
+            point_size=9,
+        )
+
+        self.assertEqual(result["highlight_layer_id"], "highlight_poi")
+        self.assertEqual(requests_seen[0][0], "rpc.ui.map.highlight_features")
+        self.assertEqual(requests_seen[0][1]["filter"]["attribute"][0]["op"], "in")
+        self.assertEqual(requests_seen[0][1]["style"]["paint"]["circle-color"], "#f59e0b")
+        self.assertEqual(requests_seen[0][1]["style"]["paint"]["circle-radius"], 9.0)
 
     def test_bash_prefers_backend_python_on_path(self) -> None:
         result = _bash_sync(

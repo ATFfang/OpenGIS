@@ -100,6 +100,30 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         self.assertIn("execute_code", materialized.selected_names)
         self.assertIn("run_script_file", materialized.selected_names)
 
+    def test_tool_materializer_keeps_operation_tools_visible(self) -> None:
+        schemas = [
+            {"type": "function", "function": {"name": f"misc_{i}", "description": "misc", "parameters": {"type": "object", "properties": {}}}}
+            for i in range(30)
+        ] + [
+            {"type": "function", "function": {"name": "list_operations", "description": "List operations", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "get_operation", "description": "Get operation", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "run_operation", "description": "Run operation", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "create_operation", "description": "Create operation", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "edit_operation", "description": "Edit operation", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "promote_script_to_operation", "description": "Promote operation", "parameters": {"type": "object", "properties": {}}}},
+        ]
+
+        materialized = ToolMaterializer(schemas, max_tools=8).materialize([
+            {"role": "user", "content": "把这个脚本沉淀成可复用操作"}
+        ])
+
+        self.assertIn("list_operations", materialized.selected_names)
+        self.assertIn("get_operation", materialized.selected_names)
+        self.assertIn("run_operation", materialized.selected_names)
+        self.assertIn("create_operation", materialized.selected_names)
+        self.assertIn("edit_operation", materialized.selected_names)
+        self.assertIn("promote_script_to_operation", materialized.selected_names)
+
     def test_shared_continuation_policy_flags_text_without_tool_work(self) -> None:
         decision = decide_text_continuation("可以，颜色分为红绿蓝三类。")
 

@@ -80,6 +80,8 @@ export interface DataSourceMeta {
     schemaChanged?: boolean
     mode?: 'full' | 'diff'
     updateable?: boolean
+    sourceLayerId?: string
+    highlight?: boolean
   }
 }
 
@@ -230,6 +232,46 @@ export interface CategorizedClassification {
   maxCategories?: number
   /** "其它" 档的颜色，默认 #9ca3af。 */
   otherColor?: string
+  /** Optional fixed category order / whitelist. */
+  categories?: string[]
+}
+
+/**
+ * Numeric visual variable layered on top of the primary renderer.
+ * It lets a layer keep its categorized/graduated color semantics while mapping
+ * another numeric field to size or opacity.
+ */
+export interface NumericVisualVariable {
+  field: string
+  method?: ClassificationMethod
+  classes?: number
+  breaks?: number[]
+  /**
+   * Output values per class. For size this is pixels; for opacity this is 0-1.
+   * If omitted, renderers interpolate from range.
+   */
+  values?: number[]
+  /** Inclusive output range used when values are omitted. */
+  range?: [number, number]
+}
+
+export type LayerFilterOperator = '=' | '!=' | '>' | '<' | '>=' | '<=' | 'contains' | 'in'
+
+export interface LayerAttributeFilter {
+  field: string
+  op: LayerFilterOperator
+  value?: unknown
+}
+
+export interface LayerFilterSpec {
+  attribute?: LayerAttributeFilter[]
+}
+
+export interface LegendSpec {
+  visible?: boolean
+  title?: string
+  labels?: Record<string, string>
+  order?: string[]
 }
 
 export interface HeatmapSettings {
@@ -268,9 +310,19 @@ export interface LayerStyle {
   strokeColor: string
   strokeWidth: number
   strokeOpacity?: number
+  /** Line dash pattern, e.g. [2, 2] for dashed lines. */
+  lineDasharray?: number[]
   radius?: number
   /** For fill layers */
   fillOpacity?: number
+  /** Optional display filter applied at render time. */
+  filter?: LayerFilterSpec
+  /** Field-driven point radius / line width / polygon boundary width. */
+  sizeVariable?: NumericVisualVariable
+  /** Field-driven fill / line / circle opacity. */
+  opacityVariable?: NumericVisualVariable
+  /** Stable legend metadata shared by map UI, layout composer, and agent tools. */
+  legend?: LegendSpec
 
   // ── 下列字段仅在对应 renderType 启用时被消费。都是可选字段，
   //    老图层加载不受影响。

@@ -36,6 +36,7 @@ def _style_payload(
     point_color: Optional[str] = None,
     point_size: Optional[float] = None,
     point_opacity: Optional[float] = None,
+    line_dasharray: Optional[Union[str, list[float]]] = None,
 ) -> Optional[dict]:
     """
     Build a frontend-compatible MapLibre-ish style payload from agent-friendly
@@ -47,6 +48,10 @@ def _style_payload(
     if geom in {"point", "multipoint"}:
         style_type = "circle"
     elif geom in {"linestring", "multilinestring"}:
+        style_type = "line"
+    elif not geom and (point_color is not None or point_size is not None or point_opacity is not None):
+        style_type = "circle"
+    elif not geom and (line_color is not None or line_width is not None or line_opacity is not None or line_dasharray is not None):
         style_type = "line"
     else:
         style_type = "fill"
@@ -80,6 +85,8 @@ def _style_payload(
         paint["line-width"] = float(line_width)
     if line_opacity is not None:
         paint["line-opacity"] = float(line_opacity)
+    if line_dasharray is not None:
+        paint["line-dasharray"] = _coerce_number_list(line_dasharray)
     if stroke_color is not None:
         paint["stroke-color"] = stroke_color
         paint["circle-stroke-color"] = stroke_color
@@ -99,6 +106,93 @@ def _style_payload(
     if not paint:
         return None
     return {"type": style_type, "paint": paint}
+
+
+def _coerce_jsonish(value: Any) -> Any:
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _coerce_string_map(value: Any) -> Optional[dict[str, str]]:
+    value = _coerce_jsonish(value)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Expected a JSON object / dict")
+    return {str(k): str(v) for k, v in value.items()}
+
+
+def _coerce_string_list(value: Any) -> Optional[list[str]]:
+    value = _coerce_jsonish(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Expected a JSON array / list")
+    return [str(item) for item in value]
+
+
+def _coerce_number_list(value: Any) -> list[float]:
+    value = _coerce_jsonish(value)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [item.strip() for item in value.split(",") if item.strip()]
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Expected a JSON array / list of numbers")
+    out = [float(item) for item in value]
+    if not out:
+        raise ValueError("Expected at least one number")
+    return out
+
+
+def _visual_variable_payload(
+    *,
+    field: Optional[str],
+    method: str = "quantile",
+    classes: int = 5,
+    value_range: Any = None,
+    values: Any = None,
+    breaks: Any = None,
+) -> Optional[dict]:
+    if not field:
+        return None
+    payload: dict[str, Any] = {
+        "field": field,
+        "method": method.replace("_", "-"),
+        "classes": int(classes),
+    }
+    if value_range is not None:
+        parsed_range = _coerce_number_list(value_range)
+        if len(parsed_range) != 2:
+            raise ValueError("value_range must contain exactly two numbers")
+        payload["range"] = parsed_range
+    if values is not None:
+        payload["values"] = _coerce_number_list(values)
+    if breaks is not None:
+        payload["breaks"] = _coerce_number_list(breaks)
+        if payload["method"] == "quantile":
+            payload["method"] = "manual"
+    return payload
+
+
+def _filter_payload(attribute_filter: Any = None) -> Optional[dict]:
+    if attribute_filter is None:
+        return None
+    parsed = _coerce_jsonish(attribute_filter)
+    if isinstance(parsed, dict) and "attribute" in parsed:
+        return parsed
+    if not isinstance(parsed, (list, tuple)):
+        raise ValueError("attribute_filter must be a list or {'attribute': [...]}")
+    return {"attribute": list(parsed)}
 
 
 def _load_geojson_from_path(geojson_path: str) -> tuple[dict, str]:
@@ -275,6 +369,8 @@ def _resolve_workspace_path(ctx: ToolContext, raw_path: str) -> str:
          "description": "Line width / polygon outline width in pixels."},
         {"name": "line_opacity", "type": "number", "required": False,
          "description": "Line opacity 0.0-1.0."},
+        {"name": "line_dasharray", "type": "array", "required": False,
+         "description": "Line dash pattern, e.g. [2, 2] for dashed lines."},
         {"name": "border_color", "type": "string", "required": False,
          "description": "Polygon/point border color. Alias for stroke color."},
         {"name": "border_width", "type": "number", "required": False,
@@ -312,6 +408,7 @@ def add_layer(
     line_color: Optional[str] = None,
     line_width: Optional[float] = None,
     line_opacity: Optional[float] = None,
+    line_dasharray: Optional[Union[str, list[float]]] = None,
     border_color: Optional[str] = None,
     border_width: Optional[float] = None,
     border_opacity: Optional[float] = None,
@@ -360,6 +457,7 @@ def add_layer(
         line_color=line_color,
         line_width=line_width,
         line_opacity=line_opacity,
+        line_dasharray=line_dasharray,
         border_color=border_color,
         border_width=border_width,
         border_opacity=border_opacity,
@@ -656,6 +754,31 @@ def set_basemap_visibility(ctx: ToolContext, visible: bool) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# get_map_state
+# ──────────────────────────────────────────────────────────────────────
+@tool(
+    name="get_map_state",
+    display_name="Get Map State",
+    description=(
+        "Read current map camera and basemap state without changing the map. "
+        "Use this when the user asks about current zoom/location, whether the "
+        "basemap is visible, or before making camera/layout decisions."
+    ),
+    category="visualization",
+    params=[],
+    returns=(
+        "dict with keys: basemap, basemap_visible, labels_visible, view_state, "
+        "layer_count."
+    ),
+    examples=["What basemap is currently shown?", "Where is the map currently centered?"],
+    tags=["map", "basemap", "camera", "inspect", "current-state"],
+    needs_context=True,
+)
+def get_map_state(ctx: ToolContext) -> dict:
+    return run_async_from_sync(ctx.request("rpc.ui.map.get_state", {}))
+
+
+# ──────────────────────────────────────────────────────────────────────
 # update_layer_style
 # ──────────────────────────────────────────────────────────────────────
 @tool(
@@ -683,6 +806,8 @@ def set_basemap_visibility(ctx: ToolContext, visible: bool) -> dict:
          "description": "Line width / polygon outline width in pixels."},
         {"name": "line_opacity", "type": "number", "required": False,
          "description": "Line opacity 0.0-1.0."},
+        {"name": "line_dasharray", "type": "array", "required": False,
+         "description": "Line dash pattern, e.g. [2, 2] for dashed lines."},
         {"name": "border_color", "type": "string", "required": False,
          "description": "Polygon/point border color."},
         {"name": "border_width", "type": "number", "required": False,
@@ -713,6 +838,7 @@ def update_layer_style(
     line_color: Optional[str] = None,
     line_width: Optional[float] = None,
     line_opacity: Optional[float] = None,
+    line_dasharray: Optional[Union[str, list[float]]] = None,
     border_color: Optional[str] = None,
     border_width: Optional[float] = None,
     border_opacity: Optional[float] = None,
@@ -728,7 +854,20 @@ def update_layer_style(
         payload["opacity"] = float(opacity)
     if visible is not None:
         payload["visible"] = bool(visible)
+    geometry_type: Optional[str] = None
+    try:
+        layer_info = run_async_from_sync(ctx.request("rpc.ui.map.get_layer", {"layer_id": layer_id}))
+        if isinstance(layer_info, dict):
+            raw_geometry = layer_info.get("geometry_type")
+            if isinstance(raw_geometry, str):
+                geometry_type = raw_geometry
+    except Exception:
+        # Styling can still be attempted without layer metadata. The frontend
+        # will reject unknown layer ids; this fallback only preserves old
+        # fire-and-forget behavior if the read channel is temporarily absent.
+        geometry_type = None
     style = _style_payload(
+        geometry_type=geometry_type,
         color=color,
         opacity=opacity,
         fill_color=fill_color,
@@ -736,6 +875,7 @@ def update_layer_style(
         line_color=line_color,
         line_width=line_width,
         line_opacity=line_opacity,
+        line_dasharray=line_dasharray,
         border_color=border_color,
         border_width=border_width,
         border_opacity=border_opacity,
@@ -765,11 +905,38 @@ def update_layer_style(
 # set_graduated_style  (choropleth / graduated renderer)
 # ──────────────────────────────────────────────────────────────────────
 
-_COLOR_RAMPS = [
-    "viridis", "plasma", "inferno", "magma",
-    "reds", "blues", "greens", "oranges",
-    "RdYlGn", "RdYlBu", "spectral", "Tableau10",
-]
+_COLOR_RAMPS: dict[str, list[str]] = {
+    "viridis": ["#fde725", "#5ec962", "#21918c", "#3b528b", "#440154"],
+    "plasma": ["#f0f921", "#f89540", "#cc4778", "#7e03a8", "#0d0887"],
+    "inferno": ["#fcffa4", "#f98e09", "#bc3754", "#57106e", "#000004"],
+    "magma": ["#fcfdbf", "#fb8861", "#b73779", "#51127c", "#000004"],
+    "reds": ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"],
+    "blues": ["#eff3ff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"],
+    "greens": ["#edf8e9", "#bae4b3", "#74c476", "#31a354", "#006d2c"],
+    "oranges": ["#feedde", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"],
+    "purples": ["#f3e8ff", "#d8b4fe", "#a855f7", "#7e22ce", "#581c87"],
+    "purple": ["#f3e8ff", "#d8b4fe", "#a855f7", "#7e22ce", "#581c87"],
+    "rdylgn": ["#d73027", "#fc8d59", "#ffffbf", "#91cf60", "#1a9850"],
+    "rdylbu": ["#d73027", "#fc8d59", "#ffffbf", "#91bfdb", "#4575b4"],
+    "spectral": ["#9e0142", "#f46d43", "#ffffbf", "#66c2a5", "#5e4fa2"],
+    "tableau10": ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f"],
+}
+
+
+def _resolve_color_ramp(value: Any, classes: int) -> list[str]:
+    parsed = _coerce_jsonish(value)
+    if isinstance(parsed, str):
+        key = parsed.strip().lower()
+        if key in _COLOR_RAMPS:
+            base = _COLOR_RAMPS[key]
+            if classes == len(base):
+                return list(base)
+            return [base[round((i / max(classes - 1, 1)) * (len(base) - 1))] for i in range(classes)]
+        parsed = [item.strip() for item in parsed.split(",") if item.strip()]
+    colors = _coerce_string_list(parsed)
+    if colors is None or not colors:
+        return _resolve_color_ramp("viridis", classes)
+    return colors
 
 
 @tool(
@@ -790,7 +957,9 @@ _COLOR_RAMPS = [
         {"name": "classes", "type": "number", "required": False, "default": 5,
          "description": "Number of classes (2-12)."},
         {"name": "palette", "type": "string", "required": False, "default": "viridis",
-         "description": f"Color ramp name. Options: {', '.join(_COLOR_RAMPS)}."},
+         "description": f"Color ramp name or JSON/list of colors. Options: {', '.join(_COLOR_RAMPS)}."},
+        {"name": "breaks", "type": "array", "required": False,
+         "description": "Manual numeric breaks. If provided, method becomes 'manual' unless explicitly set."},
     ],
     returns="dict with keys: success (bool), layer_id (str), field (str), method (str), classes (int)",
     examples=["Style districts layer by population with 5 quantile classes", "Choropleth the provinces layer by GDP using blues palette"],
@@ -803,27 +972,41 @@ def set_graduated_style(
     field: str,
     method: str = "quantile",
     classes: int = 5,
-    palette: str = "viridis",
+    palette: Any = "viridis",
+    breaks: Any = None,
 ) -> dict:
     # Normalise method: Python callers often use underscores (e.g.
     # "equal_interval") but the frontend Zod schema expects hyphens
     # ("equal-interval").
     method = method.replace("_", "-")
+    parsed_breaks = _coerce_number_list(breaks) if breaks is not None else None
+    if parsed_breaks is not None and method == "quantile":
+        method = "manual"
+    parsed_palette = _resolve_color_ramp(palette, int(classes))
 
-    run_async_from_sync(ctx.notify(
-        "rpc.ui.map.set_layer_renderer",
-        {
-            "layer_id": layer_id,
-            "renderer": "graduated",
-            "graduated": {
-                "field": field,
-                "method": method,
-                "classes": int(classes),
-                "palette": [palette],  # frontend resolves ramp name → colors
-            },
+    payload = {
+        "layer_id": layer_id,
+        "renderer": "graduated",
+        "graduated": {
+            "field": field,
+            "method": method,
+            "classes": int(classes),
+            "palette": parsed_palette,
+            **({"breaks": parsed_breaks} if parsed_breaks is not None else {}),
         },
+    }
+    result = run_async_from_sync(ctx.request(
+        "rpc.ui.map.set_layer_renderer",
+        payload,
     ))
-    return {"success": True, "layer_id": layer_id, "field": field, "method": method, "classes": int(classes)}
+    return {
+        "success": True,
+        "layer_id": layer_id,
+        "field": field,
+        "method": method,
+        "classes": int(classes),
+        **(result or {}),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -847,6 +1030,10 @@ def set_graduated_style(
          "description": "Max unique categories before grouping as 'other' (1-64)."},
         {"name": "other_color", "type": "string", "required": False, "default": "#cccccc",
          "description": "Color for values beyond max_categories."},
+        {"name": "colors", "type": "object", "required": False,
+         "description": "Explicit category color mapping as dict/JSON: {'Cafe':'#ef4444'}."},
+        {"name": "categories", "type": "array", "required": False,
+         "description": "Optional fixed category order / whitelist."},
     ],
     returns="dict with keys: success (bool), layer_id (str), field (str)",
     examples=["Color land_use layer by type", "Categorize roads layer by road_class"],
@@ -859,20 +1046,295 @@ def set_categorized_style(
     field: str,
     max_categories: int = 10,
     other_color: str = "#cccccc",
+    colors: Any = None,
+    categories: Any = None,
 ) -> dict:
-    run_async_from_sync(ctx.notify(
-        "rpc.ui.map.set_layer_renderer",
-        {
-            "layer_id": layer_id,
-            "renderer": "categorized",
-            "categorized": {
-                "field": field,
-                "maxCategories": int(max_categories),
-                "otherColor": other_color,
-            },
+    parsed_colors = _coerce_string_map(colors)
+    parsed_categories = _coerce_string_list(categories)
+    payload = {
+        "layer_id": layer_id,
+        "renderer": "categorized",
+        "categorized": {
+            "field": field,
+            "maxCategories": int(max_categories),
+            "otherColor": other_color,
+            **({"colors": parsed_colors} if parsed_colors is not None else {}),
+            **({"categories": parsed_categories} if parsed_categories is not None else {}),
         },
+    }
+    result = run_async_from_sync(ctx.request(
+        "rpc.ui.map.set_layer_renderer",
+        payload,
     ))
-    return {"success": True, "layer_id": layer_id, "field": field}
+    return {"success": True, "layer_id": layer_id, "field": field, **(result or {})}
+
+
+@tool(
+    name="set_layer_visual_variables",
+    display_name="Set Layer Visual Variables",
+    description=(
+        "Overlay field-driven size and/or opacity on an existing vector layer renderer. "
+        "Use after set_categorized_style or set_graduated_style when color plus size/opacity are both needed."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "The layer id to style."},
+        {"name": "size_field", "type": "string", "required": False,
+         "description": "Numeric field mapped to point radius, line width, or polygon border width."},
+        {"name": "size_method", "type": "string", "required": False, "default": "quantile",
+         "description": "Classification method for size: quantile, equal-interval, jenks, manual."},
+        {"name": "size_classes", "type": "number", "required": False, "default": 5,
+         "description": "Number of size classes."},
+        {"name": "size_range", "type": "array", "required": False,
+         "description": "Output size range, e.g. [3, 16] pixels."},
+        {"name": "size_values", "type": "array", "required": False,
+         "description": "Explicit output size values per class."},
+        {"name": "size_breaks", "type": "array", "required": False,
+         "description": "Manual numeric breaks for size classes."},
+        {"name": "opacity_field", "type": "string", "required": False,
+         "description": "Numeric field mapped to feature opacity."},
+        {"name": "opacity_method", "type": "string", "required": False, "default": "quantile",
+         "description": "Classification method for opacity: quantile, equal-interval, jenks, manual."},
+        {"name": "opacity_classes", "type": "number", "required": False, "default": 5,
+         "description": "Number of opacity classes."},
+        {"name": "opacity_range", "type": "array", "required": False,
+         "description": "Output opacity range, e.g. [0.25, 0.9]."},
+        {"name": "opacity_values", "type": "array", "required": False,
+         "description": "Explicit output opacity values per class."},
+        {"name": "opacity_breaks", "type": "array", "required": False,
+         "description": "Manual numeric breaks for opacity classes."},
+        {"name": "clear_size", "type": "boolean", "required": False,
+         "description": "Clear existing size visual variable."},
+        {"name": "clear_opacity", "type": "boolean", "required": False,
+         "description": "Clear existing opacity visual variable."},
+    ],
+    returns="dict with keys: success, layer_id, size_variable, opacity_variable",
+    examples=[
+        "Color POIs by type, then set point size by comment_count and opacity by rating",
+        "Make road line width follow traffic volume",
+    ],
+    tags=["map", "style", "visual-variable", "symbol"],
+    needs_context=True,
+)
+def set_layer_visual_variables(
+    ctx: ToolContext,
+    layer_id: str,
+    size_field: Optional[str] = None,
+    size_method: str = "quantile",
+    size_classes: int = 5,
+    size_range: Any = None,
+    size_values: Any = None,
+    size_breaks: Any = None,
+    opacity_field: Optional[str] = None,
+    opacity_method: str = "quantile",
+    opacity_classes: int = 5,
+    opacity_range: Any = None,
+    opacity_values: Any = None,
+    opacity_breaks: Any = None,
+    clear_size: bool = False,
+    clear_opacity: bool = False,
+) -> dict:
+    payload: dict[str, Any] = {"layer_id": layer_id}
+    if clear_size:
+        payload["size_variable"] = None
+    elif size_field:
+        payload["size_variable"] = _visual_variable_payload(
+            field=size_field,
+            method=size_method,
+            classes=size_classes,
+            value_range=size_range,
+            values=size_values,
+            breaks=size_breaks,
+        )
+    if clear_opacity:
+        payload["opacity_variable"] = None
+    elif opacity_field:
+        payload["opacity_variable"] = _visual_variable_payload(
+            field=opacity_field,
+            method=opacity_method,
+            classes=opacity_classes,
+            value_range=opacity_range,
+            values=opacity_values,
+            breaks=opacity_breaks,
+        )
+    if len(payload) == 1:
+        raise ValueError("Provide size_field, opacity_field, clear_size, or clear_opacity")
+    result = run_async_from_sync(ctx.request("rpc.ui.map.update_visual_variables", payload))
+    return {"success": True, "layer_id": layer_id, **(result or {})}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# semantic layer operations
+# ──────────────────────────────────────────────────────────────────────
+
+@tool(
+    name="set_layer_filter",
+    display_name="Set Layer Display Filter",
+    description="Apply or clear an attribute display filter on a map layer without deleting data.",
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True, "description": "Layer id."},
+        {"name": "attribute_filter", "type": "array", "required": False,
+         "description": "List of filters: [{'field':'rating','op':'>=','value':4.5}]. Pass null/omit to clear."},
+    ],
+    returns="dict with keys: success, layer_id, filter",
+    examples=["Only show POIs with rating >= 4.5"],
+    tags=["map", "style", "filter", "layer"],
+    needs_context=True,
+)
+def set_layer_filter(ctx: ToolContext, layer_id: str, attribute_filter: Any = None) -> dict:
+    payload = {"layer_id": layer_id, "filter": _filter_payload(attribute_filter)}
+    run_async_from_sync(ctx.notify("rpc.ui.map.set_layer_filter", payload))
+    return {"success": True, **payload}
+
+
+@tool(
+    name="set_layer_label",
+    display_name="Set Layer Labels",
+    description="Show, update, or hide labels for a vector layer while preserving its existing renderer.",
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True, "description": "Layer id."},
+        {"name": "field", "type": "string", "required": False, "description": "Property field used as label text."},
+        {"name": "visible", "type": "boolean", "required": False, "description": "False hides labels."},
+        {"name": "font_size", "type": "number", "required": False, "description": "Label font size in pixels."},
+        {"name": "color", "type": "string", "required": False, "description": "Label text color."},
+        {"name": "halo_color", "type": "string", "required": False, "description": "Text halo color."},
+        {"name": "halo_width", "type": "number", "required": False, "description": "Text halo width."},
+    ],
+    returns="dict with keys: success, layer_id",
+    examples=["Label the district layer by NAME"],
+    tags=["map", "label", "symbol", "style"],
+    needs_context=True,
+)
+def set_layer_label(
+    ctx: ToolContext,
+    layer_id: str,
+    field: Optional[str] = None,
+    visible: Optional[bool] = None,
+    font_size: Optional[float] = None,
+    color: Optional[str] = None,
+    halo_color: Optional[str] = None,
+    halo_width: Optional[float] = None,
+) -> dict:
+    payload = {
+        "layer_id": layer_id,
+        "field": field,
+        "visible": visible,
+        "font_size": font_size,
+        "color": color,
+        "halo_color": halo_color,
+        "halo_width": halo_width,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    run_async_from_sync(ctx.notify("rpc.ui.map.set_layer_label", payload))
+    return {"success": True, "layer_id": layer_id}
+
+
+@tool(
+    name="highlight_features",
+    display_name="Highlight Features",
+    description=(
+        "Create or replace a separate highlight overlay layer from features "
+        "matching an attribute filter. This does not mutate the source layer style."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True, "description": "Source layer id."},
+        {"name": "attribute_filter", "type": "array", "required": False,
+         "description": "List of filters: [{'field':'type','op':'=','value':'Cafe'}]."},
+        {"name": "name", "type": "string", "required": False, "description": "Highlight layer display name."},
+        {"name": "color", "type": "string", "required": False, "description": "Highlight color."},
+        {"name": "opacity", "type": "number", "required": False, "description": "Highlight opacity."},
+        {"name": "point_size", "type": "number", "required": False, "description": "Point highlight radius."},
+    ],
+    returns="dict with source layer id, highlight_layer_id, feature_count",
+    examples=["Highlight beverage shops with rating >= 4.8"],
+    tags=["map", "highlight", "filter", "selection"],
+    needs_context=True,
+)
+def highlight_features(
+    ctx: ToolContext,
+    layer_id: str,
+    attribute_filter: Any = None,
+    name: Optional[str] = None,
+    color: Optional[str] = None,
+    opacity: Optional[float] = None,
+    point_size: Optional[float] = None,
+) -> dict:
+    style = _style_payload(color=color, opacity=opacity, point_size=point_size)
+    payload: dict = {
+        "layer_id": layer_id,
+        "filter": _filter_payload(attribute_filter),
+    }
+    if name is not None:
+        payload["name"] = name
+    if style is not None:
+        payload["style"] = style
+    return run_async_from_sync(ctx.request("rpc.ui.map.highlight_features", payload))
+
+
+@tool(
+    name="set_layer_order",
+    display_name="Set Layer Order",
+    description="Move a layer to top/bottom or above/below another layer.",
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True, "description": "Layer id to move."},
+        {"name": "position", "type": "string", "required": True, "description": "top, bottom, above, or below."},
+        {"name": "target_layer_id", "type": "string", "required": False, "description": "Target layer for above/below."},
+    ],
+    returns="dict with layer_id and new index",
+    examples=["Move labels above roads", "Send basemap overlay to bottom"],
+    tags=["map", "layer", "order"],
+    needs_context=True,
+)
+def set_layer_order(
+    ctx: ToolContext,
+    layer_id: str,
+    position: str,
+    target_layer_id: Optional[str] = None,
+) -> dict:
+    payload = {"layer_id": layer_id, "position": position}
+    if target_layer_id is not None:
+        payload["target_layer_id"] = target_layer_id
+    return run_async_from_sync(ctx.request("rpc.ui.map.set_layer_order", payload))
+
+
+@tool(
+    name="update_legend_spec",
+    display_name="Update Layer Legend",
+    description="Set stable legend metadata for a layer: title, labels, order, visibility.",
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True, "description": "Layer id."},
+        {"name": "title", "type": "string", "required": False, "description": "Legend title."},
+        {"name": "labels", "type": "object", "required": False, "description": "Legend label overrides."},
+        {"name": "order", "type": "array", "required": False, "description": "Legend item order."},
+        {"name": "visible", "type": "boolean", "required": False, "description": "Whether this layer appears in legends."},
+    ],
+    returns="dict with updated legend spec",
+    examples=["Rename legend category labels for land use"],
+    tags=["map", "legend", "style"],
+    needs_context=True,
+)
+def update_legend_spec(
+    ctx: ToolContext,
+    layer_id: str,
+    title: Optional[str] = None,
+    labels: Any = None,
+    order: Any = None,
+    visible: Optional[bool] = None,
+) -> dict:
+    legend = {
+        "title": title,
+        "labels": _coerce_string_map(labels) if labels is not None else None,
+        "order": _coerce_string_list(order) if order is not None else None,
+        "visible": visible,
+    }
+    legend = {k: v for k, v in legend.items() if v is not None}
+    return run_async_from_sync(ctx.request("rpc.ui.map.update_legend_spec", {"layer_id": layer_id, "legend": legend}))
 
 
 # ──────────────────────────────────────────────────────────────────────

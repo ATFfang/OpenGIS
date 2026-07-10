@@ -119,8 +119,20 @@ const GraduatedSchema = z.object({
 const CategorizedSchema = z.object({
   field: z.string().min(1),
   colors: z.record(z.string()).optional(),
+  categories: z.array(z.string()).optional(),
   maxCategories: z.number().int().min(1).max(64).optional(),
   otherColor: z.string().optional(),
+});
+
+const NumericVisualVariableSchema = z.object({
+  field: z.string().min(1),
+  method: z.string().transform((v) => v.replace(/_/g, '-')).pipe(
+    z.enum(['quantile', 'equal-interval', 'jenks', 'manual']),
+  ).optional(),
+  classes: z.number().int().min(2).max(12).optional(),
+  breaks: z.array(z.number()).optional(),
+  values: z.array(z.number()).optional(),
+  range: z.tuple([z.number(), z.number()]).optional(),
 });
 
 const HeatmapSchema = z.object({
@@ -159,9 +171,17 @@ export const SetLayerRendererSchema = z.object({
   ]),
   graduated: GraduatedSchema.optional(),
   categorized: CategorizedSchema.optional(),
+  sizeVariable: NumericVisualVariableSchema.nullable().optional(),
+  opacityVariable: NumericVisualVariableSchema.nullable().optional(),
   heatmap: HeatmapSchema.optional(),
   cluster: ClusterSchema.optional(),
   extrusion: ExtrusionSchema.optional(),
+});
+
+export const UpdateVisualVariablesSchema = z.object({
+  layer_id: LayerIdSchema,
+  size_variable: NumericVisualVariableSchema.nullable().optional(),
+  opacity_variable: NumericVisualVariableSchema.nullable().optional(),
 });
 
 /**
@@ -201,6 +221,60 @@ export const SetLayerStyleSchema = z.object({
   style: LayerStyleSchema,
 });
 
+const LayerAttributeFilterSchema = z.object({
+  field: z.string().min(1),
+  op: z.enum(['=', '!=', '>', '<', '>=', '<=', 'contains', 'in']),
+  value: z.unknown().optional(),
+});
+
+export const LayerFilterSchema = z.object({
+  attribute: z.array(LayerAttributeFilterSchema).optional(),
+}).passthrough();
+
+export const SetLayerFilterSchema = z.object({
+  layer_id: LayerIdSchema,
+  filter: LayerFilterSchema.nullable().optional(),
+});
+
+export const SetLayerLabelSchema = z.object({
+  layer_id: LayerIdSchema,
+  field: z.string().min(1).optional(),
+  visible: z.boolean().optional(),
+  font_size: z.number().positive().optional(),
+  color: z.string().optional(),
+  halo_color: z.string().optional(),
+  halo_width: z.number().min(0).optional(),
+  offset: z.tuple([z.number(), z.number()]).optional(),
+  icon: z.string().optional(),
+});
+
+export const HighlightFeaturesSchema = z.object({
+  layer_id: LayerIdSchema,
+  filter: LayerFilterSchema.optional(),
+  name: z.string().optional(),
+  style: LayerStyleSchema.optional(),
+});
+
+export const SetLayerOrderSchema = z.object({
+  layer_id: LayerIdSchema,
+  position: z.enum(['top', 'bottom', 'above', 'below']),
+  target_layer_id: z.string().min(1).optional(),
+});
+
+export const LegendSpecSchema = z.object({
+  visible: z.boolean().optional(),
+  title: z.string().optional(),
+  labels: z.record(z.string()).optional(),
+  order: z.array(z.string()).optional(),
+});
+
+export const GetLegendSpecSchema = z.object({ layer_id: LayerIdSchema });
+
+export const UpdateLegendSpecSchema = z.object({
+  layer_id: LayerIdSchema,
+  legend: LegendSpecSchema,
+});
+
 export const SetLayerVisibilitySchema = z.object({
   layer_id: LayerIdSchema,
   visible: z.boolean(),
@@ -233,6 +307,8 @@ export const SetBasemapSchema = z.object({
 export const SetBasemapVisibilitySchema = z.object({
   visible: z.boolean(),
 });
+
+export const GetMapStateSchema = z.object({}).passthrough();
 
 export const ListLayersSchema = z.object({}).passthrough();
 

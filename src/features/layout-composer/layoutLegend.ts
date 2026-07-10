@@ -21,23 +21,41 @@ export function buildLegendSections(
   const grouped = element.props?.grouped !== false
   const selected = new Set(selectedLayerIds)
   return layers
-    .filter((layer) => selected.has(layer.id))
+    .filter((layer) => selected.has(layer.id) && layer.style.legend?.visible !== false)
     .map((layer) => ({
       layerId: layer.id,
-      title: layer.name,
+      title: layer.style.legend?.title || layer.name,
       showTitle: grouped || selectedLayerIds.length > 1,
       entries: buildLegendEntries(layer),
     }))
 }
 
 function buildLegendEntries(layer: MapLayerDefinition): Array<{ label: string; color: string }> {
+  const applyLegendSpec = (entries: Array<{ label: string; color: string }>) => {
+    const legend = layer.style.legend
+    if (!legend) return entries
+    let next = entries.map((entry) => ({
+      ...entry,
+      label: legend.labels?.[entry.label] ?? entry.label,
+    }))
+    if (legend.order?.length) {
+      const rank = new Map(legend.order.map((label, index) => [label, index]))
+      next = [...next].sort((a, b) => {
+        const ar = rank.get(a.label) ?? rank.get(entries.find((entry) => legend.labels?.[entry.label] === a.label)?.label ?? '') ?? Number.MAX_SAFE_INTEGER
+        const br = rank.get(b.label) ?? rank.get(entries.find((entry) => legend.labels?.[entry.label] === b.label)?.label ?? '') ?? Number.MAX_SAFE_INTEGER
+        return ar - br
+      })
+    }
+    return next
+  }
+
   if (layer.style.renderType === 'categorized') {
     const colors = getCategorizedCache(layer.id) ?? layer.style.categorized?.colors ?? {}
     const entries = Object.entries(colors).map(([label, color]) => ({
       label,
       color,
     }))
-    if (entries.length > 0) return entries
+    if (entries.length > 0) return applyLegendSpec(entries)
   }
 
   if (layer.style.renderType === 'graduated') {
@@ -45,14 +63,14 @@ function buildLegendEntries(layer: MapLayerDefinition): Array<{ label: string; c
     const breaks = cached?.breaks ?? layer.style.graduated?.breaks ?? []
     const palette = cached?.palette ?? layer.style.graduated?.palette ?? []
     if (breaks.length > 0 && palette.length > 0) {
-      return palette.map((color, index) => ({
+      return applyLegendSpec(palette.map((color, index) => ({
         color,
         label: graduatedLabel(index, breaks),
-      }))
+      })))
     }
   }
 
-  return [{ label: layer.name, color: layer.style.color || layer.style.strokeColor || '#64748b' }]
+  return applyLegendSpec([{ label: layer.name, color: layer.style.color || layer.style.strokeColor || '#64748b' }])
 }
 
 function graduatedLabel(index: number, breaks: number[]): string {

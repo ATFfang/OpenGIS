@@ -18,6 +18,8 @@ import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
 import { RunsPanel } from '@/features/runs/RunsPanel'
 import { ToolAndSkillPanel } from '@/features/tool-catalog/ToolAndSkillPanel'
 import { WorkersPanel } from '@/features/workers/WorkersPanel'
+import { OperationsPanel } from '@/features/operations/OperationsPanel'
+import { OperationEditorView } from '@/features/operations/OperationEditorView'
 import { DataPivotPanel } from '@/features/pivot/DataPivotPanel'
 import { LayoutComposerView } from '@/features/layout-composer/LayoutComposerView'
 import { captureCurrentMapSnapshot } from '@/features/layout-composer/mapSnapshot'
@@ -133,7 +135,7 @@ export function MainLayout() {
   }
 
   // Determine if sidebar content panel should be shown
-  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
+  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs' || activeSidebarTab === 'operations')
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
@@ -395,6 +397,8 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
       return <WorkflowsPanel />
     case 'runs':
       return <RunsPanel />
+    case 'operations':
+      return <OperationsPanel />
     case 'workers':
       return <WorkersPanel />
     case 'tools':
@@ -568,6 +572,10 @@ function CodeTabContent({ tab }: { tab: ViewTab }) {
   // ".flow.json" without going through the Workflows sidebar.
   if (lang === 'workflow') {
     return <WorkflowEditorView tab={tab} />
+  }
+
+  if (lang === 'operation') {
+    return <OperationEditorView tab={tab} />
   }
 
   const isPython = lang === 'python' || path.endsWith('.py')

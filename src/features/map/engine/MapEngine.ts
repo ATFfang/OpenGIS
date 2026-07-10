@@ -25,8 +25,10 @@ import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   getRenderer,
   type RendererContext,
+  renderLayerId,
   sourceIdFor,
 } from '../renderers'
+import { compileLayerFilter } from '../renderers/styleExpressions'
 
 /** 底图样式重新加载完成后的回调函数 */
 export type StyleReloadCallback = () => void
@@ -465,6 +467,8 @@ export class MapEngine {
     }
 
     renderer.attach(layer, ctx)
+    this.syncLabelLayer(layer)
+    this.applyLayerFilter(layer)
   }
 
   /**
@@ -558,6 +562,77 @@ export class MapEngine {
     const renderer = getRenderer(layer.style.renderType)
     if (!renderer) return
     renderer.update(layer, this.buildRendererContext())
+    this.syncLabelLayer(layer)
+    this.applyLayerFilter(layer)
+  }
+
+  private applyLayerFilter(layer: MapLayerDefinition): void {
+    if (!this.map) return
+    if (layer.style.renderType === 'cluster') return
+    const renderer = getRenderer(layer.style.renderType)
+    if (!renderer) return
+    const compiled = compileLayerFilter(layer.style.filter)
+    for (const renderId of renderer.listRenderLayerIds(layer)) {
+      if (this.map.getLayer(renderId)) {
+        this.map.setFilter(renderId, compiled as any)
+      }
+    }
+    const labelId = renderLayerId(layer.id, 'label')
+    if (this.map.getLayer(labelId)) {
+      this.map.setFilter(labelId, compiled as any)
+    }
+  }
+
+  private syncLabelLayer(layer: MapLayerDefinition): void {
+    if (!this.map || layer.data.kind !== 'vector') return
+    const labelId = renderLayerId(layer.id, 'label')
+    const label = layer.style.label
+    if (!label?.field) {
+      if (this.map.getLayer(labelId)) {
+        this.map.removeLayer(labelId)
+      }
+      this.managedLayerIds.delete(labelId)
+      this.renderLayerToDef.delete(labelId)
+      return
+    }
+
+    const sourceId = sourceIdFor(layer.id)
+    const visibility = layer.visible ? 'visible' : 'none'
+    const layout = {
+      visibility,
+      'text-field': ['to-string', ['get', label.field]],
+      'text-size': label.fontSize ?? 12,
+      'text-anchor': 'center',
+      'text-offset': label.offset ?? [0, 0],
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
+    } as any
+    const paint = {
+      'text-color': label.color ?? layer.style.color,
+      'text-opacity': layer.style.opacity ?? 1,
+      ...(label.haloColor ? { 'text-halo-color': label.haloColor } : {}),
+      ...(label.haloWidth != null ? { 'text-halo-width': label.haloWidth } : {}),
+    } as any
+
+    if (!this.map.getLayer(labelId)) {
+      this.map.addLayer({
+        id: labelId,
+        type: 'symbol',
+        source: sourceId,
+        layout,
+        paint,
+      } as any)
+      this.managedLayerIds.add(labelId)
+      this.renderLayerToDef.set(labelId, layer.id)
+      return
+    }
+
+    for (const [key, value] of Object.entries(layout)) {
+      this.map.setLayoutProperty(labelId, key, value)
+    }
+    for (const [key, value] of Object.entries(paint)) {
+      this.map.setPaintProperty(labelId, key, value)
+    }
   }
 
   /**

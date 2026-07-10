@@ -10,6 +10,7 @@ import { HandlerRegistry } from '../registry';
 import { listAllMethods, registerAllHandlers } from '../handlers/register';
 import type { JsonRpcRequest } from '@/types/protocol';
 import { useChatStore } from '@/stores/chatStore';
+import { useMapStore } from '@/stores/mapStore';
 
 function req(method: string, params: unknown = {}, id = 'r'): JsonRpcRequest {
   return { jsonrpc: '2.0', id, method, params };
@@ -19,13 +20,21 @@ describe('Handler registration', () => {
   it('registers expected method count', () => {
     const reg = new HandlerRegistry();
     const names = registerAllHandlers(reg);
-    expect(names.length).toBe(45);
+    expect(names.length).toBe(53);
     // 抽样检查关键 method 在册
     expect(names).toContain('rpc.ui.map.add_layer');
+    expect(names).toContain('rpc.ui.map.get_state');
     expect(names).toContain('rpc.ui.map.dynamic_layer_update');
     expect(names).toContain('rpc.ui.map.add_image_overlay');
     expect(names).toContain('rpc.ui.map.query_features');
     expect(names).toContain('rpc.ui.map.set_basemap_visibility');
+    expect(names).toContain('rpc.ui.map.set_layer_filter');
+    expect(names).toContain('rpc.ui.map.set_layer_label');
+    expect(names).toContain('rpc.ui.map.update_visual_variables');
+    expect(names).toContain('rpc.ui.map.highlight_features');
+    expect(names).toContain('rpc.ui.map.set_layer_order');
+    expect(names).toContain('rpc.ui.map.get_legend_spec');
+    expect(names).toContain('rpc.ui.map.update_legend_spec');
     expect(names).toContain('rpc.ui.chat.show_text');
     expect(names).toContain('rpc.ui.chat.show_image');
     expect(names).toContain('rpc.ui.ask.approve_code');
@@ -107,6 +116,106 @@ describe('Handler contract: invalid params → -32602 invalidParams', () => {
     const d = new Dispatcher({ registry: reg });
     const resp = await d.handleRequest(req(method, params));
     expect(resp).toMatchObject({ error: { code: -32602 } });
+  });
+});
+
+describe('rpc.ui.map read handlers', () => {
+  it('returns current map state for agent inspection', async () => {
+    useMapStore.setState({
+      layers: [],
+      basemapVisible: false,
+      labelsVisible: true,
+      viewState: {
+        center: [121.47, 31.23],
+        zoom: 10,
+        bearing: 3,
+        pitch: 20,
+      },
+    });
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const resp = await d.handleRequest(req('rpc.ui.map.get_state', {}));
+
+    expect(resp).toMatchObject({
+      result: {
+        basemap_visible: false,
+        labels_visible: true,
+        view_state: {
+          center: [121.47, 31.23],
+          zoom: 10,
+          bearing: 3,
+          pitch: 20,
+        },
+        layer_count: 0,
+        visible_layer_count: 0,
+      },
+    });
+  });
+
+  it('includes renderer style in list_layers summaries', async () => {
+    useMapStore.setState({
+      layers: [
+        {
+          id: 'poi',
+          name: 'POI',
+          sourceType: 'geojson',
+          visible: true,
+          style: {
+            renderType: 'circle',
+            color: '#ff0000',
+            opacity: 0.7,
+            radius: 6,
+          },
+          data: {
+            kind: 'vector',
+            geojson: {
+              type: 'FeatureCollection',
+              features: [],
+            },
+            geometryType: 'Point',
+            featureCount: 0,
+            bbox: { minX: 0, minY: 0, maxX: 1, maxY: 1 },
+            crs: 'EPSG:4326',
+            fields: [],
+          },
+          meta: {
+            fileName: 'poi.geojson',
+            extension: '.geojson',
+            sourceType: 'geojson',
+            fileSize: 10,
+          },
+          addedAt: 1,
+        } as any,
+      ],
+    });
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const resp = await d.handleRequest(req('rpc.ui.map.list_layers', {}));
+
+    expect(resp).toMatchObject({
+      result: {
+        count: 1,
+        layers: [
+          {
+            layer_id: 'poi',
+            style: {
+              render_type: 'circle',
+              color: '#ff0000',
+              opacity: 0.7,
+              radius: 6,
+            },
+            meta: {
+              extension: '.geojson',
+              file_name: 'poi.geojson',
+            },
+          },
+        ],
+      },
+    });
   });
 });
 

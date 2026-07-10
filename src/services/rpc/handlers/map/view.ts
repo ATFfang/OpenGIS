@@ -5,7 +5,7 @@ import { bboxToTuple } from '../_map_util';
 import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
 import { mapEngine } from '@/features/map/engine/MapEngine';
 import { BUILTIN_BASEMAPS } from '@/services/geo';
-import { FlyToSchema, SetBasemapSchema, SetBasemapVisibilitySchema, ZoomToBBoxSchema, ZoomToLayerSchema } from '../schemas';
+import { FlyToSchema, GetMapStateSchema, SetBasemapSchema, SetBasemapVisibilitySchema, ZoomToBBoxSchema, ZoomToLayerSchema } from '../schemas';
 
 // ─────────────────────────────────────────────────────────────────────
 // Basemap 别名表
@@ -28,6 +28,24 @@ function resolveBasemapId(raw: string): string {
 }
 
 export const viewHandlers: Record<string, RpcHandler> = {
+  'rpc.ui.map.get_state': async (params) => {
+    parseParams(GetMapStateSchema, params, 'rpc.ui.map.get_state');
+    await hydrateMapLayersForRpc();
+    const store = useMapStore.getState();
+    return {
+      basemap: {
+        id: store.basemap.id,
+        name: store.basemap.name,
+        type: store.basemap.type,
+      },
+      basemap_visible: store.basemapVisible,
+      labels_visible: store.labelsVisible,
+      view_state: store.viewState,
+      layer_count: store.layers.length,
+      visible_layer_count: store.layers.filter((layer) => layer.visible).length,
+    };
+  },
+
   'rpc.ui.map.zoom_to_layer': async (params) => {
     const parsed = parseParams(ZoomToLayerSchema, params, 'rpc.ui.map.zoom_to_layer');
     await hydrateMapLayersForRpc();

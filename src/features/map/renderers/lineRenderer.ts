@@ -8,6 +8,11 @@ import {
   renderLayerId,
   sourceIdFor,
 } from './types'
+import {
+  compileNumericVisualVariable,
+  hoverColorExpr,
+  hoverNumberExpr,
+} from './styleExpressions'
 
 export const lineRenderer: LayerRenderer = {
   renderType: 'line',
@@ -22,6 +27,13 @@ export const lineRenderer: LayerRenderer = {
     const sourceId = sourceIdFor(def.id)
     const lineId = renderLayerId(def.id, 'line')
     const visibility = def.visible ? 'visible' : 'none'
+    const width = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 2, {
+      defaultRange: [1, 8],
+    })
+    const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, def.style.strokeOpacity ?? def.style.opacity, {
+      defaultRange: [0.25, def.style.strokeOpacity ?? def.style.opacity],
+      clampRange: [0, 1],
+    })
 
     if (!map.getLayer(lineId)) {
       ctx.addRenderLayer({
@@ -30,19 +42,10 @@ export const lineRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'line-color': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            '#818cf8',
-            def.style.color,
-          ] as any,
-          'line-width': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            (def.style.strokeWidth ?? 2) + 3,
-            def.style.strokeWidth,
-          ] as any,
-          'line-opacity': def.style.strokeOpacity ?? def.style.opacity,
+          'line-color': hoverColorExpr(def.style.color, '#818cf8') as any,
+          'line-width': hoverNumberExpr(width as any, 3) as any,
+          'line-opacity': opacity as any,
+          ...(def.style.lineDasharray ? { 'line-dasharray': def.style.lineDasharray } : {}),
         },
       })
       ctx.registerRenderLayerId(def.id, lineId)
@@ -57,19 +60,17 @@ export const lineRenderer: LayerRenderer = {
   update(def, ctx) {
     const lineId = renderLayerId(def.id, 'line')
     if (ctx.map.getLayer(lineId)) {
-      ctx.map.setPaintProperty(lineId, 'line-color', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        '#818cf8',
-        def.style.color,
-      ] as any)
-      ctx.map.setPaintProperty(lineId, 'line-width', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        (def.style.strokeWidth ?? 2) + 3,
-        def.style.strokeWidth,
-      ] as any)
-      ctx.map.setPaintProperty(lineId, 'line-opacity', def.style.strokeOpacity ?? def.style.opacity)
+      const width = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 2, {
+        defaultRange: [1, 8],
+      })
+      const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, def.style.strokeOpacity ?? def.style.opacity, {
+        defaultRange: [0.25, def.style.strokeOpacity ?? def.style.opacity],
+        clampRange: [0, 1],
+      })
+      ctx.map.setPaintProperty(lineId, 'line-color', hoverColorExpr(def.style.color, '#818cf8') as any)
+      ctx.map.setPaintProperty(lineId, 'line-width', hoverNumberExpr(width as any, 3) as any)
+      ctx.map.setPaintProperty(lineId, 'line-opacity', opacity as any)
+      ctx.map.setPaintProperty(lineId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
     }
   },
 

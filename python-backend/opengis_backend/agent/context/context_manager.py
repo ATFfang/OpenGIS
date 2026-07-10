@@ -24,6 +24,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from opengis_backend.agent.context.file_reread import build_reread_message, track_recent_file_edit
+from opengis_backend.agent.context.provider_projector import (
+    ProviderContextProjector,
+    ProviderProjectionConfig,
+)
 from opengis_backend.agent.context.summarizer import llm_summarize, simple_summarize
 from opengis_backend.agent.context.token_utils import (
     CHARS_PER_TOKEN,
@@ -86,6 +90,19 @@ class ContextManager:
     # single giant output (e.g. an accidental full-DataFrame dump) can
     # otherwise blow up the live window on its own. Set to 0 to disable.
     max_single_result_tokens: int = 6000
+
+    # Provider-context projection keeps raw history intact on disk while
+    # sending a smaller, task-useful version to the model. The newest messages
+    # stay verbatim so the model can repair the immediately previous tool/code
+    # step without losing details.
+    provider_raw_recent: int = 8
+    collapse_old_provider_messages: bool = True
+    max_provider_digest_chars: int = 6000
+    max_projected_tool_result_chars: int = 4000
+    max_projected_tool_call_arg_chars: int = 1400
+    max_projected_execute_code_chars: int = 900
+    recent_user_turns_for_provider: int = 4
+    max_recent_user_chars_for_provider: int = 800
 
     # ── State ──────────────────────────────────────────────────────
 
@@ -278,7 +295,7 @@ class ContextManager:
         user_instructions: str | None = None,
         *,
         exclude_workflow_context: bool = False,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Build the messages list for an LLM call.
 
         Structure:
@@ -290,7 +307,7 @@ class ContextManager:
         Internal-only fields (anything starting with ``_``, e.g. ``_meta``
         used by tool-result pruning) are stripped before returning.
         """
-        result: list[dict[str, str]] = [
+        result: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         # Cache system prompt token count for should_compress().
@@ -321,13 +338,28 @@ class ContextManager:
                 ),
             })
 
-        # Append messages from cutoff onward (the "live" window).
-        for msg in self.messages[self._summary_cutoff:]:
-            if exclude_workflow_context and self._is_workflow_context_message(msg):
-                continue
-            result.append({
-                k: v for k, v in msg.items() if not k.startswith("_")
-            })
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(
+                raw_recent=self.provider_raw_recent,
+                collapse_old_messages=self.collapse_old_provider_messages,
+                max_digest_chars=self.max_provider_digest_chars,
+                max_tool_result_chars=self.max_projected_tool_result_chars,
+                max_tool_call_arg_chars=self.max_projected_tool_call_arg_chars,
+                max_execute_code_chars=self.max_projected_execute_code_chars,
+                recent_user_turns=self.recent_user_turns_for_provider,
+                max_recent_user_chars=self.max_recent_user_chars_for_provider,
+            ),
+            is_tool_result=self._is_tool_result,
+            make_pruned_placeholder=self._make_pruned_placeholder,
+            is_workflow_context_message=self._is_workflow_context_message,
+        )
+        result.extend(
+            projector.project_live_messages(
+                self.messages,
+                summary_cutoff=self._summary_cutoff,
+                exclude_workflow_context=exclude_workflow_context,
+            )
+        )
 
         return result
 

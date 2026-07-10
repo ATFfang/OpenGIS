@@ -34,5 +34,9 @@ export type {
   ClassificationMethod,
   GraduatedClassification,
   CategorizedClassification,
+  NumericVisualVariable,
+  LayerFilterSpec,
+  LayerAttributeFilter,
+  LegendSpec,
 } from './types'
 export { BUILTIN_BASEMAPS } from './types'

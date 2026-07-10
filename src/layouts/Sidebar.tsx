@@ -10,6 +10,7 @@ import {
   LayoutTemplate,
   Monitor,
   Activity,
+  PackageOpen,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 
@@ -43,6 +44,7 @@ export function Sidebar({
     { id: 'layers', icon: Layers, label: t.sidebar.layers },
     { id: 'canvas', icon: LayoutTemplate, label: t.sidebar.canvas },
     { id: 'workers', icon: Activity, label: t.sidebar.workers },
+    { id: 'operations', icon: PackageOpen, label: t.sidebar.operations },
     { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
     { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
     { id: 'tools', icon: Wrench, label: t.sidebar.tools },

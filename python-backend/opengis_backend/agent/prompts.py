@@ -60,6 +60,18 @@ Just reply with text.
    a clear semantic `script_name` and brief `description`. Workflow runs
    persist all Python code automatically.
 
+8a. **Reuse project Operations before rebuilding complex code.** For
+   non-trivial, repeatable GIS/modeling tasks (spatial regression,
+   clustering, hotspot analysis, accessibility, report generation,
+   reusable cartography), call `list_operations` / `get_operation` before
+   writing new code. If a matching operation exists, validate its input
+   contract and call `run_operation`. If an existing operation fails because
+   its code, schema, or dependencies are stale, inspect it with
+   `get_operation(include_code=true)` and repair it with `edit_operation`
+   before falling back to new one-off code. After a complex script succeeds
+   and appears broadly reusable, ask whether it should be promoted with
+   `promote_script_to_operation` or packaged with `create_operation`.
+
 9. **Install missing Python packages before changing approach.**
    `execute_code` automatically detects and installs missing imported
    packages when permission allows it. If code needs a reasonable package

@@ -21,6 +21,7 @@ from opengis_backend.agent.session.queue import AgentQueue, AgentQueueItem, Agen
 from opengis_backend.agent.session.session import AgentInboxItem, InboxStatus, SessionStore
 from opengis_backend.agent.workflow.workflow_model import WorkflowDocument
 from opengis_backend.agent.workflow.workflow_store import WorkflowDocumentStore
+from opengis_backend.operations import OperationStore
 from opengis_backend.runtime.config import settings
 from opengis_backend.runtime.constants import (  # noqa: E402 module-level import
     CLEANUP_FUTURE_TIMEOUT,
@@ -260,6 +261,9 @@ class RpcHandler:
             "rpc.worker.restart": self._handle_worker_restart,
             "rpc.worker.pause": self._handle_worker_pause,
             "rpc.worker.delete": self._handle_worker_delete,
+            "rpc.operations.list": self._handle_operations_list,
+            "rpc.operations.get": self._handle_operations_get,
+            "rpc.operations.run": self._handle_operations_run,
             # chat.* channel: long-running conversation turn (streams via notifications)
             "chat.user_message": self._handle_agent_chat,
             # debug channel: runtime log level control
@@ -1305,6 +1309,50 @@ class RpcHandler:
             "events": ra.read_events(),
             "message_parts": ra.read_message_parts(),
         }
+
+    def _operation_store(self, params: dict) -> OperationStore:
+        workspace = params.get("workspace_path")
+        if not workspace:
+            raise ValueError("Missing required parameter: workspace_path")
+        return OperationStore.from_workspace(workspace)
+
+    async def _handle_operations_list(self, params: dict) -> Any:
+        store = self._operation_store(params)
+        query = str(params.get("query") or "")
+        limit = int(params.get("limit") or 50)
+        return {
+            "status": "ok",
+            "operation_root": str(store.root),
+            "operations": store.list(query=query, limit=limit),
+        }
+
+    async def _handle_operations_get(self, params: dict) -> Any:
+        operation_id = str(params.get("operation_id") or "").strip()
+        if not operation_id:
+            raise ValueError("Missing required parameter: operation_id")
+        store = self._operation_store(params)
+        operation = store.load(
+            operation_id,
+            include_readme=bool(params.get("include_readme", True)),
+            include_code=bool(params.get("include_code", False)),
+            max_code_chars=int(params.get("max_code_chars") or 40000),
+        )
+        return {"status": "ok", "operation": operation}
+
+    async def _handle_operations_run(self, params: dict) -> Any:
+        operation_id = str(params.get("operation_id") or "").strip()
+        if not operation_id:
+            raise ValueError("Missing required parameter: operation_id")
+        run_params = params.get("params") or {}
+        if not isinstance(run_params, dict):
+            raise ValueError("params must be a JSON object")
+        timeout_seconds = int(params.get("timeout_seconds") or 600)
+        record = self._operation_store(params).run(
+            operation_id,
+            run_params,
+            timeout_seconds=timeout_seconds,
+        )
+        return {"status": "ok", "success": True, **record}
 
     async def _handle_agent_profiles_list(self, params: dict) -> Any:
         """List built-in plus workspace-defined agent profiles."""

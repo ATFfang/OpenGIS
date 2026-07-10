@@ -48,17 +48,17 @@ const SAMPLE_FC = {
     {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [116.4, 39.9] },
-      properties: { name: '天安门' },
+      properties: { name: '天安门', score: 1, comment_count: 10, rating: 4.6 },
     },
     {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [116.5, 40.0] },
-      properties: { name: '鸟巢' },
+      properties: { name: '鸟巢', score: 2, comment_count: 30, rating: 4.8 },
     },
     {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [116.3, 39.95] },
-      properties: { name: '颐和园' },
+      properties: { name: '颐和园', score: 3, comment_count: 20, rating: 4.7 },
     },
   ],
 } as const;
@@ -675,6 +675,23 @@ describe('rpc.ui.map.set_layer_style', () => {
     expect(layer.style.strokeOpacity).toBe(0.55);
   });
 
+  it('maps line-dasharray into layer style', async () => {
+    const d = makeDispatcher();
+    await addL(d, 'L1');
+
+    await d.handleRequest(
+      req('rpc.ui.map.set_layer_style', {
+        layer_id: 'L1',
+        style: {
+          type: 'line',
+          paint: { 'line-dasharray': [2, 3] },
+        },
+      }),
+    );
+
+    expect(useMapStore.getState().getLayerById('L1')!.style.lineDasharray).toEqual([2, 3]);
+  });
+
   it('unknown layer_id → -32602', async () => {
     const d = makeDispatcher();
     const resp = await d.handleRequest(
@@ -684,6 +701,278 @@ describe('rpc.ui.map.set_layer_style', () => {
       }),
     );
     expect(resp).toMatchObject({ error: { code: -32602 } });
+  });
+});
+
+describe('rpc.ui.map semantic layer styling', () => {
+  beforeEach(resetStore);
+
+  it('stores categorized style with explicit categories and colors', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'pois',
+        renderer: 'categorized',
+        categorized: {
+          field: 'name',
+          maxCategories: 3,
+          categories: ['鸟巢', '天安门'],
+          colors: { 鸟巢: '#22c55e', 天安门: '#ef4444' },
+          otherColor: '#64748b',
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({ result: { layer_id: 'pois', renderer: 'categorized' } });
+    expect(useMapStore.getState().getLayerById('pois')!.style).toMatchObject({
+      renderType: 'categorized',
+      categorized: {
+        field: 'name',
+        maxCategories: 3,
+        categories: ['鸟巢', '天安门'],
+        colors: { 鸟巢: '#22c55e', 天安门: '#ef4444' },
+        otherColor: '#64748b',
+      },
+    });
+  });
+
+  it('stores graduated manual breaks and palette', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'pois',
+        renderer: 'graduated',
+        graduated: {
+          field: 'score',
+          method: 'manual',
+          classes: 4,
+          breaks: [1, 2, 3],
+          palette: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'],
+        },
+      }),
+    );
+
+    expect(useMapStore.getState().getLayerById('pois')!.style.graduated).toEqual({
+      field: 'score',
+      method: 'manual',
+      classes: 4,
+      breaks: [1, 2, 3],
+      palette: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'],
+    });
+  });
+
+  it('normalizes semantic color names and rejects invalid classification fields', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    const categorized = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'pois',
+        renderer: 'categorized',
+        categorized: {
+          field: 'name',
+          colors: { 天安门: '紫色', 鸟巢: 'purple' },
+          categories: ['天安门', '鸟巢'],
+          otherColor: '灰色',
+        },
+      }),
+    );
+
+    expect(categorized).toMatchObject({
+      result: {
+        categorized: {
+          colors: { 天安门: '#8b5cf6', 鸟巢: '#8b5cf6' },
+          otherColor: '#6b7280',
+        },
+      },
+    });
+    expect(useMapStore.getState().getLayerById('pois')!.style.categorized?.colors).toEqual({
+      天安门: '#8b5cf6',
+      鸟巢: '#8b5cf6',
+    });
+
+    const badField = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'pois',
+        renderer: 'graduated',
+        graduated: {
+          field: 'missing_score',
+          method: 'quantile',
+          classes: 5,
+          palette: ['紫色'],
+        },
+      }),
+    );
+    expect(badField).toMatchObject({ error: { code: -32602 } });
+  });
+
+  it('stores display filters and labels without changing renderer', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    await d.handleRequest(
+      req('rpc.ui.map.set_layer_filter', {
+        layer_id: 'pois',
+        filter: { attribute: [{ field: 'name', op: 'in', value: ['鸟巢', '天安门'] }] },
+      }),
+    );
+    await d.handleRequest(
+      req('rpc.ui.map.set_layer_label', {
+        layer_id: 'pois',
+        field: 'name',
+        font_size: 13,
+        color: '#111827',
+        halo_color: '#ffffff',
+        halo_width: 2,
+        offset: [0, 1],
+      }),
+    );
+
+    const style = useMapStore.getState().getLayerById('pois')!.style;
+    expect(style.renderType).toBe('circle');
+    expect(style.filter).toEqual({
+      attribute: [{ field: 'name', op: 'in', value: ['鸟巢', '天安门'] }],
+    });
+    expect(style.label).toEqual({
+      field: 'name',
+      fontSize: 13,
+      color: '#111827',
+      haloColor: '#ffffff',
+      haloWidth: 2,
+      offset: [0, 1],
+    });
+  });
+
+  it('stores field-driven visual variables and exposes them in layer summaries', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    const updated = await d.handleRequest(
+      req('rpc.ui.map.update_visual_variables', {
+        layer_id: 'pois',
+        size_variable: {
+          field: 'comment_count',
+          method: 'equal_interval',
+          classes: 4,
+          range: [4, 18],
+        },
+        opacity_variable: {
+          field: 'rating',
+          method: 'quantile',
+          classes: 5,
+          values: [0.25, 0.4, 0.55, 0.7, 0.9],
+        },
+      }),
+    );
+
+    expect(updated).toMatchObject({
+      result: {
+        layer_id: 'pois',
+        size_variable: {
+          field: 'comment_count',
+          method: 'equal-interval',
+          classes: 4,
+          range: [4, 18],
+        },
+        opacity_variable: {
+          field: 'rating',
+          method: 'quantile',
+          classes: 5,
+          values: [0.25, 0.4, 0.55, 0.7, 0.9],
+        },
+      },
+    });
+
+    const listed = await d.handleRequest(req('rpc.ui.map.list_layers', {}));
+    const layer = (listed as { result: { layers: Array<any> } }).result.layers[0];
+    expect(layer.style.size_variable).toMatchObject({ field: 'comment_count', range: [4, 18] });
+    expect(layer.style.opacity_variable).toMatchObject({ field: 'rating', classes: 5 });
+
+    await d.handleRequest(
+      req('rpc.ui.map.update_visual_variables', {
+        layer_id: 'pois',
+        size_variable: null,
+      }),
+    );
+    expect(useMapStore.getState().getLayerById('pois')!.style.sizeVariable).toBeUndefined();
+  });
+
+  it('creates and clears highlight overlay layers from filters', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'pois');
+
+    const highlighted = await d.handleRequest(
+      req('rpc.ui.map.highlight_features', {
+        layer_id: 'pois',
+        filter: { attribute: [{ field: 'name', op: 'contains', value: '天' }] },
+        name: 'matched pois',
+      }),
+    );
+
+    expect(highlighted).toMatchObject({
+      result: {
+        layer_id: 'pois',
+        highlight_layer_id: 'highlight_pois',
+        feature_count: 1,
+      },
+    });
+    expect(useMapStore.getState().getLayerById('highlight_pois')?.meta.dynamic).toMatchObject({
+      sourceLayerId: 'pois',
+      highlight: true,
+    });
+
+    await d.handleRequest(
+      req('rpc.ui.map.highlight_features', {
+        layer_id: 'pois',
+        filter: { attribute: [{ field: 'name', op: '=', value: '不存在' }] },
+      }),
+    );
+    expect(useMapStore.getState().getLayerById('highlight_pois')).toBeUndefined();
+  });
+
+  it('moves layers and stores legend metadata', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'bottom');
+    await seedLayer(d, 'middle');
+    await seedLayer(d, 'top');
+
+    const moved = await d.handleRequest(
+      req('rpc.ui.map.set_layer_order', {
+        layer_id: 'bottom',
+        position: 'above',
+        target_layer_id: 'top',
+      }),
+    );
+    expect(moved).toMatchObject({ result: { layer_id: 'bottom', from_index: 0, to_index: 2 } });
+    expect(useMapStore.getState().layers.map((layer) => layer.id)).toEqual(['middle', 'top', 'bottom']);
+
+    await d.handleRequest(
+      req('rpc.ui.map.update_legend_spec', {
+        layer_id: 'bottom',
+        legend: {
+          title: 'POI 类型',
+          labels: { cafe: '咖啡', tea: '茶饮' },
+          order: ['tea', 'cafe'],
+          visible: true,
+        },
+      }),
+    );
+    const legend = await d.handleRequest(req('rpc.ui.map.get_legend_spec', { layer_id: 'bottom' }));
+    expect(legend).toMatchObject({
+      result: {
+        layer_id: 'bottom',
+        legend: {
+          title: 'POI 类型',
+          labels: { cafe: '咖啡', tea: '茶饮' },
+          order: ['tea', 'cafe'],
+          visible: true,
+        },
+      },
+    });
   });
 });
 

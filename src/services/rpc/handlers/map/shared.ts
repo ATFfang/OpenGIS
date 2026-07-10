@@ -144,6 +144,13 @@ export function applyPaintToLayerStyle(
     'circle-stroke-opacity',
   ]);
   if (strokeOpacity !== null) style.strokeOpacity = strokeOpacity;
+  const dash = paint['line-dasharray'] ?? paint['stroke-dasharray'];
+  if (Array.isArray(dash)) {
+    const parsed = dash
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    if (parsed.length > 0) style.lineDasharray = parsed;
+  }
   const radius = firstDefinedNumber(paint, ['circle-radius']);
   if (radius !== null) style.radius = radius;
 }
@@ -201,6 +208,35 @@ export function summarizeLayer(layer: MapLayerDefinition) {
     geometry_type: vector ? vector.geometryType : null,
     crs: layer.data.crs,
     fields: vector ? vector.fields.map((f) => ({ name: f.name, type: f.type })) : [],
+    style: {
+      render_type: layer.style.renderType,
+      color: layer.style.color,
+      opacity: layer.style.opacity,
+      stroke_color: layer.style.strokeColor,
+      stroke_width: layer.style.strokeWidth,
+      stroke_opacity: layer.style.strokeOpacity,
+      line_dasharray: layer.style.lineDasharray ?? null,
+      fill_opacity: layer.style.fillOpacity,
+      radius: layer.style.radius,
+      size_variable: layer.style.sizeVariable ?? null,
+      opacity_variable: layer.style.opacityVariable ?? null,
+      label: layer.style.label ?? null,
+      icon: layer.style.icon ?? null,
+      filter: layer.style.filter ?? null,
+      legend: layer.style.legend ?? null,
+      categorized: layer.style.categorized ?? null,
+      graduated: layer.style.graduated ?? null,
+      heatmap: layer.style.heatmap ?? null,
+      cluster: layer.style.cluster ?? null,
+      extrusion: layer.style.extrusion ?? null,
+    },
+    meta: {
+      source_type: layer.meta?.sourceType ?? layer.sourceType,
+      extension: layer.meta?.extension ?? null,
+      file_name: layer.meta?.fileName ?? null,
+      file_size: layer.meta?.fileSize ?? null,
+      dynamic: Boolean(layer.meta?.dynamic),
+    },
     sampled: vector ? Boolean(vector.sampled) : false,
     sample_feature_count: vector?.sampleFeatureCount ?? null,
     full_data_available: vector ? !vector.sampled || hasVectorGeoJSON(vector.dataHandle) : false,
@@ -210,7 +246,7 @@ export function summarizeLayer(layer: MapLayerDefinition) {
 
 // ── query_features 过滤原语 ────────────────────────────────────────
 
-export type AttrFilter = { field: string; op: '=' | '!=' | '>' | '<' | 'contains'; value?: unknown };
+export type AttrFilter = { field: string; op: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'contains' | 'in'; value?: unknown };
 
 export function matchesAttributes(feature: GeoJSONFeature, filters: AttrFilter[]): boolean {
   if (filters.length === 0) return true;
@@ -235,11 +271,22 @@ export function matchesAttributes(feature: GeoJSONFeature, filters: AttrFilter[]
           if (Number(v) >= Number(f.value) || !Number.isFinite(Number(v))) return false;
         }
         break;
+      case '>=':
+        if (Number(v) < Number(f.value) || !Number.isFinite(Number(v))) return false;
+        break;
+      case '<=':
+        if (Number(v) > Number(f.value) || !Number.isFinite(Number(v))) return false;
+        break;
       case 'contains':
         if (typeof v !== 'string' || typeof f.value !== 'string' || !v.includes(f.value)) {
           return false;
         }
         break;
+      case 'in': {
+        const values = Array.isArray(f.value) ? f.value.map(String) : [String(f.value)];
+        if (!values.includes(String(v))) return false;
+        break;
+      }
     }
   }
   return true;

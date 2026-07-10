@@ -37,6 +37,12 @@ ALWAYS_VISIBLE_TOOLS = {
     "query_features",
     "list_scripts",
     "read_script",
+    "list_operations",
+    "get_operation",
+    "run_operation",
+    "create_operation",
+    "edit_operation",
+    "promote_script_to_operation",
     "update_plan",
     "load_skill",
 }
@@ -123,9 +129,9 @@ def format_active_tool_prompt(materialization: ToolMaterialization | None) -> st
         f"{len(names)}/{materialization.total_count} tools.\n"
         "Only these function tools are available to the selected agent profile:\n"
         + ", ".join(names)
-        + "\nIf a required capability is missing from this list, it is outside the "
-        "current agent profile. Explain the missing capability briefly instead of "
-        "inventing another route."
+        + "\nIf a required capability is missing from this list, it may be outside "
+        "the current agent profile or not materialized for this turn. Explain the "
+        "missing capability briefly instead of inventing another route."
     )
 
 
