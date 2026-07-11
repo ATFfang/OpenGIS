@@ -707,6 +707,21 @@ function ClassifiedStyleSummary({
         </span>
       </div>
 
+      <div className="flex flex-wrap gap-1 mb-2">
+        {style.sizeVariable?.field && (
+          <StyleStateChip label="大小" value={style.sizeVariable.field} />
+        )}
+        {style.opacityVariable?.field && (
+          <StyleStateChip label="透明度" value={style.opacityVariable.field} />
+        )}
+        {style.sortVariable?.field && (
+          <StyleStateChip
+            label="顺序"
+            value={`${style.sortVariable.field} ${style.sortVariable.order === 'ascending' ? '低值在上' : '高值在上'}`}
+          />
+        )}
+      </div>
+
       {/* Compact legend preview (max 6 items, then "...more") */}
       {legendItems.length > 0 && (
         <div className="space-y-0.5 mb-2">
@@ -835,6 +850,18 @@ function ClassifiedStyleSummary({
         </button>
       </div>
     </div>
+  )
+}
+
+function StyleStateChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-1 rounded bg-bg-secondary px-1.5 py-0.5 text-[10px] leading-4 text-text-muted border-[0.5px] border-border/25"
+      title={`${label}: ${value}`}
+    >
+      <span className="shrink-0 text-text-muted/70">{label}</span>
+      <span className="truncate text-text-secondary">{value}</span>
+    </span>
   )
 }
 
@@ -972,6 +999,23 @@ function StylePanel({
         <Palette className="w-3 h-3" />
         <span>{t.layers.style}</span>
       </div>
+
+      {(style.sizeVariable?.field || style.opacityVariable?.field || style.sortVariable?.field) && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {style.sizeVariable?.field && (
+            <StyleStateChip label="大小" value={style.sizeVariable.field} />
+          )}
+          {style.opacityVariable?.field && (
+            <StyleStateChip label="透明度" value={style.opacityVariable.field} />
+          )}
+          {style.sortVariable?.field && (
+            <StyleStateChip
+              label="顺序"
+              value={`${style.sortVariable.field} ${style.sortVariable.order === 'ascending' ? '低值在上' : '高值在上'}`}
+            />
+          )}
+        </div>
+      )}
 
       {/* Main color (fill for polygons/points, line for polylines) */}
       {isRaster && (
@@ -1135,11 +1179,11 @@ function RasterStyleEditor({
   disabled: boolean
   onApply: (raster: RasterStyleSettings) => void
 }) {
-  const [draft, setDraft] = useState<RasterStyleSettings>(() => normalizeRasterDraft(rasterStyle))
+  const [draft, setDraft] = useState<RasterStyleSettings>(() => normalizeRasterDraft(rasterStyle, layer))
 
   useEffect(() => {
-    setDraft(normalizeRasterDraft(rasterStyle))
-  }, [rasterStyle])
+    setDraft(normalizeRasterDraft(rasterStyle, layer))
+  }, [layer, rasterStyle])
 
   const bandCount = layer.data.kind === 'raster' ? layer.data.bandCount : 1
   const isCustom = draft.ramp === 'custom'
@@ -1149,14 +1193,14 @@ function RasterStyleEditor({
   const stats = layer.data.kind === 'raster' ? layer.data.bandStats?.[bandIndex] : undefined
 
   const commit = (patch: RasterStyleSettings) => {
-    const next = normalizeRasterDraft({ ...draft, ...patch })
+    const next = normalizeRasterDraft({ ...draft, ...patch }, layer)
     setDraft(next)
     onApply(next)
   }
 
   const setStop = (index: number, patch: Partial<RasterColorStop>) => {
     const nextStops = stops.map((stop, i) => i === index ? { ...stop, ...patch } : stop)
-    setDraft({ ...draft, ramp: 'custom', stops: sortStops(nextStops) })
+    setDraft({ ...draft, ramp: 'custom', stops: sortStops(nextStops), stopsUnit: 'normalized' })
   }
 
   return (
@@ -1171,7 +1215,8 @@ function RasterStyleEditor({
               ...draft,
               ramp,
               stops: ramp === 'custom' ? stops : undefined,
-            })
+              stopsUnit: ramp === 'custom' ? 'normalized' : undefined,
+            }, layer)
             setDraft(next)
             onApply(next)
           }}
@@ -1245,7 +1290,7 @@ function RasterStyleEditor({
                   ...stops,
                   { value: 0.5, color: '#ffffff', opacity: 1 },
                 ])
-                setDraft({ ...draft, ramp: 'custom', stops: nextStops })
+                setDraft({ ...draft, ramp: 'custom', stops: nextStops, stopsUnit: 'normalized' })
               }}
               className="px-1.5 py-0.5 rounded text-2xs text-accent-primary hover:bg-accent-primary/10 disabled:opacity-40"
             >
@@ -1280,7 +1325,7 @@ function RasterStyleEditor({
               />
               <button
                 disabled={disabled || stops.length <= 2}
-                onClick={() => setDraft({ ...draft, ramp: 'custom', stops: stops.filter((_, i) => i !== index) })}
+                onClick={() => setDraft({ ...draft, ramp: 'custom', stops: stops.filter((_, i) => i !== index), stopsUnit: 'normalized' })}
                 className="w-5 h-5 rounded text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 disabled:opacity-30"
               >
                 ×
@@ -1289,7 +1334,7 @@ function RasterStyleEditor({
           ))}
           <button
             disabled={disabled}
-            onClick={() => onApply(normalizeRasterDraft({ ...draft, ramp: 'custom', stops }))}
+            onClick={() => onApply(normalizeRasterDraft({ ...draft, ramp: 'custom', stops, stopsUnit: 'normalized' }, layer))}
             className="w-full rounded bg-accent-primary/10 hover:bg-accent-primary/20 text-accent-primary text-2xs font-medium py-1 disabled:opacity-40"
           >
             应用自定义色带
@@ -1342,23 +1387,42 @@ function NumberField({
   )
 }
 
-function normalizeRasterDraft(style: RasterStyleSettings): RasterStyleSettings {
+function normalizeRasterDraft(style: RasterStyleSettings, layer?: MapLayerDefinition): RasterStyleSettings {
   const ramp = style.ramp ?? (style.stops?.length ? 'custom' : 'viridis')
+  const stretch = layer ? rasterStyleStretch(style, layer) : undefined
   return {
     ...style,
     ramp,
     band: Math.max(1, Math.round(style.band ?? 1)),
-    stops: ramp === 'custom' ? normalizeStops(style.stops) : style.stops,
+    stops: ramp === 'custom' ? normalizeStops(style.stops, style.stopsUnit, stretch) : style.stops,
+    stopsUnit: ramp === 'custom' ? 'normalized' : undefined,
   }
 }
 
-function normalizeStops(stops?: RasterColorStop[]): RasterColorStop[] {
+function normalizeStops(
+  stops?: RasterColorStop[],
+  stopsUnit?: RasterStyleSettings['stopsUnit'],
+  stretch?: { min: number; max: number },
+): RasterColorStop[] {
   const source = stops && stops.length >= 2 ? stops : DEFAULT_CUSTOM_STOPS
+  const range = stretch ? stretch.max - stretch.min || 1 : 1
+  const useSourceValues = stopsUnit === 'source'
   return sortStops(source.map((stop) => ({
-    value: clamp01(Number(stop.value)),
+    value: clamp01(useSourceValues && stretch ? (Number(stop.value) - stretch.min) / range : Number(stop.value)),
     color: normaliseHex(stop.color),
     opacity: clamp01(stop.opacity ?? 1),
   })))
+}
+
+function rasterStyleStretch(style: RasterStyleSettings, layer: MapLayerDefinition): { min: number; max: number } | undefined {
+  if (layer.data.kind !== 'raster') return undefined
+  const bandIndex = Math.max(0, Math.min((style.band ?? 1) - 1, (layer.data.bandStats?.length ?? 1) - 1))
+  const stats = layer.data.bandStats?.[bandIndex]
+  const min = style.min ?? stats?.p2 ?? stats?.min
+  const max = style.max ?? stats?.p98 ?? stats?.max
+  return typeof min === 'number' && typeof max === 'number' && Number.isFinite(min) && Number.isFinite(max) && min !== max
+    ? { min, max }
+    : undefined
 }
 
 function sortStops(stops: RasterColorStop[]): RasterColorStop[] {

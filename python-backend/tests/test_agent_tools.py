@@ -48,7 +48,9 @@ from opengis_backend.tools.builtin.web_tools import webfetch as webfetch_tool
 from opengis_backend.tools.builtin.write_file_tool import write_file as write_file_tool
 from opengis_backend.tools.builtin.script_tools import list_scripts as list_scripts_tool
 from opengis_backend.tools.builtin.script_tools import read_script as read_script_tool
+from opengis_backend.tools.builtin.worker_tools import start_dynamic_map_worker as start_dynamic_map_worker_tool
 from opengis_backend.agent.factory_common import compose_system_prompt
+from opengis_backend.agent.open_gis_agent import _ensure_required_tool_groups
 from opengis_backend.agent.tools import filter_agent_tools
 from opengis_backend.agent.governance.profile import AgentProfile
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas, validate_execute_code_payload
@@ -59,7 +61,7 @@ from opengis_backend.integrations.osm.overpass import _normalize_overpass_query
 from opengis_backend.integrations.osm.tools import osm_call as osm_call_tool
 from opengis_backend.integrations.datasource.tools import datasource_call as datasource_call_tool
 from opengis_backend.runs.archive import RunArchive
-from opengis_backend.worker.manager import ResidentWorkerManager
+from opengis_backend.worker.manager import ResidentWorkerManager, get_worker_manager
 
 read_file = read_file_tool.__wrapped__
 edit_file = edit_file_tool.__wrapped__
@@ -67,6 +69,7 @@ write_file = write_file_tool.__wrapped__
 webfetch = webfetch_tool.__wrapped__
 list_scripts = list_scripts_tool.__wrapped__
 read_script = read_script_tool.__wrapped__
+start_dynamic_map_worker = start_dynamic_map_worker_tool.__wrapped__
 set_basemap = set_basemap_tool.__wrapped__
 get_map_state = get_map_state_tool.__wrapped__
 get_raster_info = get_raster_info_tool.__wrapped__
@@ -312,7 +315,7 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
 
         self.assertEqual([item.schema.name for item in filtered], ["list_layers"])
 
-    def test_default_build_profile_excludes_orchestration_tool_groups(self) -> None:
+    def test_default_build_profile_includes_worker_but_excludes_orchestration_tool_groups(self) -> None:
         profile = AgentProfile.gis_build(max_steps=4)
         records = [
             SimpleNamespace(schema=SimpleNamespace(name="execute_code", group="core")),
@@ -330,8 +333,13 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
 
         self.assertEqual(
             [item.schema.name for item in selected],
-            ["execute_code", "osm_call"],
+            ["execute_code", "osm_call", "start_worker"],
         )
+
+    def test_worker_mode_forces_worker_group_when_groups_are_explicit(self) -> None:
+        groups = _ensure_required_tool_groups("用 worker 实时刷新 OpenSky 航班轨迹", ["core", "datasource"])
+
+        self.assertEqual(groups, ["core", "datasource", "worker"])
 
     def test_set_basemap_tool_rejects_agent_initiated_switches(self) -> None:
         ctx = ToolContext(meta={})
@@ -870,6 +878,13 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
         self.assertTrue(result["parsed"]["external_paths"])
         self.assertTrue(result["warnings"])
 
+    def test_bash_refuses_parse_errors(self) -> None:
+        result = _bash_sync("printf 'unterminated", workdir="/tmp", description="bad shell")
+
+        self.assertEqual(result["exit_code"], -1)
+        self.assertEqual(result["error"], "shell_parse_error")
+        self.assertTrue(result["parsed"]["parse_errors"])
+
     def test_webfetch_converts_html_to_markdown(self) -> None:
         html = b"<html><body><h1>Title</h1><p>Hello <a href=\"https://example.com/a\">link</a></p></body></html>"
 
@@ -936,6 +951,49 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
             self.assertEqual(saved["features"][0]["properties"]["name"], "A")
             self.assertNotIn("geojson", result)
 
+    def test_osm_call_drops_structural_recursion_nodes(self) -> None:
+        overpass_data = {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 1,
+                    "tags": {"highway": "residential", "name": "A"},
+                    "geometry": [
+                        {"lon": 121.0, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.1},
+                    ],
+                },
+                {"type": "node", "id": 10, "lat": 31.0, "lon": 121.0},
+                {"type": "node", "id": 11, "lat": 31.1, "lon": 121.1},
+            ]
+        }
+        with TemporaryDirectory() as tmp, patch(
+            "opengis_backend.integrations.osm.tools.overpass_query",
+            return_value=overpass_data,
+        ):
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            result = osm_call(
+                ctx,
+                "download_bbox",
+                json.dumps(
+                    {
+                        "south": 31.0,
+                        "west": 121.0,
+                        "north": 31.2,
+                        "east": 121.2,
+                        "key": "highway",
+                        "output_path": "osm/roads.geojson",
+                    }
+                ),
+            )
+
+            self.assertTrue(result["success"], result)
+            self.assertEqual(result["feature_count"], 1)
+            self.assertEqual(result["geometry_types"], ["LineString"])
+            saved = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(len(saved["features"]), 1)
+            self.assertEqual(saved["features"][0]["geometry"]["type"], "LineString")
+
     def test_osm_call_keeps_small_download_inline_without_output_path(self) -> None:
         overpass_data = {
             "elements": [
@@ -973,6 +1031,147 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
         self.assertIn("[out:json]", normalized)
         self.assertIn("[timeout:10]", normalized)
         self.assertNotIn("[out:xml]", normalized)
+
+    def test_osm_overpass_query_adds_geometry_output_for_geojson(self) -> None:
+        normalized = _normalize_overpass_query('way["building"](31.0,121.0,31.1,121.1);')
+
+        self.assertIn("out geom;", normalized)
+
+        normalized_body = _normalize_overpass_query('[out:json][timeout:30];way["building"](31.0,121.0,31.1,121.1);out body;')
+
+        self.assertIn("out geom;", normalized_body)
+        self.assertNotIn("out body;", normalized_body)
+
+    def test_osm_download_bbox_accepts_common_agent_aliases(self) -> None:
+        overpass_data = {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 1,
+                    "tags": {"building": "yes"},
+                    "geometry": [
+                        {"lon": 121.0, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.1},
+                        {"lon": 121.0, "lat": 31.0},
+                    ],
+                }
+            ]
+        }
+        with TemporaryDirectory() as tmp, patch(
+            "opengis_backend.integrations.osm.tools.overpass_query",
+            return_value=overpass_data,
+        ) as overpass_mock:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            result = osm_call(
+                ctx,
+                "download_bbox",
+                json.dumps(
+                    {
+                        "bbox": [121.0, 31.0, 121.2, 31.2],
+                        "tags": ["building"],
+                        "output_path": "data/buildings.geojson",
+                    }
+                ),
+            )
+
+            self.assertTrue(result["success"], result)
+            self.assertEqual(result["feature_count"], 1)
+            query = overpass_mock.call_args.args[0]
+            self.assertIn('way["building"]', query)
+            self.assertIn("(31.0,121.0,31.2,121.2)", query)
+
+    def test_osm_download_features_accepts_features_alias_with_bbox(self) -> None:
+        overpass_data = {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 1,
+                    "tags": {"building": "yes"},
+                    "geometry": [
+                        {"lon": 121.0, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.1},
+                        {"lon": 121.0, "lat": 31.0},
+                    ],
+                }
+            ]
+        }
+        with TemporaryDirectory() as tmp, patch(
+            "opengis_backend.integrations.osm.tools.overpass_query",
+            return_value=overpass_data,
+        ) as overpass_mock:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            result = osm_call(
+                ctx,
+                "download_features",
+                json.dumps(
+                    {
+                        "south": 31.0,
+                        "north": 31.2,
+                        "west": 121.0,
+                        "east": 121.2,
+                        "features": ["building"],
+                        "output_path": "data/buildings.geojson",
+                    }
+                ),
+            )
+
+            self.assertTrue(result["success"], result)
+            self.assertEqual(result["feature_count"], 1)
+            query = overpass_mock.call_args.args[0]
+            self.assertIn('way["building"]', query)
+
+    def test_osm_invalid_params_returns_schema_not_keyerror(self) -> None:
+        with TemporaryDirectory() as tmp:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            result = osm_call(
+                ctx,
+                "download_bbox",
+                json.dumps({"query": "building", "output_path": "data/buildings.geojson"}),
+            )
+
+            self.assertFalse(result["success"], result)
+            self.assertEqual(result["error"], "osm_invalid_params")
+            self.assertFalse(result["retryable"])
+            self.assertTrue(result["do_not_retry_same_request"])
+            self.assertIn("south", result["expected"]["required"])
+
+    def test_osm_download_features_routes_bbox_params_to_download_bbox(self) -> None:
+        overpass_data = {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 1,
+                    "tags": {"building": "yes"},
+                    "geometry": [
+                        {"lon": 121.0, "lat": 31.0},
+                        {"lon": 121.1, "lat": 31.0},
+                    ],
+                }
+            ]
+        }
+        with TemporaryDirectory() as tmp, patch(
+            "opengis_backend.integrations.osm.tools.overpass_query",
+            return_value=overpass_data,
+        ):
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            result = osm_call(
+                ctx,
+                "download_features",
+                json.dumps(
+                    {
+                        "south": 31.0,
+                        "north": 31.2,
+                        "west": 121.0,
+                        "east": 121.2,
+                        "tags": ["building"],
+                    }
+                ),
+            )
+
+            self.assertEqual(result["type"], "FeatureCollection")
+            self.assertEqual(len(result["features"]), 1)
 
     def test_osm_search_timeout_returns_structured_retryable_error(self) -> None:
         with TemporaryDirectory() as tmp, patch(
@@ -1440,6 +1639,35 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
                 unsubscribe()
                 manager.pause_all(reason="test_cleanup")
 
+    def test_start_dynamic_map_worker_writes_layer_ids_to_config_and_manifest(self) -> None:
+        with TemporaryDirectory() as tmp:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            manager = get_worker_manager()
+            try:
+                result = start_dynamic_map_worker(
+                    ctx,
+                    name="dynamic config",
+                    code="import time\ntime.sleep(0.5)\n",
+                    point_layer_id="custom_points",
+                    track_layer_id="custom_tracks",
+                    initial_health_timeout=0.1,
+                )
+                folder = Path(result["folder"])
+                config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+                manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(config["layers"]["points"], "custom_points")
+                self.assertEqual(config["layers"]["tracks"], "custom_tracks")
+                self.assertIn(
+                    {"id": "custom_points", "role": "points", "geometry": "Point", "dynamic": True},
+                    manifest["layers"],
+                )
+                self.assertIn(
+                    {"id": "custom_tracks", "role": "tracks", "geometry": "LineString", "dynamic": True},
+                    manifest["layers"],
+                )
+            finally:
+                manager.pause_all(reason="test_cleanup")
+
     def test_execute_code_blocks_resident_dynamic_map_loop(self) -> None:
         with TemporaryDirectory() as tmp:
             called = {"executor": False}
@@ -1611,12 +1839,91 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
                 ),
                 encoding="utf-8",
             )
+            (run_dir / "tool_calls.jsonl").write_text(
+                json.dumps(
+                    {
+                        "call_id": "call_stale",
+                        "name": "bash",
+                        "status": "running",
+                        "arguments": {"command": "sleep 999"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "message_parts.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": "run_stale:tool:call_stale",
+                        "type": "tool",
+                        "status": "running",
+                        "tool": "bash",
+                        "call_id": "call_stale",
+                        "run_id": "run_stale",
+                        "data": {"name": "bash"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             runs = RunArchive.list_runs(tmp, limit=10)
             self.assertEqual(runs[0].status, "error")
             updated = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(updated["status"], "error")
             self.assertTrue(updated["recovered_from_running"])
+            recovered_archive = RunArchive.load(tmp, "run_stale")
+            self.assertIsNotNone(recovered_archive)
+            assert recovered_archive is not None
+            tool_calls = {call["call_id"]: call for call in recovered_archive.read_tool_calls()}
+            self.assertEqual(tool_calls["call_stale"]["status"], "error")
+            latest_parts = {part["id"]: part for part in recovered_archive.read_message_parts()}
+            self.assertEqual(latest_parts["run_stale:tool:call_stale"]["status"], "failed")
+
+    def test_run_archive_close_finalizes_open_tool_and_message_parts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            archive = RunArchive.open(
+                run_id="run_open_parts",
+                prompt="test",
+                workspace_path=tmp,
+            )
+            archive.record_tool_call(
+                call_id="call_shell",
+                name="bash",
+                arguments={"command": "curl https://example.invalid"},
+                status="running",
+            )
+            archive.record_message_part({
+                "id": "run_open_parts:tool:call_shell",
+                "type": "tool",
+                "status": "running",
+                "tool": "bash",
+                "call_id": "call_shell",
+                "run_id": "run_open_parts",
+                "data": {"name": "bash"},
+            })
+            archive.record_message_part({
+                "id": "run_open_parts:progress:live",
+                "type": "progress",
+                "status": "running",
+                "run_id": "run_open_parts",
+                "data": {"message": "运行 Shell 命令"},
+            })
+
+            archive.close(status="error", error="boom")
+
+            tool_calls = {call["call_id"]: call for call in archive.read_tool_calls()}
+            self.assertEqual(tool_calls["call_shell"]["status"], "error")
+            self.assertEqual(tool_calls["call_shell"]["error"], "boom")
+            self.assertTrue(tool_calls["call_shell"]["metadata"]["finalized_by_run_close"])
+
+            latest_parts = {part["id"]: part for part in archive.read_message_parts()}
+            self.assertEqual(latest_parts["run_open_parts:tool:call_shell"]["status"], "failed")
+            self.assertEqual(latest_parts["run_open_parts:tool:call_shell"]["data"]["error"], "boom")
+            self.assertEqual(latest_parts["run_open_parts:progress:live"]["status"], "failed")
+            self.assertTrue(latest_parts["run_open_parts:progress:live"]["data"]["finalized_by_run_close"])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import {
   sourceIdFor,
 } from './types'
 import {
+  compileSortKey,
   compileNumericVisualVariable,
   hoverColorExpr,
   hoverNumberExpr,
@@ -42,13 +43,14 @@ export const fillRenderer: LayerRenderer = {
     const strokeWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
       defaultRange: [0.5, 6],
     })
+    const sortKey = compileSortKey(def.style.sortVariable)
 
     if (!map.getLayer(fillId)) {
       ctx.addRenderLayer({
         id: fillId,
         type: 'fill',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'fill-sort-key': sortKey } : {}) },
         paint: {
           'fill-color': hoverColorExpr(def.style.color, '#6366f1') as any,
           'fill-opacity': hoverOpacityExpr(opacity as any, fillOpacity) as any,
@@ -93,6 +95,7 @@ export const fillRenderer: LayerRenderer = {
     if (ctx.map.getLayer(fillId)) {
       ctx.map.setPaintProperty(fillId, 'fill-color', hoverColorExpr(def.style.color, '#6366f1') as any)
       ctx.map.setPaintProperty(fillId, 'fill-opacity', hoverOpacityExpr(opacity as any, fillOpacity) as any)
+      ctx.map.setLayoutProperty(fillId, 'fill-sort-key', compileSortKey(def.style.sortVariable) as any)
     }
     if (ctx.map.getLayer(strokeId)) {
       ctx.map.setPaintProperty(strokeId, 'line-color', hoverColorExpr(def.style.strokeColor || def.style.color, '#818cf8') as any)

@@ -10,8 +10,8 @@ import type {
   BBox,
   GeoJSONFeature,
   GeoJSONFeatureCollection,
-  GeometryType,
 } from '@/services/geo';
+import { detectGeometryType as detectFeatureCollectionGeometryType } from '@/services/geo/geometry';
 
 /**
  * 接受 agent 端发来的任何 GeoJSON 形状（FeatureCollection / Feature /
@@ -55,23 +55,8 @@ export function normalizeToFeatureCollection(
 
 export function detectGeometryType(
   fc: GeoJSONFeatureCollection,
-): GeometryType {
-  const counts = new Map<string, number>();
-  for (const feature of fc.features) {
-    const t = feature.geometry?.type;
-    if (t) counts.set(t, (counts.get(t) || 0) + 1);
-  }
-  if (counts.size === 0) return 'Point';
-
-  let best = 'Point';
-  let bestCount = 0;
-  for (const [t, c] of counts) {
-    if (c > bestCount) {
-      best = t;
-      bestCount = c;
-    }
-  }
-  return best as GeometryType;
+): ReturnType<typeof detectFeatureCollectionGeometryType> {
+  return detectFeatureCollectionGeometryType(fc);
 }
 
 export function computeBBox(fc: GeoJSONFeatureCollection): BBox {

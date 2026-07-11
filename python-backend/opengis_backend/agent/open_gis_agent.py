@@ -26,6 +26,7 @@ from opengis_backend.agent.telemetry.events import (
 )
 from opengis_backend.agent.llm import LLMConfig
 from opengis_backend.agent.governance.profile import AgentProfile
+from opengis_backend.agent.loop.runtime_control import TaskMode, infer_task_mode
 from opengis_backend.agent.telemetry.run_callbacks import AgentRunCallbacks
 from opengis_backend.agent.telemetry.runner import AgentRunner
 from opengis_backend.agent.telemetry.script_archive import ScriptArchive
@@ -44,6 +45,19 @@ from opengis_backend.workspace import WorkspaceManager, WorkspaceManagerError
 
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_required_tool_groups(user_message: str, groups: list[str] | None) -> list[str] | None:
+    """Keep task-mode guardrails aligned with the provider-visible tools."""
+    required: set[str] = set()
+    if infer_task_mode(user_message) is TaskMode.WORKER:
+        required.update({"core", "worker"})
+    if not required:
+        return groups
+    if groups is None:
+        return None
+    merged = list(dict.fromkeys([*groups, *sorted(required)]))
+    return merged
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -144,6 +158,10 @@ class OpenGISAgent:
                 if workflow is not None
                 else AgentProfile.gis_build()
             )
+        effective_tool_groups = _ensure_required_tool_groups(
+            user_message,
+            active_tool_groups if active_tool_groups is not None else agent_profile.tool_groups,
+        )
         ctx.meta.setdefault("run_id", archive.run_id)
         ctx.meta.setdefault("script_dir", str(archive.script_dir))
         session = create_run_session(
@@ -270,7 +288,7 @@ class OpenGISAgent:
                 on_code_end=callbacks.on_code_end,
                 on_tool_start=callbacks.on_tool_start,
                 on_tool_result=callbacks.on_tool_result,
-                tool_groups=active_tool_groups,
+                tool_groups=effective_tool_groups,
                 user_instructions=user_instructions,
                 agent_profile=agent_profile,
             )

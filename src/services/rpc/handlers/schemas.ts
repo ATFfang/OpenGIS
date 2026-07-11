@@ -22,7 +22,7 @@ export const LayerStyleSchema = z.object({
   type: z.enum(['circle', 'line', 'fill', 'raster', 'symbol']),
   paint: z.record(z.unknown()).optional(),
   layout: z.record(z.unknown()).optional(),
-});
+}).passthrough();
 
 const LayerIdSchema = z.string().min(1);
 
@@ -140,6 +140,11 @@ const NumericVisualVariableSchema = z.object({
   range: z.tuple([z.number(), z.number()]).optional(),
 });
 
+const SortVisualVariableSchema = z.object({
+  field: z.string().min(1),
+  order: z.enum(['ascending', 'descending']).optional(),
+});
+
 const HeatmapSchema = z.object({
   weightField: z.string().optional(),
   radius: z.number().positive().optional(),
@@ -158,7 +163,7 @@ const ExtrusionSchema = z.object({
 });
 
 const RasterColorStopSchema = z.object({
-  value: z.number().min(0).max(1),
+  value: z.number(),
   color: z.string().min(1),
   opacity: z.number().min(0).max(1).optional(),
 });
@@ -167,6 +172,7 @@ export const RasterStyleSettingsSchema = z.object({
   band: z.number().int().min(1).optional(),
   ramp: z.enum(['viridis', 'magma', 'plasma', 'inferno', 'turbo', 'gray', 'terrain', 'spectral', 'custom']).optional(),
   stops: z.array(RasterColorStopSchema).min(2).optional(),
+  stopsUnit: z.enum(['normalized', 'source']).optional(),
   min: z.number().optional(),
   max: z.number().optional(),
   opacity: z.number().min(0).max(1).optional(),
@@ -195,6 +201,7 @@ export const SetLayerRendererSchema = z.object({
   categorized: CategorizedSchema.optional(),
   sizeVariable: NumericVisualVariableSchema.nullable().optional(),
   opacityVariable: NumericVisualVariableSchema.nullable().optional(),
+  sortVariable: SortVisualVariableSchema.nullable().optional(),
   heatmap: HeatmapSchema.optional(),
   cluster: ClusterSchema.optional(),
   extrusion: ExtrusionSchema.optional(),
@@ -204,6 +211,7 @@ export const UpdateVisualVariablesSchema = z.object({
   layer_id: LayerIdSchema,
   size_variable: NumericVisualVariableSchema.nullable().optional(),
   opacity_variable: NumericVisualVariableSchema.nullable().optional(),
+  sort_variable: SortVisualVariableSchema.nullable().optional(),
 });
 
 export const SetRasterStyleSchema = z.object({

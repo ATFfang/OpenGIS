@@ -44,6 +44,24 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertIn("call-code", result.blocked_call_ids)
         self.assertIn("worker lifecycle tools", result.blocked_call_ids["call-code"])
 
+    def test_worker_mode_forces_final_after_healthy_worker_update(self) -> None:
+        control = RuntimeControl.from_user_message("构建一个后台worker实时渲染车辆轨迹")
+
+        decision = control.observe_settlements([
+            ToolSettlement(
+                call_id="call-worker",
+                name="wait_worker_update",
+                arguments={"worker_id": "worker_ok"},
+                content=(
+                    '{"id": "worker_ok", "status": "running", '
+                    '"health": {"ok": true, "message": "dynamic layer diff seq=3"}}'
+                ),
+            )
+        ])
+
+        self.assertEqual(decision.force_final_reason, "worker_running_verified")
+        self.assertIn("resident worker is running", decision.corrective_message)
+
     def test_workflow_mode_blocks_direct_map_side_effect_before_workflow_tool(self) -> None:
         control = RuntimeControl.from_user_message("创建一个 workflow 处理这个数据")
 
@@ -71,6 +89,42 @@ class RuntimeControlTests(unittest.TestCase):
         anomaly = LoopAnomalyDetector.detect([], ["run_operation(call-a) failed: x", "run_operation(call-b) failed: y"])
 
         self.assertIsNone(anomaly)
+
+    def test_structured_tool_failure_warns_against_same_retry(self) -> None:
+        control = RuntimeControl.from_user_message("加载华东师范大学闵行校区建筑物")
+        decision = control.observe_settlements([
+            ToolSettlement(
+                call_id="call-osm",
+                name="osm_call",
+                arguments={},
+                content='{"success": false, "error": "osm_invalid_params", "message": "missing bbox", "do_not_retry_same_request": true}',
+            )
+        ])
+
+        self.assertIn("Do not retry the exact same request", decision.corrective_message)
+        self.assertIn("osm_invalid_params", decision.corrective_message)
+
+    def test_blocks_shell_overpass_bypass_after_osm_failure(self) -> None:
+        control = RuntimeControl.from_user_message("加载华东师范大学闵行校区建筑物")
+        control.observe_settlements([
+            ToolSettlement(
+                call_id="call-osm",
+                name="osm_call",
+                arguments={},
+                content='{"success": false, "error": "osm_network_error", "message": "Overpass unavailable", "do_not_retry_same_request": true}',
+            )
+        ])
+
+        result = control.guard_tool_calls([
+            tool_call(
+                "call-bash",
+                "bash",
+                '{"command": "curl https://overpass.kumi.systems/api/interpreter -d data=..."}',
+            )
+        ])
+
+        self.assertIn("call-bash", result.blocked_call_ids)
+        self.assertIn("do not bypass", result.blocked_call_ids["call-bash"])
 
     def test_operation_repair_edit_resets_repeated_failure_window(self) -> None:
         control = RuntimeControl.from_user_message("修复 dbscan_clustering operation")

@@ -113,20 +113,20 @@ export function applyPaintToLayerStyle(
         : renderType === 'circle'
           ? ['circle-color', 'fill-color']
           : ['fill-color', 'circle-color'];
-    const color = firstDefinedString(paint, colorKeys);
+    const color = firstDefinedPaintValue(paint, colorKeys);
     if (color !== null) style.color = color;
   }
   const opacityKeys =
     renderType === 'line'
-      ? ['line-opacity', 'fill-opacity', 'circle-opacity']
+      ? ['line-opacity']
       : renderType === 'circle'
-        ? ['circle-opacity', 'fill-opacity']
-        : ['fill-opacity', 'circle-opacity'];
+        ? ['circle-opacity']
+        : ['circle-opacity'];
   const opacity = firstDefinedNumber(paint, opacityKeys);
   if (opacity !== null) style.opacity = opacity;
   const fillOpacity = firstDefinedNumber(paint, ['fill-opacity']);
   if (fillOpacity !== null) style.fillOpacity = fillOpacity;
-  const strokeColor = firstDefinedString(paint, [
+  const strokeColor = firstDefinedPaintValue(paint, [
     'stroke-color',
     'line-color',
     'circle-stroke-color',
@@ -155,13 +155,46 @@ export function applyPaintToLayerStyle(
   if (radius !== null) style.radius = radius;
 }
 
-function firstDefinedString(
+const STYLE_PAINT_KEYS = new Set([
+  'circle-color',
+  'circle-radius',
+  'circle-opacity',
+  'circle-stroke-color',
+  'circle-stroke-width',
+  'circle-stroke-opacity',
+  'line-color',
+  'line-width',
+  'line-opacity',
+  'line-dasharray',
+  'fill-color',
+  'fill-opacity',
+  'fill-outline-color',
+  'stroke-color',
+  'stroke-width',
+  'stroke-opacity',
+  'stroke-dasharray',
+]);
+
+export function normalizeStylePaintInput<T extends { paint?: Record<string, unknown> } & Record<string, unknown>>(style: T): T {
+  const paint = { ...(style.paint ?? {}) };
+  let hasPaint = Boolean(style.paint);
+  for (const key of STYLE_PAINT_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(style, key)) {
+      paint[key] = style[key];
+      hasPaint = true;
+    }
+  }
+  return hasPaint ? { ...style, paint } : style;
+}
+
+function firstDefinedPaintValue(
   obj: Record<string, unknown>,
   keys: string[],
-): string | null {
+): any | null {
   for (const k of keys) {
     const v = obj[k];
     if (typeof v === 'string' && v) return v;
+    if (Array.isArray(v) && v.length > 0) return v;
   }
   return null;
 }
@@ -220,6 +253,7 @@ export function summarizeLayer(layer: MapLayerDefinition) {
       radius: layer.style.radius,
       size_variable: layer.style.sizeVariable ?? null,
       opacity_variable: layer.style.opacityVariable ?? null,
+      sort_variable: layer.style.sortVariable ?? null,
       label: layer.style.label ?? null,
       icon: layer.style.icon ?? null,
       filter: layer.style.filter ?? null,

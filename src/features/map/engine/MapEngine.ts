@@ -56,6 +56,8 @@ export interface CameraUpdate {
   duration?: number
 }
 
+const DYNAMIC_SETDATA_FEATURE_LIMIT = 10000
+
 // ─── MapEngine 类 ──────────────────────────────────────
 
 export class MapEngine {
@@ -118,7 +120,6 @@ export class MapEngine {
     this.onMoveEnd = options.onMoveEnd
 
     // 添加控件
-    this.map.addControl(new maplibregl.NavigationControl(), 'top-right')
     this.map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
     // AttributionControl removed — copyright info is in the basemap source config
 
@@ -825,7 +826,14 @@ export class MapEngine {
         this.managedSourceIds.add(sourceId)
         return
       }
-      if (vectorData.runtimeDiff && vectorData.runtimeDiffUpdateable && typeof existingSource.updateData === 'function') {
+      const preferFullSetData = Boolean(layer.meta.dynamic)
+        && vectorData.featureCount <= DYNAMIC_SETDATA_FEATURE_LIMIT
+      if (
+        !preferFullSetData
+        && vectorData.runtimeDiff
+        && vectorData.runtimeDiffUpdateable
+        && typeof existingSource.updateData === 'function'
+      ) {
         try {
           existingSource.updateData(vectorData.runtimeDiff)
           return

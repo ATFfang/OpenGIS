@@ -489,16 +489,23 @@ function rasterInfoString(info: unknown, key: string): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
-function rasterBandStats(info: unknown): Array<{ min: number; max: number }> | undefined {
+function rasterBandStats(info: unknown): Array<{ min: number; max: number; mean?: number | null; p2?: number | null; p98?: number | null }> | undefined {
   const value = typeof info === 'object' && info !== null ? (info as Record<string, unknown>).band_stats : undefined;
   if (!Array.isArray(value)) return undefined;
-  const stats = value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const min = (item as Record<string, unknown>).min;
-      const max = (item as Record<string, unknown>).max;
-      return typeof min === 'number' && typeof max === 'number' ? { min, max } : null;
-    })
-    .filter((item): item is { min: number; max: number } => !!item);
+  const stats: Array<{ min: number; max: number; mean?: number | null; p2?: number | null; p98?: number | null }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const min = raw.min;
+    const max = raw.max;
+    if (typeof min !== 'number' || typeof max !== 'number') continue;
+    stats.push({
+      min,
+      max,
+      mean: typeof raw.mean === 'number' ? raw.mean : null,
+      p2: typeof raw.p2 === 'number' ? raw.p2 : null,
+      p98: typeof raw.p98 === 'number' ? raw.p98 : null,
+    });
+  }
   return stats.length ? stats : undefined;
 }

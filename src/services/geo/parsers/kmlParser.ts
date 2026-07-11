@@ -5,10 +5,10 @@
 import type {
   ParsedVectorData,
   GeoJSONFeatureCollection,
-  GeometryType,
   BBox,
   FieldDescriptor,
 } from '../types'
+import { detectGeometryType } from '../geometry'
 
 /**
  * Parse a KML string into structured vector data.
@@ -47,22 +47,6 @@ export async function parseKML(raw: string, fileName: string): Promise<ParsedVec
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────
-
-function detectGeometryType(fc: GeoJSONFeatureCollection): GeometryType {
-  const typeCounts = new Map<string, number>()
-  for (const f of fc.features) {
-    if (f.geometry?.type) {
-      const t = f.geometry.type
-      typeCounts.set(t, (typeCounts.get(t) || 0) + 1)
-    }
-  }
-  let maxType = 'Point'
-  let maxCount = 0
-  for (const [type, count] of typeCounts) {
-    if (count > maxCount) { maxType = type; maxCount = count }
-  }
-  return maxType as GeometryType
-}
 
 function computeBBox(fc: GeoJSONFeatureCollection): BBox {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity

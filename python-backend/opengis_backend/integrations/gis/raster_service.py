@@ -211,7 +211,7 @@ def render_registered_raster_tile(raster_id: str, z: int, x: int, y: int, *, til
     norm = np.clip((arr - vmin) / (vmax - vmin), 0, 1)
     if style.get("reverse"):
         norm = 1.0 - norm
-    rgba = _style_rgba(norm, style)
+    rgba = _style_rgba(norm, style, vmin=vmin, vmax=vmax)
     opacity = max(0.0, min(1.0, float(style.get("opacity", 1.0))))
     rgba[..., 3] = np.where(mask, 0.0, rgba[..., 3] * opacity)
     rgba[..., 0:3] = np.where(mask[..., None], 0.0, rgba[..., 0:3])
@@ -225,6 +225,7 @@ def render_raster_preview(
     band: int = 1,
     ramp: str = "viridis",
     stops: Any = None,
+    stops_unit: str | None = None,
     min_value: float | None = None,
     max_value: float | None = None,
     opacity: float = 1.0,
@@ -264,8 +265,19 @@ def render_raster_preview(
         norm = np.clip((arr - vmin) / (vmax - vmin or 1.0), 0, 1)
         if reverse:
             norm = 1.0 - norm
-        rgba = _style_rgba(norm, {"ramp": ramp, "stops": stops, "opacity": opacity})
-        rgba[..., 3] = np.where(mask, 0.0, max(0.0, min(1.0, float(opacity))))
+        rgba = _style_rgba(
+            norm,
+            {
+                "ramp": ramp,
+                "stops": stops,
+                "stopsUnit": stops_unit,
+                "opacity": opacity,
+            },
+            vmin=vmin,
+            vmax=vmax,
+        )
+        global_opacity = max(0.0, min(1.0, float(opacity)))
+        rgba[..., 3] = np.where(mask, 0.0, rgba[..., 3] * global_opacity)
         _save_png(out_path, rgba)
         return RasterPreview(image_path=str(out_path), bbox=info.bbox, info=info)
 
@@ -304,25 +316,36 @@ def _bounds_to_wgs84(src: Any, bounds: tuple[float, float, float, float]) -> tup
         raise RuntimeError(f"Failed to transform raster bounds to EPSG:4326: {exc}") from exc
 
 
-def _style_rgba(norm: Any, style: dict[str, Any]) -> Any:
+def _style_rgba(norm: Any, style: dict[str, Any], *, vmin: float = 0.0, vmax: float = 1.0) -> Any:
     np = _numpy()
     stops = style.get("stops")
     if stops:
-        return _custom_stops_rgba(norm, stops)
+        return _custom_stops_rgba(norm, stops, stops_unit=style.get("stopsUnit"), vmin=vmin, vmax=vmax)
     return _colormap_rgba(norm, str(style.get("ramp") or "viridis"))
 
 
-def _custom_stops_rgba(norm: Any, stops: Any) -> Any:
+def _custom_stops_rgba(
+    norm: Any,
+    stops: Any,
+    *,
+    stops_unit: Any = None,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+) -> Any:
     np = _numpy()
     clean: list[tuple[float, tuple[float, float, float], float]] = []
     if isinstance(stops, str):
         import json
 
         stops = json.loads(stops)
+    use_source_values = _style_uses_source_stops(stops, stops_unit=stops_unit, vmin=vmin, vmax=vmax)
+    value_range = vmax - vmin or 1.0
     for item in stops if isinstance(stops, list) else []:
         if not isinstance(item, dict):
             continue
-        value = max(0.0, min(1.0, float(item.get("value", 0))))
+        raw_value = float(item.get("value", 0))
+        value = (raw_value - vmin) / value_range if use_source_values else raw_value
+        value = max(0.0, min(1.0, value))
         color = _hex_to_rgb01(str(item.get("color") or "#000000"))
         alpha = max(0.0, min(1.0, float(item.get("opacity", 1.0))))
         clean.append((value, color, alpha))
@@ -343,6 +366,29 @@ def _custom_stops_rgba(norm: Any, stops: Any) -> Any:
         ],
         axis=-1,
     )
+
+
+def _style_uses_source_stops(stops: Any, *, stops_unit: Any, vmin: float, vmax: float) -> bool:
+    unit = str(stops_unit or "").strip().lower().replace("-", "_")
+    if unit in {"source", "data", "pixel", "pixel_value", "raw"}:
+        return True
+    if unit in {"normalized", "normalised", "normalize", "normalise", "0_1", "zero_one"}:
+        return False
+    values: list[float] = []
+    for item in stops if isinstance(stops, list) else []:
+        if isinstance(item, dict):
+            value = _float_or_none(item.get("value"))
+            if value is not None:
+                values.append(value)
+    if not values:
+        return False
+    if any(value < 0 or value > 1 for value in values):
+        return True
+    data_range = abs(vmax - vmin)
+    if data_range <= 0 or data_range >= 1:
+        return False
+    data_extent = max(abs(vmin), abs(vmax), data_range)
+    return any(value > 0 and value <= data_extent * 1.5 for value in values)
 
 
 def _colormap_rgba(norm: Any, ramp: str) -> Any:
@@ -370,8 +416,18 @@ def _normalize_style(style: dict[str, Any] | None) -> dict[str, Any]:
         normalized["reverse"] = bool(raw.get("reverse"))
     if raw.get("stops"):
         normalized["stops"] = raw["stops"]
+        normalized["stopsUnit"] = _normalize_stops_unit(raw.get("stopsUnit"))
         normalized["ramp"] = "custom"
     return normalized
+
+
+def _normalize_stops_unit(value: Any) -> str:
+    unit = str(value or "source").strip().lower().replace("-", "_")
+    if unit in {"source", "data", "pixel", "pixel_value", "raw"}:
+        return "source"
+    if unit in {"normalized", "normalised", "normalize", "normalise", "0_1", "zero_one"}:
+        return "normalized"
+    return "source"
 
 
 def _xyz_bounds_mercator(z: int, x: int, y: int) -> tuple[float, float, float, float]:

@@ -164,6 +164,16 @@ def _default_config(*, worker_id: str, name: str) -> dict[str, Any]:
     }
 
 
+def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(dict(merged[key]), value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _default_src_files() -> dict[str, str]:
     return {
         "src/__init__.py": '"""Worker package modules."""\n',
@@ -468,6 +478,7 @@ class ResidentWorkerManager:
         worker_id: str | None = None,
         files: dict[str, str] | None = None,
         manifest: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         initial_health_timeout: float = 1.5,
     ) -> dict[str, Any]:
         workspace = Path(workspace_path).expanduser().resolve()
@@ -501,6 +512,7 @@ class ResidentWorkerManager:
                 name=name or wid,
                 description=description,
                 manifest=manifest,
+                config=config,
                 files=files,
                 overwrite=False,
             )
@@ -579,6 +591,7 @@ class ResidentWorkerManager:
         code: str | None = None,
         files: dict[str, str] | None = None,
         manifest: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         reason: str = "restart",
         initial_health_timeout: float = 1.5,
         workspace_path: str | None = None,
@@ -600,6 +613,7 @@ class ResidentWorkerManager:
                 name=worker.name,
                 description=worker.description,
                 manifest=manifest,
+                config=config,
                 files=files,
                 overwrite=True,
             )
@@ -755,6 +769,7 @@ class ResidentWorkerManager:
         name: str,
         description: str,
         manifest: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         files: dict[str, str] | None = None,
         overwrite: bool,
     ) -> dict[str, Any]:
@@ -790,10 +805,23 @@ class ResidentWorkerManager:
             _default_readme(worker_id=worker_id, name=name, description=description),
             overwrite=overwrite,
         )
+        package_config = _default_config(worker_id=worker_id, name=name)
+        config_path = folder / CONFIG_FILENAME
+        if config_path.exists():
+            try:
+                existing_config = json.loads(config_path.read_text(encoding="utf-8"))
+                if isinstance(existing_config, dict):
+                    package_config = _deep_merge_dict(package_config, existing_config)
+            except Exception:
+                pass
+        if config:
+            package_config = _deep_merge_dict(package_config, config)
+        package_config["worker_id"] = worker_id
+
         self._write_managed_package_file(
             folder,
             CONFIG_FILENAME,
-            json.dumps(_default_config(worker_id=worker_id, name=name), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(package_config, ensure_ascii=False, indent=2) + "\n",
             overwrite=overwrite,
         )
         for rel_path, content in _default_src_files().items():
@@ -1078,6 +1106,7 @@ class ResidentWorkerManager:
             name=str(payload.get("name") or worker_id),
             description=str(payload.get("description") or ""),
             manifest=payload.get("manifest") if isinstance(payload.get("manifest"), dict) else None,
+            config=None,
             files=None,
             overwrite=False,
         )

@@ -87,10 +87,236 @@ import json
 import sys
 
 _EMITTED_FULL_LAYERS: set[str] = set()
+_STYLE_PAINT_KEYS = {
+    "circle-color",
+    "circle-radius",
+    "circle-opacity",
+    "circle-stroke-color",
+    "circle-stroke-width",
+    "circle-stroke-opacity",
+    "line-color",
+    "line-width",
+    "line-opacity",
+    "line-dasharray",
+    "fill-color",
+    "fill-opacity",
+    "fill-outline-color",
+    "stroke-color",
+    "stroke-width",
+    "stroke-opacity",
+    "stroke-dasharray",
+}
 
 
 def _feature_collection(features: list[dict]) -> dict:
     return {"type": "FeatureCollection", "features": features}
+
+
+def _is_feature(value) -> bool:
+    return isinstance(value, dict) and value.get("type") == "Feature" and isinstance(value.get("geometry"), dict)
+
+
+def _normalize_style(style: dict | None, *, default_type: str | None = None) -> dict | None:
+    if style is None:
+        return None
+    if not isinstance(style, dict):
+        return None
+
+    normalized = dict(style)
+    paint = dict(normalized.get("paint") or {}) if isinstance(normalized.get("paint"), dict) else {}
+    for key in list(normalized.keys()):
+        if key in _STYLE_PAINT_KEYS:
+            paint[key] = normalized.pop(key)
+    if paint:
+        normalized["paint"] = paint
+    if default_type and not isinstance(normalized.get("type"), str):
+        normalized["type"] = default_type
+    return normalized
+
+
+def _style_with_defaults(
+    style: dict | None,
+    *,
+    render_type: str,
+    color: str | None = None,
+    size: float | int | None = None,
+    width: float | int | None = None,
+    opacity: float | int | None = None,
+) -> dict | None:
+    normalized = _normalize_style(style or {"type": render_type}, default_type=render_type)
+    if normalized is None:
+        normalized = {"type": render_type}
+    paint = dict(normalized.get("paint") or {})
+    alias_color = normalized.pop("color", None)
+    alias_size = normalized.pop("size", None)
+    alias_width = normalized.pop("width", None)
+    alias_opacity = normalized.pop("opacity", None)
+    if color is None and isinstance(alias_color, str) and alias_color:
+        color = alias_color
+    if size is None and alias_size is not None:
+        size = alias_size
+    if width is None and alias_width is not None:
+        width = alias_width
+    if opacity is None and alias_opacity is not None:
+        opacity = alias_opacity
+    if color is not None:
+        if render_type == "line":
+            paint.setdefault("line-color", color)
+        elif render_type == "fill":
+            paint.setdefault("fill-color", color)
+        else:
+            paint.setdefault("circle-color", color)
+    if size is not None and render_type == "circle":
+        try:
+            paint.setdefault("circle-radius", float(size))
+        except Exception:
+            pass
+    if width is not None and render_type == "line":
+        try:
+            paint.setdefault("line-width", float(width))
+        except Exception:
+            pass
+    if opacity is not None:
+        try:
+            numeric_opacity = float(opacity)
+        except Exception:
+            numeric_opacity = None
+        if numeric_opacity is not None:
+            if render_type == "line":
+                paint.setdefault("line-opacity", numeric_opacity)
+            elif render_type == "fill":
+                paint.setdefault("fill-opacity", numeric_opacity)
+            else:
+                paint.setdefault("circle-opacity", numeric_opacity)
+    if paint:
+        normalized["paint"] = paint
+    return normalized
+
+
+def _feature_id(feature: dict, fallback: str) -> str:
+    raw_id = feature.get("id")
+    props = feature.get("properties")
+    if raw_id is None and isinstance(props, dict):
+        raw_id = props.get("id") or props.get("track_id")
+    return str(raw_id if raw_id is not None else fallback)
+
+
+def _normalize_point_features(
+    points,
+    *,
+    lon_key: str = "lon",
+    lat_key: str = "lat",
+    id_key: str = "id",
+    label: str | None = None,
+) -> list[dict]:
+    if isinstance(points, dict) and points.get("type") == "FeatureCollection":
+        features = points.get("features") if isinstance(points.get("features"), list) else []
+        normalized = []
+        for index, feature in enumerate(features):
+            if not _is_feature(feature):
+                continue
+            geometry = feature.get("geometry") or {}
+            if geometry.get("type") != "Point":
+                continue
+            props = dict(feature.get("properties") or {})
+            fid = _feature_id(feature, str(index))
+            props.setdefault("id", fid)
+            normalized.append({
+                "type": "Feature",
+                "id": fid,
+                "geometry": geometry,
+                "properties": props,
+            })
+        return normalized
+
+    normalized = []
+    if not isinstance(points, list):
+        return normalized
+    for index, item in enumerate(points):
+        if _is_feature(item):
+            geometry = item.get("geometry") or {}
+            if geometry.get("type") != "Point":
+                continue
+            props = dict(item.get("properties") or {})
+            fid = _feature_id(item, str(index))
+            props.setdefault("id", fid)
+            normalized.append({
+                "type": "Feature",
+                "id": fid,
+                "geometry": geometry,
+                "properties": props,
+            })
+            continue
+        if not isinstance(item, dict):
+            continue
+        raw_lon = item.get(lon_key, item.get("lon", item.get("lng", item.get("longitude"))))
+        raw_lat = item.get(lat_key, item.get("lat", item.get("latitude")))
+        try:
+            lon_value = float(raw_lon)
+            lat_value = float(raw_lat)
+        except Exception:
+            continue
+        fid = item.get(id_key, item.get("id", item.get("icao24", item.get("callsign", index))))
+        props = item.get("properties") if isinstance(item.get("properties"), dict) else {
+            key: value for key, value in item.items() if key not in {id_key, "id", lon_key, lat_key, "lon", "lng", "lat", "longitude", "latitude"}
+        }
+        props = dict(props or {})
+        props.setdefault("id", str(fid))
+        if label and label in item:
+            props.setdefault("label", item.get(label))
+        normalized.append(_point_feature(str(fid), lon_value, lat_value, props))
+    return normalized
+
+
+def _normalize_track_features(tracks, *, max_track_points: int = 200, id_key: str = "id") -> list[dict]:
+    if isinstance(tracks, dict) and tracks.get("type") == "FeatureCollection":
+        features = tracks.get("features") if isinstance(tracks.get("features"), list) else []
+        normalized = []
+        for index, feature in enumerate(features):
+            if not _is_feature(feature):
+                continue
+            geometry = feature.get("geometry") or {}
+            if geometry.get("type") != "LineString":
+                continue
+            coordinates = geometry.get("coordinates")
+            if not isinstance(coordinates, list) or len(coordinates) < 2:
+                continue
+            fid = _feature_id(feature, str(index))
+            props = dict(feature.get("properties") or {})
+            props.setdefault("track_id", fid)
+            normalized.append(_line_feature(fid, coordinates[-max(2, int(max_track_points)):], props))
+        return normalized
+
+    features = []
+    if isinstance(tracks, dict):
+        iterable = tracks.items()
+    elif isinstance(tracks, list):
+        iterable = []
+        for index, item in enumerate(tracks):
+            if _is_feature(item):
+                geometry = item.get("geometry") or {}
+                if geometry.get("type") == "LineString":
+                    coordinates = geometry.get("coordinates")
+                    if isinstance(coordinates, list) and len(coordinates) >= 2:
+                        fid = _feature_id(item, str(index))
+                        props = dict(item.get("properties") or {})
+                        props.setdefault("track_id", fid)
+                        features.append(_line_feature(fid, coordinates[-max(2, int(max_track_points)):], props))
+                continue
+            if isinstance(item, dict):
+                iterable.append((item.get(id_key, item.get("track_id", index)), item.get("coordinates", item.get("coords", []))))
+    else:
+        return features
+
+    for track_id, coords in iterable:
+        try:
+            trimmed = list(coords)[-max(2, int(max_track_points)):]
+        except Exception:
+            continue
+        if len(trimmed) < 2:
+            continue
+        features.append(_line_feature(str(track_id), trimmed, {"track_id": str(track_id)}))
+    return features
 
 
 def _point_feature(
@@ -199,7 +425,7 @@ def emit_dynamic_layer_update(
     if bbox is not None:
         payload["bbox"] = list(bbox)
     if style is not None:
-        payload["style"] = style
+        payload["style"] = _normalize_style(style)
     if sequence is not None:
         payload["sequence"] = sequence
     if schema_changed is not None:
@@ -237,7 +463,7 @@ def emit_dynamic_layer_diff(
     if bbox is not None:
         payload["bbox"] = list(bbox)
     if style is not None:
-        payload["style"] = style
+        payload["style"] = _normalize_style(style)
     if visible is not None:
         payload["visible"] = visible
     if sequence is not None:
@@ -253,25 +479,22 @@ def emit_dynamic_points(
     *,
     layer_id: str,
     name: str,
-    points: list[dict],
+    points,
     sequence: int,
     full: bool | None = None,
     style: dict | None = None,
+    lon: str = "lon",
+    lat: str = "lat",
+    id_key: str = "id",
+    label: str | None = None,
+    size: float | int | None = None,
+    color: str | None = None,
+    opacity: float | int | None = None,
 ) -> None:
     """Emit moving point objects."""
-    features = [
-        _point_feature(
-            str(item["id"]),
-            float(item["lon"]),
-            float(item["lat"]),
-            item.get("properties") if isinstance(item.get("properties"), dict) else {
-                key: value for key, value in item.items() if key not in {"id", "lon", "lat"}
-            },
-        )
-        for item in points
-        if "id" in item and "lon" in item and "lat" in item
-    ]
+    features = _normalize_point_features(points, lon_key=lon, lat_key=lat, id_key=id_key, label=label)
     bbox = _bbox_from_coordinates([feature["geometry"]["coordinates"] for feature in features])
+    normalized_style = _style_with_defaults(style, render_type="circle", color=color, size=size, opacity=opacity)
     emit_full = _should_emit_full(layer_id, full)
     if emit_full:
         emit_dynamic_layer_update(
@@ -279,7 +502,7 @@ def emit_dynamic_points(
             name=name,
             geojson=_feature_collection(features),
             bbox=bbox,
-            style=style,
+            style=normalized_style,
             sequence=sequence,
             schema_changed=True,
         )
@@ -290,7 +513,7 @@ def emit_dynamic_points(
             name=name,
             diff={"update": features},
             bbox=bbox,
-            style=style,
+            style=normalized_style,
             sequence=sequence,
             schema_changed=False,
         )
@@ -300,20 +523,21 @@ def emit_dynamic_tracks(
     *,
     layer_id: str,
     name: str,
-    tracks: dict[str, list],
+    tracks,
     sequence: int,
     full: bool | None = None,
     max_track_points: int = 200,
     style: dict | None = None,
+    id_key: str = "id",
+    label: str | None = None,
+    width: float | int | None = None,
+    color: str | None = None,
+    opacity: float | int | None = None,
 ) -> None:
     """Emit trajectory LineString features keyed by moving object id."""
-    features = []
-    for track_id, coords in tracks.items():
-        trimmed = list(coords)[-max(2, int(max_track_points)):]
-        if len(trimmed) < 2:
-            continue
-        features.append(_line_feature(str(track_id), trimmed, {"track_id": str(track_id)}))
+    features = _normalize_track_features(tracks, max_track_points=max_track_points, id_key=id_key)
     bbox = _bbox_from_coordinates([feature["geometry"]["coordinates"] for feature in features])
+    normalized_style = _style_with_defaults(style, render_type="line", color=color, width=width, opacity=opacity)
     emit_full = _should_emit_full(layer_id, full)
     if emit_full:
         emit_dynamic_layer_update(
@@ -321,7 +545,7 @@ def emit_dynamic_tracks(
             name=name,
             geojson=_feature_collection(features),
             bbox=bbox,
-            style=style,
+            style=normalized_style,
             sequence=sequence,
             schema_changed=True,
         )
@@ -332,7 +556,7 @@ def emit_dynamic_tracks(
             name=name,
             diff={"update": features},
             bbox=bbox,
-            style=style,
+            style=normalized_style,
             sequence=sequence,
             schema_changed=False,
         )

@@ -53,6 +53,15 @@ def overpass_query(
             _last_overpass_call = time.time()
             resp.raise_for_status()
             return resp.json()
+        except requests.exceptions.HTTPError as exc:
+            _last_overpass_call = time.time()
+            last_exc = exc
+            status = exc.response.status_code if exc.response is not None else None
+            retryable = status in {429, 500, 502, 503, 504}
+            if retryable and attempt < max(0, int(retries)):
+                time.sleep(min(2.0 * (attempt + 1), 6.0))
+                continue
+            raise
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             _last_overpass_call = time.time()
             last_exc = exc
@@ -71,8 +80,33 @@ def _normalize_overpass_query(query: str) -> str:
         text = re.sub(r"^\[\s*out\s*:[^\]]+\]", "[out:json]", text, count=1, flags=re.IGNORECASE)
         if not re.search(r"\[\s*timeout\s*:", text, flags=re.IGNORECASE):
             text = "[timeout:60];\n" + text
+        return _ensure_geojson_output_clause(text)
+    return _ensure_geojson_output_clause(f"[out:json][timeout:60];\n{text}")
+
+
+def _ensure_geojson_output_clause(query: str) -> str:
+    """Ensure raw Overpass bodies return geometry usable by ``osm_to_geojson``.
+
+    Agents often write only ``way["building"](bbox);`` or ``out body;``.
+    Those responses either contain no elements or omit way geometry, causing
+    a misleading "0 features" result and encouraging repeated calls. Since
+    OpenGIS' OSM tool converts directly to GeoJSON, ``out geom`` is the
+    sensible default.
+    """
+    text = str(query or "").strip()
+    if re.search(r"(?<!\[)\bout\s+count\s*;", text, flags=re.IGNORECASE):
         return text
-    return f"[out:json][timeout:60];\n{text}"
+    if re.search(r"(?<!\[)\bout\s+(?:body|tags|ids|skel|meta)\s*;", text, flags=re.IGNORECASE):
+        return re.sub(
+            r"(?<!\[)\bout\s+(?:body|tags|ids|skel|meta)\s*;",
+            "out geom;",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    if not re.search(r"(?<!\[)\bout\b[^;]*;", text, flags=re.IGNORECASE):
+        return text.rstrip(";") + ";\nout geom;"
+    return text
 
 
 def osm_to_geojson(data: dict) -> dict[str, Any]:
@@ -84,6 +118,12 @@ def osm_to_geojson(data: dict) -> dict[str, Any]:
         tags = element.get("tags", {})
 
         if etype == "node":
+            if not tags:
+                # ``way ...; out geom; >; out skel qt;`` returns the raw
+                # vertices that make up ways. They are structural inputs for
+                # lines/polygons, not map features, and must not dominate the
+                # resulting layer as thousands of Point geometries.
+                continue
             lat = element.get("lat")
             lon = element.get("lon")
             if lat is None or lon is None:

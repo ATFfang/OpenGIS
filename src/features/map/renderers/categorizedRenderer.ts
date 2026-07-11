@@ -21,6 +21,7 @@ import {
   sourceIdFor,
 } from './types'
 import {
+  compileSortKey,
   compileNumericVisualVariable,
   hoverColorExpr,
   hoverNumberExpr,
@@ -85,13 +86,14 @@ export const categorizedRenderer: LayerRenderer = {
     const strokeWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
       defaultRange: [0.5, 6],
     })
+    const sortKey = compileSortKey(def.style.sortVariable)
 
     if (geomRenderType === 'fill') {
       ctx.addRenderLayer({
         id: mainLayerId,
         type: 'fill',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'fill-sort-key': sortKey } : {}) },
         paint: {
           'fill-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'fill-opacity': hoverOpacityExpr(opacity as any, fillOpacity) as any,
@@ -119,7 +121,7 @@ export const categorizedRenderer: LayerRenderer = {
         id: mainLayerId,
         type: 'circle',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'circle-sort-key': sortKey } : {}) },
         paint: {
           'circle-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'circle-radius': hoverNumberExpr(pointRadius as any, 3) as any,
@@ -139,7 +141,7 @@ export const categorizedRenderer: LayerRenderer = {
         id: mainLayerId,
         type: 'line',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'line-sort-key': sortKey } : {}) },
         paint: {
           'line-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'line-width': hoverNumberExpr(lineWidth as any, 3) as any,
@@ -188,6 +190,7 @@ export const categorizedRenderer: LayerRenderer = {
 
     // Sync common paint properties with hover support
     if (geomRenderType === 'fill') {
+      ctx.map.setLayoutProperty(mainLayerId, 'fill-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', hoverOpacityExpr(opacity as any, fillOpacity) as any)
       const strokeId = renderLayerId(def.id, 'stroke')
       if (ctx.map.getLayer(strokeId)) {
@@ -197,11 +200,13 @@ export const categorizedRenderer: LayerRenderer = {
         ctx.map.setPaintProperty(strokeId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
       }
     } else if (geomRenderType === 'circle') {
+      ctx.map.setLayoutProperty(mainLayerId, 'circle-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-radius', hoverNumberExpr(pointRadius as any, 3) as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-opacity', opacity as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', hoverColorExpr(def.style.strokeColor, '#818cf8') as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 0) + 2, def.style.strokeWidth] as any)
     } else {
+      ctx.map.setLayoutProperty(mainLayerId, 'line-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-width', hoverNumberExpr(lineWidth as any, 3) as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-opacity', opacity as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])

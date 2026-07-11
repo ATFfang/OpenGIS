@@ -3,6 +3,8 @@
  */
 export { loadGeoFile, loadGeoFiles, isSupportedExtension, getSupportedExtensions } from './GeoFileService'
 export { getDefaultStyle, getNextLayerColor, resetLayerColorIndex } from './defaultStyles'
+export { detectGeometryType, summarizeGeometryTypes } from './geometry'
+export type { GeometryTypeSummary } from './geometry'
 export {
   LARGE_LAYER_THRESHOLD_BYTES,
   LARGE_LAYER_SAMPLE_FEATURES,
@@ -36,6 +38,7 @@ export type {
   CategorizedClassification,
   ExtrusionSettings,
   NumericVisualVariable,
+  SortVisualVariable,
   LayerFilterSpec,
   LayerAttributeFilter,
   LegendSpec,

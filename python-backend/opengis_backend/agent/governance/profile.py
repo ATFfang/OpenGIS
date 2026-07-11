@@ -63,7 +63,7 @@ class AgentProfile:
             name="gis-build",
             mode=AgentMode.BUILD,
             description="Default autonomous GIS task execution agent.",
-            tool_groups=["core", "qgis", "osm", "datasource"],
+            tool_groups=["core", "qgis", "osm", "datasource", "worker"],
             permission_level=PermissionLevel.SAFE_WRITE,
             max_steps=max_steps,
             metadata={},

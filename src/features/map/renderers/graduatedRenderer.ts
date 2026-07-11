@@ -23,6 +23,7 @@ import {
   sourceIdFor,
 } from './types'
 import {
+  compileSortKey,
   compileNumericVisualVariable,
   hoverColorExpr,
   hoverNumberExpr,
@@ -80,13 +81,14 @@ export const graduatedRenderer: LayerRenderer = {
     const strokeWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
       defaultRange: [0.5, 6],
     })
+    const sortKey = compileSortKey(def.style.sortVariable)
 
     if (geomRenderType === 'fill') {
       ctx.addRenderLayer({
         id: mainLayerId,
         type: 'fill',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'fill-sort-key': sortKey } : {}) },
         paint: {
           'fill-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'fill-opacity': hoverOpacityExpr(opacity as any, fillOpacity) as any,
@@ -114,7 +116,7 @@ export const graduatedRenderer: LayerRenderer = {
         id: mainLayerId,
         type: 'circle',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'circle-sort-key': sortKey } : {}) },
         paint: {
           'circle-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'circle-radius': hoverNumberExpr(pointRadius as any, 3) as any,
@@ -134,7 +136,7 @@ export const graduatedRenderer: LayerRenderer = {
         id: mainLayerId,
         type: 'line',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'line-sort-key': sortKey } : {}) },
         paint: {
           'line-color': hoverColorExpr(colorExpr, '#6366f1') as any,
           'line-width': hoverNumberExpr(lineWidth as any, 3) as any,
@@ -188,6 +190,7 @@ export const graduatedRenderer: LayerRenderer = {
 
     // Sync common paint properties with hover support
     if (geomRenderType === 'fill') {
+      ctx.map.setLayoutProperty(mainLayerId, 'fill-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', hoverOpacityExpr(opacity as any, fillOpacity) as any)
       const strokeId = renderLayerId(def.id, 'stroke')
       if (ctx.map.getLayer(strokeId)) {
@@ -197,11 +200,13 @@ export const graduatedRenderer: LayerRenderer = {
         ctx.map.setPaintProperty(strokeId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
       }
     } else if (geomRenderType === 'circle') {
+      ctx.map.setLayoutProperty(mainLayerId, 'circle-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-radius', hoverNumberExpr(pointRadius as any, 3) as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-opacity', opacity as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', hoverColorExpr(def.style.strokeColor, '#818cf8') as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 0) + 2, def.style.strokeWidth] as any)
     } else {
+      ctx.map.setLayoutProperty(mainLayerId, 'line-sort-key', compileSortKey(def.style.sortVariable) as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-width', hoverNumberExpr(lineWidth as any, 3) as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-opacity', opacity as any)
       ctx.map.setPaintProperty(mainLayerId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
@@ -286,7 +291,7 @@ function buildGraduated(def: MapLayerDefinition): {
   }
 
   // 组装 step expression
-  const expr: any[] = ['step', ['to-number', ['get', cfg.field]]]
+  const expr: any[] = ['step', ['to-number', ['get', cfg.field], -1e15]]
   expr.push(palette[0])
   for (let i = 0; i < breaks.length; i++) {
     expr.push(breaks[i])
@@ -345,8 +350,7 @@ function quantileBreaks(sorted: number[], classes: number): number[] {
     const idx = Math.floor((i / classes) * sorted.length)
     breaks.push(sorted[Math.min(idx, sorted.length - 1)])
   }
-  // 去重（极端情况：数据只有少数值会产生重复断点）
-  return dedupe(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 /**
@@ -363,7 +367,7 @@ function equalIntervalBreaks(sorted: number[], classes: number): number[] {
   for (let i = 1; i < classes; i++) {
     breaks.push(min + step * i)
   }
-  return dedupe(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 /**
@@ -377,4 +381,21 @@ function dedupe(arr: number[]): number[] {
     if (out.length === 0 || v > out[out.length - 1]) out.push(v)
   }
   return out
+}
+
+function stabilizeBreaks(sorted: number[], breaks: number[], classes: number): number[] {
+  const target = Math.max(0, classes - 1)
+  const deduped = dedupe(breaks)
+  if (deduped.length === target) return deduped
+  const unique = dedupe(sorted)
+  if (unique.length <= 1) return []
+  const effectiveClasses = Math.min(classes, unique.length)
+  const fallback: number[] = []
+  for (let i = 1; i < effectiveClasses; i++) {
+    const pos = (i / effectiveClasses) * (unique.length - 1)
+    const lo = Math.floor(pos)
+    const hi = Math.min(lo + 1, unique.length - 1)
+    fallback.push((unique[lo] + unique[hi]) / 2)
+  }
+  return dedupe(fallback)
 }

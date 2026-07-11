@@ -2,7 +2,7 @@ import type { RpcHandler } from '../../registry';
 import { RpcError } from '../../errors';
 import { parseParams } from '../_util';
 import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
-import { getDefaultStyle, resolveVectorGeoJSON, type CategorizedClassification, type ExtrusionSettings, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData } from '@/services/geo';
+import { getDefaultStyle, resolveVectorGeoJSON, type CategorizedClassification, type ExtrusionSettings, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData, type SortVisualVariable } from '@/services/geo';
 import { bboxToTuple, computeBBox, detectGeometryType } from '../_map_util';
 import { GetLegendSpecSchema, HighlightFeaturesSchema, SetLayerFilterSchema, SetLayerLabelSchema, SetLayerOrderSchema, SetLayerRendererSchema, SetLayerStyleSchema, SetLayerVisibilitySchema, UpdateLegendSpecSchema, UpdateVisualVariablesSchema } from '../schemas';
 import { applyPaintToLayerStyle, ensureFullVectorLayer, estimateGeoJSONBytes, matchesAttributes } from './shared';
@@ -85,6 +85,11 @@ export const styleHandlers: Record<string, RpcHandler> = {
         ? normalizeVisualVariable(layer, parsed.opacityVariable, 'opacityVariable')
         : undefined;
     }
+    if (parsed.sortVariable !== undefined) {
+      nextStyle.sortVariable = parsed.sortVariable
+        ? normalizeSortVariable(layer, parsed.sortVariable, 'sortVariable')
+        : undefined;
+    }
 
     store.updateLayerStyle(parsed.layer_id, nextStyle);
     return {
@@ -94,6 +99,7 @@ export const styleHandlers: Record<string, RpcHandler> = {
       categorized: nextStyle.categorized ?? null,
       size_variable: nextStyle.sizeVariable ?? null,
       opacity_variable: nextStyle.opacityVariable ?? null,
+      sort_variable: nextStyle.sortVariable ?? null,
       extrusion: nextStyle.extrusion ?? null,
     };
   },
@@ -172,12 +178,18 @@ export const styleHandlers: Record<string, RpcHandler> = {
         ? normalizeVisualVariable(layer, parsed.opacity_variable, 'opacity_variable')
         : undefined;
     }
+    if (parsed.sort_variable !== undefined) {
+      updates.sortVariable = parsed.sort_variable
+        ? normalizeSortVariable(layer, parsed.sort_variable, 'sort_variable')
+        : undefined;
+    }
     store.updateLayerStyle(parsed.layer_id, updates);
     const nextLayer = useMapStore.getState().getLayerById(parsed.layer_id);
     return {
       layer_id: parsed.layer_id,
       size_variable: nextLayer?.style.sizeVariable ?? null,
       opacity_variable: nextLayer?.style.opacityVariable ?? null,
+      sort_variable: nextLayer?.style.sortVariable ?? null,
     };
   },
 
@@ -490,6 +502,19 @@ function normalizeVisualVariable(
   return {
     ...variable,
     classes,
+  };
+}
+
+function normalizeSortVariable(
+  layer: MapLayerDefinition,
+  variable: SortVisualVariable,
+  label: string,
+): SortVisualVariable {
+  ensureVectorLayer(layer, `set_layer_renderer: ${label} requires a vector layer`);
+  ensureNumericField(layer, variable.field, `${label}.field`);
+  return {
+    field: variable.field,
+    order: variable.order ?? 'descending',
   };
 }
 

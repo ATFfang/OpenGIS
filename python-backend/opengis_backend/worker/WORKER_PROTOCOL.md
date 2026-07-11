@@ -32,10 +32,20 @@ Use the generated `opengis_worker.py` helper instead of manually printing JSON:
 - `emit_dynamic_tracks(...)`: trajectory LineString features.
 - `emit_moving_objects(...)`: synchronized points and tracks.
 
+`emit_dynamic_points` accepts either a list of point dictionaries or a GeoJSON
+FeatureCollection. Use `lon=`, `lat=`, `id_key=`, `color=`, `size=`, and
+`opacity=` when your source fields differ from the default `lon` / `lat` /
+`id` names. `emit_dynamic_tracks` accepts either `{id: coordinates}` mappings
+or GeoJSON LineString FeatureCollections and supports `color=`, `width=`, and
+`opacity=`.
+
 ## Rules For Agents
 
 - Do not edit `opengis_worker.py`; OpenGIS regenerates it.
 - Do not create another entrypoint. The entrypoint is always `main.py`.
+- Read `config.json` for layer ids. `start_dynamic_map_worker` writes requested
+  `point_layer_id` and `track_layer_id` into `config.layers.points` and
+  `config.layers.tracks`.
 - When debugging, read worker logs and modify the smallest failing layer:
   datasource bugs go in `src/datasource.py`, transformation bugs go in
   `src/service.py`, rendering/output bugs go in `src/publisher.py`.
