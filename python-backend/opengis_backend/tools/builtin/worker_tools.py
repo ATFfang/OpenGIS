@@ -224,6 +224,31 @@ def start_dynamic_map_worker(
     combined_description = description
     if metadata:
         combined_description = (description + "\n" if description else "") + "Dynamic map layers: " + ", ".join(metadata)
+    dynamic_layers = []
+    dynamic_config: dict[str, Any] = {"layers": {}}
+    if point_layer_id:
+        dynamic_config["layers"]["points"] = point_layer_id
+        dynamic_layers.append({
+            "id": point_layer_id,
+            "role": "points",
+            "geometry": "Point",
+            "dynamic": True,
+        })
+    if track_layer_id:
+        dynamic_config["layers"]["tracks"] = track_layer_id
+        dynamic_layers.append({
+            "id": track_layer_id,
+            "role": "tracks",
+            "geometry": "LineString",
+            "dynamic": True,
+        })
+    merged_manifest = dict(manifest or {})
+    if dynamic_layers:
+        existing_layers = merged_manifest.get("layers")
+        merged_manifest["layers"] = [
+            *(existing_layers if isinstance(existing_layers, list) else []),
+            *dynamic_layers,
+        ]
     result = get_worker_manager().start_worker(
         workspace_path=_workspace(ctx),
         name=name,
@@ -231,7 +256,8 @@ def start_dynamic_map_worker(
         description=combined_description,
         worker_id=worker_id,
         files=files,
-        manifest=manifest,
+        manifest=merged_manifest,
+        config=dynamic_config if dynamic_layers else None,
         initial_health_timeout=initial_health_timeout,
     )
     result["protocol_doc"] = WORKER_PROTOCOL_DOC

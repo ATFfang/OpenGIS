@@ -3,6 +3,7 @@ import type {
   LayerFilterSpec,
   MapLayerDefinition,
   NumericVisualVariable,
+  SortVisualVariable,
 } from '@/services/geo'
 import { resolveVectorGeoJSON } from '@/services/geo'
 
@@ -91,6 +92,12 @@ export function hoverOpacityExpr(base: number | unknown[], fallback: number, hov
   ]
 }
 
+export function compileSortKey(variable: SortVisualVariable | undefined): unknown[] | undefined {
+  if (!variable?.field) return undefined
+  const valueExpr: unknown[] = ['to-number', ['get', variable.field], 0]
+  return variable.order === 'ascending' ? ['*', valueExpr, -1] : valueExpr
+}
+
 function resolveClassCount(variable: NumericVisualVariable): number {
   if (variable.method === 'manual' && variable.breaks?.length) return variable.breaks.length + 1
   if (variable.values?.length && variable.values.length > 1) return variable.values.length
@@ -154,7 +161,7 @@ function quantileBreaks(sorted: number[], classes: number): number[] {
     const idx = Math.floor((i / classes) * sorted.length)
     breaks.push(sorted[Math.min(idx, sorted.length - 1)])
   }
-  return dedupeSorted(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 function equalIntervalBreaks(sorted: number[], classes: number): number[] {
@@ -163,7 +170,7 @@ function equalIntervalBreaks(sorted: number[], classes: number): number[] {
   const step = (max - min) / classes
   const breaks: number[] = []
   for (let i = 1; i < classes; i++) breaks.push(min + step * i)
-  return dedupeSorted(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 function dedupeSorted(values: number[]): number[] {
@@ -172,6 +179,23 @@ function dedupeSorted(values: number[]): number[] {
     if (out.length === 0 || value > out[out.length - 1]) out.push(value)
   }
   return out
+}
+
+function stabilizeBreaks(sorted: number[], breaks: number[], classes: number): number[] {
+  const target = Math.max(0, classes - 1)
+  const deduped = dedupeSorted(breaks)
+  if (deduped.length === target) return deduped
+  const unique = dedupeSorted(sorted)
+  if (unique.length <= 1) return []
+  const effectiveClasses = Math.min(classes, unique.length)
+  const fallback: number[] = []
+  for (let i = 1; i < effectiveClasses; i++) {
+    const pos = (i / effectiveClasses) * (unique.length - 1)
+    const lo = Math.floor(pos)
+    const hi = Math.min(lo + 1, unique.length - 1)
+    fallback.push((unique[lo] + unique[hi]) / 2)
+  }
+  return dedupeSorted(fallback)
 }
 
 function clamp(value: number, min: number, max: number): number {

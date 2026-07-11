@@ -129,6 +129,17 @@ def _bash_sync(
             "warnings": parsed["warnings"],
             "parsed": parsed,
         }
+    if parsed["parse_errors"]:
+        return {
+            "output": "Refused to execute shell command because it could not be parsed safely: "
+            + "; ".join(parsed["parse_errors"][:3]),
+            "exit_code": -1,
+            "description": description,
+            "truncated": False,
+            "error": "shell_parse_error",
+            "warnings": parsed["warnings"],
+            "parsed": parsed,
+        }
 
     try:
         env = os.environ.copy()

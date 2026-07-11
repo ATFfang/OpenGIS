@@ -44,6 +44,8 @@ from opengis_backend.agent.telemetry.script_archive import _app_data_base  # reu
 logger = logging.getLogger(__name__)
 
 STALE_RUNNING_SECONDS = 12 * 60 * 60
+OPEN_MESSAGE_PART_STATUSES = {"pending", "running", "streaming"}
+OPEN_TOOL_CALL_STATUSES = {"pending", "running", "streaming"}
 
 
 class RunArchiveError(RuntimeError):
@@ -309,6 +311,7 @@ class RunArchive:
         error: Optional[str] = None,
     ) -> None:
         """Finalise the archive: flip status, stamp finished_at, dump final answer."""
+        self._finalize_open_records(status=status, error=error)
         self._meta["status"] = status
         self._meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
         if error is not None:
@@ -322,6 +325,89 @@ class RunArchive:
                 logger.exception("final_answer write failed for run=%s", self.run_id)
         self._flush_meta()
         logger.info("RunArchive closed run=%s status=%s", self.run_id, status)
+
+    def _finalize_open_records(self, *, status: str, error: Optional[str]) -> None:
+        """Append terminal records for lifecycle entries left open at run close.
+
+        Live UI and archived run detail both merge JSONL entries by stable ids.
+        If a tool process exits through an exception path before its normal
+        result event is written, the last row can otherwise stay ``running``
+        forever. Close-time finalization keeps the event log append-only while
+        making the terminal state explicit.
+        """
+        try:
+            self._finalize_open_tool_calls(status=status, error=error)
+            self._finalize_open_message_parts(status=status, error=error)
+        except Exception:
+            logger.debug("open record finalization failed for run=%s", self.run_id, exc_info=True)
+
+    def _finalize_open_tool_calls(self, *, status: str, error: Optional[str]) -> None:
+        latest: dict[str, dict[str, Any]] = {}
+        for entry in self._read_jsonl("tool_calls.jsonl"):
+            call_id = str(entry.get("call_id") or "")
+            if not call_id:
+                continue
+            latest[call_id] = entry
+
+        for call_id, entry in latest.items():
+            entry_status = str(entry.get("status") or "")
+            if entry_status not in OPEN_TOOL_CALL_STATUSES:
+                continue
+            terminal_status = "error" if status != "success" else "completed"
+            terminal_error = None if terminal_status == "completed" else (
+                error or f"run_closed_before_tool_result: run status={status}"
+            )
+            self.record_tool_call(
+                call_id=call_id,
+                name=str(entry.get("name") or ""),
+                arguments=entry.get("arguments") if isinstance(entry.get("arguments"), dict) else {},
+                output=str(entry.get("output") or ""),
+                error=terminal_error,
+                duration_ms=None,
+                metadata={
+                    **(entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}),
+                    "finalized_by_run_close": True,
+                    "run_close_status": status,
+                },
+                status=terminal_status,
+            )
+
+    def _finalize_open_message_parts(self, *, status: str, error: Optional[str]) -> None:
+        latest: dict[str, dict[str, Any]] = {}
+        for entry in self._read_jsonl("message_parts.jsonl"):
+            part_id = str(entry.get("id") or "")
+            if not part_id:
+                continue
+            latest[part_id] = entry
+
+        terminal_status = self._message_part_terminal_status(status)
+        terminal_error = error or f"run_closed_before_message_part_result: run status={status}"
+        for part_id, entry in latest.items():
+            entry_status = str(entry.get("status") or "")
+            if entry_status not in OPEN_MESSAGE_PART_STATUSES:
+                continue
+            data = dict(entry.get("data") if isinstance(entry.get("data"), dict) else {})
+            data.update({
+                "finalized_by_run_close": True,
+                "run_close_status": status,
+            })
+            if terminal_status != "completed":
+                data.setdefault("error", terminal_error)
+            self.record_message_part({
+                **entry,
+                "id": part_id,
+                "status": terminal_status,
+                "run_id": entry.get("run_id") or self.run_id,
+                "data": data,
+            })
+
+    @staticmethod
+    def _message_part_terminal_status(status: str) -> str:
+        if status == "success":
+            return "completed"
+        if status == "cancelled":
+            return "cancelled"
+        return "failed"
 
     # -- Read API (used by rpc.runs.*) ---------------------------------
 
@@ -435,6 +521,13 @@ class RunArchive:
         meta["error"] = str(meta.get("error") or reason)
         meta.setdefault("recovered_from_running", True)
         try:
+            archive = RunArchive(
+                run_id=str(meta.get("run_id") or meta_path.parent.name),
+                run_dir=meta_path.parent,
+                workspace_path=None,
+                _meta=meta,
+            )
+            archive._finalize_open_records(status="error", error=str(meta["error"]))
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             logger.debug("failed to reconcile stale run meta %s", meta_path, exc_info=True)

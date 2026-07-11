@@ -7,7 +7,8 @@ import { useMapStore } from '@/stores/mapStore';
 import { getDefaultStyle, makeHandledVectorData, resolveVectorGeoJSON, shouldHandleLayer, type GeoJSONFeature, type GeoJSONFeatureCollection, type GeoJSONSourceDiff, type MapLayerDefinition, type ParsedVectorData } from '@/services/geo';
 import { extractFields } from '@/services/geo/parsers';
 import { DynamicLayerUpdateSchema } from '../schemas';
-import { applyPaintToLayerStyle, estimateGeoJSONBytes, normalizePath, renderTypeFromStyleType } from './shared';
+import { applyPaintToLayerStyle, estimateGeoJSONBytes, normalizePath, normalizeStylePaintInput, renderTypeFromStyleType } from './shared';
+import { mapEngine } from '@/features/map/engine/MapEngine';
 
 export const dynamicHandlers: Record<string, RpcHandler> = {
   'rpc.ui.map.dynamic_layer_update': (params) => {
@@ -107,14 +108,15 @@ export const dynamicHandlers: Record<string, RpcHandler> = {
       });
     }
 
-    const style = parsed.style
+    const dynamicStyle = parsed.style ? normalizeStylePaintInput(parsed.style) : undefined;
+    const style = dynamicStyle
       ? getDefaultStyle(geometryType)
       : existing?.style
         ? { ...existing.style }
         : getDefaultStyle(geometryType);
-    if (parsed.style) {
-      style.renderType = renderTypeFromStyleType(parsed.style.type, geometryType);
-      applyPaintToLayerStyle(style, parsed.style.paint);
+    if (dynamicStyle) {
+      style.renderType = renderTypeFromStyleType(dynamicStyle.type, geometryType);
+      applyPaintToLayerStyle(style, dynamicStyle.paint);
     }
 
     const definition: MapLayerDefinition = {
@@ -144,6 +146,7 @@ export const dynamicHandlers: Record<string, RpcHandler> = {
     };
 
     store.addLayer(definition);
+    syncDynamicLayerToMap(definition);
 
     return {
       layer_id: parsed.layer_id,
@@ -156,6 +159,19 @@ export const dynamicHandlers: Record<string, RpcHandler> = {
     };
   }
 };
+
+function syncDynamicLayerToMap(definition: MapLayerDefinition): void {
+  const map = mapEngine.getMap();
+  if (!map?.isStyleLoaded?.()) return;
+  try {
+    mapEngine.syncLayer(definition);
+    mapEngine.setLayerVisibility(definition.id, definition.visible);
+    mapEngine.updateLayerPaint(definition);
+    map.triggerRepaint?.();
+  } catch (error) {
+    console.warn('[dynamic_layer_update] immediate map sync failed:', error);
+  }
+}
 
 
 function emptyFeatureCollection(): GeoJSONFeatureCollection {

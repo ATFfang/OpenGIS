@@ -114,6 +114,109 @@ def _validate_bbox(south: float, west: float, north: float, east: float) -> None
         raise ValueError("west must be less than east")
 
 
+def _bbox_from_params(params: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    """Return bbox as ``south, west, north, east`` from common param shapes."""
+    if all(key in params for key in ("south", "west", "north", "east")):
+        return (
+            float(params["south"]),
+            float(params["west"]),
+            float(params["north"]),
+            float(params["east"]),
+        )
+    bbox = params.get("bbox") or params.get("boundingbox") or params.get("bounds")
+    if isinstance(bbox, str):
+        try:
+            bbox = json.loads(bbox)
+        except Exception:
+            parts = [item.strip() for item in bbox.split(",") if item.strip()]
+            bbox = [float(item) for item in parts] if len(parts) == 4 else bbox
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        values = [float(item) for item in bbox]
+        # Nominatim returns [south, north, west, east]. Map libraries often use
+        # [west, south, east, north]. Prefer a range-based disambiguation.
+        if abs(values[0]) <= 90 and abs(values[1]) <= 90 and abs(values[2]) > 90:
+            south, north, west, east = values
+        else:
+            west, south, east, north = values
+        return south, west, north, east
+    return None
+
+
+def _tag_from_params(params: dict[str, Any]) -> tuple[str, str]:
+    """Resolve OSM tag key/value from strict params or common LLM aliases."""
+    key = params.get("key")
+    value = params.get("value", "*")
+    tags = (
+        params.get("tags")
+        or params.get("features")
+        or params.get("feature")
+        or params.get("feature_type")
+    )
+    if not key and isinstance(tags, list) and tags:
+        first = tags[0]
+        if isinstance(first, str):
+            key = first
+        elif isinstance(first, dict):
+            key = first.get("key") or first.get("k")
+            value = first.get("value", first.get("v", value))
+    if not key and isinstance(tags, dict):
+        if len(tags) == 1:
+            key, value = next(iter(tags.items()))
+        else:
+            key = tags.get("key") or tags.get("k")
+            value = tags.get("value", tags.get("v", value))
+    if not key and params.get("query"):
+        key = params.get("query")
+    if not key:
+        raise ValueError("missing OSM tag key; provide key/value, tags, or query='building/highway/amenity'")
+    return str(key), "*" if value is None else str(value)
+
+
+def _invalid_params_response(command: str, message: str, params: dict[str, Any]) -> dict[str, Any]:
+    expected: dict[str, Any] = {
+        "download_bbox": {
+            "required": ["south", "west", "north", "east", "key"],
+            "aliases": {
+                "bbox": "[west,south,east,north] or Nominatim [south,north,west,east]",
+                "tags": "[\"building\"] or {\"building\":\"*\"}",
+                "query": "tag key alias, e.g. building/highway",
+            },
+            "example": {
+                "south": 31.0258,
+                "west": 121.4416,
+                "north": 31.0399,
+                "east": 121.4574,
+                "key": "building",
+                "output_path": "data/buildings.geojson",
+            },
+        },
+        "download_features": {
+            "required": ["place", "key"],
+            "note": "If you already have bbox coordinates, use download_bbox instead; osm_call will also accept bbox params here and route them to download_bbox.",
+            "example": {
+                "place": "华东师范大学闵行校区",
+                "key": "building",
+                "output_path": "data/buildings.geojson",
+            },
+        },
+        "overpass_query": {
+            "required": ["query"],
+            "note": "Use a complete Overpass body. OpenGIS normalizes output to out geom for GeoJSON conversion.",
+        },
+        "search": {"required": ["query"]},
+    }
+    return {
+        "success": False,
+        "error": "osm_invalid_params",
+        "command": command,
+        "message": message,
+        "retryable": False,
+        "do_not_retry_same_request": True,
+        "received_params": params,
+        "expected": expected.get(command, {}),
+    }
+
+
 def _workspace_path(ctx: ToolContext) -> Path:
     workspace = (ctx.meta or {}).get("workspace_path")
     if workspace:
@@ -221,17 +324,26 @@ def _finalize_geojson_result(
 
 def _network_error_response(command: str, exc: Exception, params: dict[str, Any]) -> dict[str, Any]:
     is_timeout = isinstance(exc, requests.exceptions.Timeout)
+    is_http = isinstance(exc, requests.exceptions.HTTPError)
+    status_code = exc.response.status_code if is_http and exc.response is not None else None
+    retryable = (status_code in {429, 500, 502, 503, 504}) if is_http else True
+    if is_http:
+        error = "osm_overpass_http_error" if command != "search" else "osm_geocode_http_error"
+    else:
+        error = "osm_network_timeout" if is_timeout else "osm_network_error"
     return {
         "success": False,
-        "error": "osm_network_timeout" if is_timeout else "osm_network_error",
+        "error": error,
         "command": command,
         "message": str(exc),
-        "retryable": True,
+        "retryable": retryable,
+        "do_not_retry_same_request": True,
+        "status_code": status_code,
         "timeout": params.get("timeout") or params.get("geocode_timeout"),
         "retries": params.get("retries") or params.get("geocode_retries"),
         "suggestion": (
-            "Nominatim/Overpass is slow or unreachable. Retry with a larger timeout, "
-            "or avoid geocoding by using download_bbox with explicit south/west/north/east."
+            "Nominatim/Overpass is slow or unreachable. Do not repeat the exact same request. "
+            "Use a smaller bbox, explicit download_bbox coordinates, or a simpler Overpass query."
         ),
     }
 
@@ -274,6 +386,8 @@ def osm_call(ctx: ToolContext, command: str, params: str = "{}") -> dict[str, An
 
     if command == "overpass_query":
         try:
+            if "query" not in p:
+                return _invalid_params_response(command, "missing required param: query", p)
             data = overpass_query(
                 p["query"],
                 timeout=int(p.get("timeout", 120)),
@@ -285,32 +399,70 @@ def osm_call(ctx: ToolContext, command: str, params: str = "{}") -> dict[str, An
                 params=p,
                 geojson=osm_to_geojson(data),
             )
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as exc:
             return _network_error_response(command, exc, p)
 
     elif command == "download_bbox":
         try:
+            bbox = _bbox_from_params(p)
+            if bbox is None:
+                if p.get("place"):
+                    key, value = _tag_from_params(p)
+                    geojson = _cmd_download_features(
+                        place=str(p["place"]),
+                        key=key,
+                        value=value,
+                        geometry_type=p.get("geometry_type", "way"),
+                        timeout=int(p.get("timeout", 120)),
+                        retries=int(p.get("retries", 1)),
+                        geocode_timeout=int(p.get("geocode_timeout", p.get("timeout", 45))),
+                        geocode_retries=int(p.get("geocode_retries", p.get("retries", 2))),
+                    )
+                    return _finalize_geojson_result(ctx, command=command, params=p, geojson=geojson)
+                return _invalid_params_response(command, "missing bbox coordinates: south/west/north/east or bbox", p)
+            south, west, north, east = bbox
+            key, value = _tag_from_params(p)
             geojson = _cmd_download_bbox(
-                south=float(p["south"]),
-                west=float(p["west"]),
-                north=float(p["north"]),
-                east=float(p["east"]),
-                key=p["key"],
-                value=p.get("value", "*"),
+                south=south,
+                west=west,
+                north=north,
+                east=east,
+                key=key,
+                value=value,
                 geometry_type=p.get("geometry_type", "way"),
                 timeout=int(p.get("timeout", 120)),
                 retries=int(p.get("retries", 1)),
             )
             return _finalize_geojson_result(ctx, command=command, params=p, geojson=geojson)
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except ValueError as exc:
+            return _invalid_params_response(command, str(exc), p)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as exc:
             return _network_error_response(command, exc, p)
 
     elif command == "download_features":
         try:
+            key, value = _tag_from_params(p)
+            bbox = _bbox_from_params(p)
+            if bbox is not None and not p.get("place"):
+                south, west, north, east = bbox
+                geojson = _cmd_download_bbox(
+                    south=south,
+                    west=west,
+                    north=north,
+                    east=east,
+                    key=key,
+                    value=value,
+                    geometry_type=p.get("geometry_type", "way"),
+                    timeout=int(p.get("timeout", 120)),
+                    retries=int(p.get("retries", 1)),
+                )
+                return _finalize_geojson_result(ctx, command="download_bbox", params=p, geojson=geojson)
+            if not p.get("place"):
+                return _invalid_params_response(command, "missing required param: place; use download_bbox when bbox is already known", p)
             geojson = _cmd_download_features(
-                place=p["place"],
-                key=p["key"],
-                value=p.get("value", "*"),
+                place=str(p["place"]),
+                key=key,
+                value=value,
                 geometry_type=p.get("geometry_type", "way"),
                 timeout=int(p.get("timeout", 120)),
                 retries=int(p.get("retries", 1)),
@@ -318,18 +470,22 @@ def osm_call(ctx: ToolContext, command: str, params: str = "{}") -> dict[str, An
                 geocode_retries=int(p.get("geocode_retries", p.get("retries", 2))),
             )
             return _finalize_geojson_result(ctx, command=command, params=p, geojson=geojson)
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except ValueError as exc:
+            return _invalid_params_response(command, str(exc), p)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as exc:
             return _network_error_response(command, exc, p)
 
     elif command == "search":
         try:
+            if "query" not in p:
+                return _invalid_params_response(command, "missing required param: query", p)
             return {"success": True, "results": nominatim_search(
                 p["query"],
                 limit=int(p.get("limit", 5)),
                 timeout=int(p.get("timeout", 45)),
                 retries=int(p.get("retries", 2)),
             )}
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as exc:
             return _network_error_response(command, exc, p)
 
     raise ValueError(f"Unhandled command: {command}")

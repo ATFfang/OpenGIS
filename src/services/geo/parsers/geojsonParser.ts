@@ -6,10 +6,10 @@ import type {
   ParsedVectorData,
   GeoJSONFeatureCollection,
   GeoJSONFeature,
-  GeometryType,
   BBox,
   FieldDescriptor,
 } from '../types'
+import { detectGeometryType } from '../geometry'
 
 /**
  * Parse a GeoJSON string into structured vector data.
@@ -67,34 +67,6 @@ function normalizeToFeatureCollection(data: any): GeoJSONFeatureCollection {
   }
 
   throw new Error('Invalid GeoJSON: unrecognized structure.')
-}
-
-/**
- * Detect the dominant geometry type from the feature collection.
- */
-function detectGeometryType(fc: GeoJSONFeatureCollection): GeometryType {
-  const typeCounts = new Map<string, number>()
-
-  for (const feature of fc.features) {
-    if (feature.geometry?.type) {
-      const t = feature.geometry.type
-      typeCounts.set(t, (typeCounts.get(t) || 0) + 1)
-    }
-  }
-
-  if (typeCounts.size === 0) return 'Point'
-
-  // Return the most frequent geometry type
-  let maxType = 'Point'
-  let maxCount = 0
-  for (const [type, count] of typeCounts) {
-    if (count > maxCount) {
-      maxType = type
-      maxCount = count
-    }
-  }
-
-  return maxType as GeometryType
 }
 
 /**

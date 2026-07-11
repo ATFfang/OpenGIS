@@ -9,6 +9,7 @@ import {
   sourceIdFor,
 } from './types'
 import {
+  compileSortKey,
   compileNumericVisualVariable,
   hoverColorExpr,
   hoverNumberExpr,
@@ -34,13 +35,14 @@ export const circleRenderer: LayerRenderer = {
       defaultRange: [0.25, def.style.opacity],
       clampRange: [0, 1],
     })
+    const sortKey = compileSortKey(def.style.sortVariable)
 
     if (!map.getLayer(circleId)) {
       ctx.addRenderLayer({
         id: circleId,
         type: 'circle',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'circle-sort-key': sortKey } : {}) },
         paint: {
           'circle-color': hoverColorExpr(def.style.color, '#6366f1') as any,
           'circle-radius': hoverNumberExpr(radius as any, 3) as any,
@@ -85,6 +87,7 @@ export const circleRenderer: LayerRenderer = {
         def.style.strokeWidth,
       ] as any)
       ctx.map.setPaintProperty(circleId, 'circle-stroke-opacity', def.style.strokeOpacity ?? 1)
+      ctx.map.setLayoutProperty(circleId, 'circle-sort-key', compileSortKey(def.style.sortVariable) as any)
     }
   },
 

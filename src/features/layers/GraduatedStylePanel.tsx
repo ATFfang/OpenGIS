@@ -35,6 +35,7 @@ import type {
   GeoJSONFeatureCollection,
   ClassificationMethod,
   NumericVisualVariable,
+  SortVisualVariable,
 } from '@/services/geo'
 import { useMapStore } from '@/stores/mapStore'
 
@@ -189,7 +190,7 @@ function quantileBreaks(sorted: number[], classes: number): number[] {
     const idx = Math.floor((i / classes) * sorted.length)
     breaks.push(sorted[Math.min(idx, sorted.length - 1)])
   }
-  return dedupe(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 function equalIntervalBreaks(sorted: number[], classes: number): number[] {
@@ -200,7 +201,7 @@ function equalIntervalBreaks(sorted: number[], classes: number): number[] {
   for (let i = 1; i < classes; i++) {
     breaks.push(min + step * i)
   }
-  return dedupe(breaks)
+  return stabilizeBreaks(sorted, breaks, classes)
 }
 
 function dedupe(arr: number[]): number[] {
@@ -209,6 +210,23 @@ function dedupe(arr: number[]): number[] {
     if (out.length === 0 || v > out[out.length - 1]) out.push(v)
   }
   return out
+}
+
+function stabilizeBreaks(sorted: number[], breaks: number[], classes: number): number[] {
+  const target = Math.max(0, classes - 1)
+  const deduped = dedupe(breaks)
+  if (deduped.length === target) return deduped
+  const unique = dedupe(sorted)
+  if (unique.length <= 1) return []
+  const effectiveClasses = Math.min(classes, unique.length)
+  const fallback: number[] = []
+  for (let i = 1; i < effectiveClasses; i++) {
+    const pos = (i / effectiveClasses) * (unique.length - 1)
+    const lo = Math.floor(pos)
+    const hi = Math.min(lo + 1, unique.length - 1)
+    fallback.push((unique[lo] + unique[hi]) / 2)
+  }
+  return dedupe(fallback)
 }
 
 // ─── Component Props ────────────────────────────────────────────
@@ -228,6 +246,12 @@ interface VisualVariableDraft {
   classes: number
   min: number
   max: number
+}
+
+interface SortVariableDraft {
+  enabled: boolean
+  field: string
+  order: 'ascending' | 'descending'
 }
 
 function draftFromVariable(
@@ -252,6 +276,25 @@ function variableFromDraft(draft: VisualVariableDraft): NumericVisualVariable | 
     method: draft.method,
     classes: draft.classes,
     range: [draft.min, draft.max],
+  }
+}
+
+function sortDraftFromVariable(
+  variable: SortVisualVariable | undefined,
+  fallbackField: string,
+): SortVariableDraft {
+  return {
+    enabled: Boolean(variable?.field),
+    field: variable?.field || fallbackField,
+    order: variable?.order || 'descending',
+  }
+}
+
+function sortVariableFromDraft(draft: SortVariableDraft): SortVisualVariable | undefined {
+  if (!draft.enabled || !draft.field) return undefined
+  return {
+    field: draft.field,
+    order: draft.order,
   }
 }
 
@@ -311,6 +354,22 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
   const [opacityVariable, setOpacityVariable] = useState<VisualVariableDraft>(() =>
     draftFromVariable(layer.style.opacityVariable, numericFields[0]?.name || '', [0.25, layer.style.opacity])
   )
+  const [sortVariable, setSortVariable] = useState<SortVariableDraft>(() =>
+    sortDraftFromVariable(layer.style.sortVariable, numericFields[0]?.name || '')
+  )
+
+  useEffect(() => {
+    setSizeVariable(draftFromVariable(layer.style.sizeVariable, numericFields[0]?.name || '', isPointGeom ? [3, 14] : [1, 8]))
+    setOpacityVariable(draftFromVariable(layer.style.opacityVariable, numericFields[0]?.name || '', [0.25, layer.style.opacity]))
+    setSortVariable(sortDraftFromVariable(layer.style.sortVariable, numericFields[0]?.name || ''))
+  }, [
+    layer.style.sizeVariable,
+    layer.style.opacityVariable,
+    layer.style.sortVariable,
+    layer.style.opacity,
+    numericFields,
+    isPointGeom,
+  ])
 
   const currentLayerIndex = layers.findIndex((item) => item.id === layer.id)
   const canMoveDown = currentLayerIndex > 0
@@ -360,6 +419,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
       ...(isFillGeom ? { fillOpacity } : {}),
       sizeVariable: variableFromDraft(sizeVariable),
       opacityVariable: variableFromDraft(opacityVariable),
+      sortVariable: sortVariableFromDraft(sortVariable),
     }
     if (mode === 'graduated') {
       const updates: Partial<LayerStyle> = {
@@ -392,6 +452,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
     catField, catMaxCategories, catColors, layer.id, updateLayerStyle, onClose,
     strokeWidth, strokeColor, radius, fillOpacity, isPointGeom, isFillGeom,
     sizeVariable, opacityVariable,
+    sortVariable,
   ])
 
   // ── Reset to single-color ──
@@ -409,6 +470,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
       categorized: undefined,
       sizeVariable: undefined,
       opacityVariable: undefined,
+      sortVariable: undefined,
     })
     onClose()
   }, [layer, updateLayerStyle, onClose])
@@ -588,6 +650,8 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
             onSizeVariableChange={setSizeVariable}
             opacityVariable={opacityVariable}
             onOpacityVariableChange={setOpacityVariable}
+            sortVariable={sortVariable}
+            onSortVariableChange={setSortVariable}
             t={t.layers}
           />
 
@@ -945,6 +1009,8 @@ interface VisualVariableControlsProps {
   onSizeVariableChange: (next: VisualVariableDraft) => void
   opacityVariable: VisualVariableDraft
   onOpacityVariableChange: (next: VisualVariableDraft) => void
+  sortVariable: SortVariableDraft
+  onSortVariableChange: (next: SortVariableDraft) => void
 }
 
 function VisualVariableControls({
@@ -955,6 +1021,8 @@ function VisualVariableControls({
   onSizeVariableChange,
   opacityVariable,
   onOpacityVariableChange,
+  sortVariable,
+  onSortVariableChange,
 }: VisualVariableControlsProps) {
   return (
     <div className="border-t-[0.5px] border-border/20 pt-3 mt-1 space-y-3">
@@ -984,6 +1052,64 @@ function VisualVariableControls({
         format={(value) => String(Math.round(value * 100))}
         t={t}
       />
+      <SortVariableEditor
+        fields={numericFields}
+        draft={sortVariable}
+        onChange={onSortVariableChange}
+      />
+    </div>
+  )
+}
+
+function SortVariableEditor({
+  fields,
+  draft,
+  onChange,
+}: {
+  fields: FieldDescriptor[]
+  draft: SortVariableDraft
+  onChange: (next: SortVariableDraft) => void
+}) {
+  const patch = (updates: Partial<SortVariableDraft>) => onChange({ ...draft, ...updates })
+  return (
+    <div className="rounded-lg bg-bg-secondary/70 border-[0.5px] border-border/25 px-2.5 py-2 space-y-2">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(e) => patch({ enabled: e.target.checked })}
+          className="w-3.5 h-3.5 accent-accent-primary"
+        />
+        <span className="text-xs font-medium text-text-secondary">绘制顺序</span>
+      </label>
+      {draft.enabled && (
+        <div className="space-y-2">
+          <ControlRow label="字段">
+            <select
+              value={draft.field}
+              onChange={(e) => patch({ field: e.target.value })}
+              className="flex-1 bg-bg-primary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
+            >
+              {fields.length === 0 && <option value="">无数值字段</option>}
+              {fields.map((field) => (
+                <option key={field.name} value={field.name}>
+                  {field.name}
+                </option>
+              ))}
+            </select>
+          </ControlRow>
+          <ControlRow label="方式">
+            <select
+              value={draft.order}
+              onChange={(e) => patch({ order: e.target.value as SortVariableDraft['order'] })}
+              className="flex-1 bg-bg-primary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
+            >
+              <option value="descending">高值在上</option>
+              <option value="ascending">低值在上</option>
+            </select>
+          </ControlRow>
+        </div>
+      )}
     </div>
   )
 }

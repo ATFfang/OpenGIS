@@ -246,11 +246,38 @@ class RuntimeControl:
                     )
             elif settlement.error:
                 self.recent_failures.append(_summarize_failure(settlement))
+            elif _content_success(settlement.content) is False:
+                failure = _summarize_failure(settlement)
+                self.recent_failures.append(failure)
+                structured = _structured_tool_failure(settlement.content)
+                if structured.get("do_not_retry_same_request") is True or structured.get("retryable") is False:
+                    correction = (
+                        "## Runner Correction\n"
+                        f"The latest `{settlement.name}` call returned a structured failure: {failure}\n"
+                        "Do not retry the exact same request. Use the returned expected schema/suggestion, "
+                        "change the input materially, or explain the external/tool blocker."
+                    )
             elif (
                 self.objective.mode is TaskMode.DATA_ANALYSIS
                 and settlement.name in {"execute_code", "run_script_file"}
             ):
                 self.analysis_code_successes += 1
+
+            if (
+                self.objective.mode is TaskMode.WORKER
+                and settlement.name in {"start_worker", "start_dynamic_map_worker", "restart_worker", "wait_worker_update"}
+                and not settlement.error
+                and _worker_runtime_is_healthy(settlement.content)
+            ):
+                return ControlDecision(
+                    corrective_message=(
+                        "## Runner Control\n"
+                        "The resident worker is running and has passed the worker health/update check. "
+                        "Stop further self-inspection, file rewrites, or restarts. "
+                        "Prepare a concise final answer with the worker id, current health, and what it is rendering."
+                    ),
+                    force_final_reason="worker_running_verified",
+                )
 
             capability = capability_for(settlement.name)
             if capability.domain == "worker":
@@ -338,7 +365,26 @@ class RuntimeControl:
                     "the current request asks for an analysis/opinion, not map rendering; "
                     "answer from the analysis results instead of creating or styling map layers"
                 )
+        if tool_name == "bash" and self._recent_osm_tool_blocker() and _bash_looks_like_osm_network_call(arguments):
+            return (
+                "osm_call already reported an OSM/Overpass blocker in this turn; "
+                "do not bypass the dedicated OSM tool with shell/curl/wget network calls. "
+                "Use corrected osm_call parameters, a materially smaller query, cached/local data, or explain the external blocker."
+            )
         return ""
+
+    def _recent_osm_tool_blocker(self) -> bool:
+        for failure in self.recent_failures[-4:]:
+            text = failure.lower()
+            if "osm_call" in text and (
+                "osm_network_error" in text
+                or "osm_network_timeout" in text
+                or "osm_invalid_params" in text
+                or "overpass" in text
+                or "nominatim" in text
+            ):
+                return True
+        return False
 
 
 def infer_task_mode(user_message: str) -> TaskMode:
@@ -393,6 +439,32 @@ def _summarize_failure(settlement: ToolSettlement) -> str:
     return f"{settlement.name}({settlement.call_id}) failed: {error}"
 
 
+def _structured_tool_failure(content: str) -> dict[str, Any]:
+    try:
+        data = json.loads(content)
+    except Exception:
+        return {}
+    if isinstance(data, dict) and data.get("success") is False:
+        return data
+    return {}
+
+
+def _worker_runtime_is_healthy(content: str) -> bool:
+    try:
+        data = json.loads(content)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("status") or "").lower() != "running":
+        return False
+    health = data.get("health")
+    if isinstance(health, dict) and health.get("ok") is True:
+        return True
+    startup = data.get("startup_check")
+    return isinstance(startup, dict) and startup.get("state") == "ok"
+
+
 def _failure_signature(failure: str) -> str:
     """Return a stable repeated-failure signature.
 
@@ -422,6 +494,15 @@ ONE_SHOT_EXECUTION_TOOLS = {
     "run_script_file",
     "bash",
 }
+
+
+def _bash_looks_like_osm_network_call(arguments: dict[str, Any]) -> bool:
+    command = str(arguments.get("command") or "").lower()
+    if not command:
+        return False
+    network_markers = ("curl", "wget", "http://", "https://")
+    osm_markers = ("overpass", "nominatim", "openstreetmap", "osm.org", "kumi.systems")
+    return any(marker in command for marker in network_markers) and any(marker in command for marker in osm_markers)
 
 
 def _requests_visual_or_file_deliverable(user_request: str) -> bool:

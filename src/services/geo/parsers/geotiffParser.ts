@@ -396,7 +396,7 @@ function renderSingleBand(
   const pixels = imageData.data
   const range = max - min || 1
   const total = width * height
-  const ramp = buildColorRamp(style)
+  const ramp = buildColorRamp(style, min, max)
   const globalOpacity = clamp01(style.opacity ?? 1)
 
   for (let i = 0; i < total; i++) {
@@ -481,6 +481,7 @@ function normalizeRasterStyle(style: RasterStyleSettings | undefined, bandCount:
     band: style?.band ?? 1,
     ramp: style?.stops?.length ? 'custom' : (style?.ramp ?? 'viridis'),
     stops: style?.stops,
+    stopsUnit: style?.stopsUnit,
     min: style?.min,
     max: style?.max,
     opacity: style?.opacity ?? 1,
@@ -490,8 +491,17 @@ function normalizeRasterStyle(style: RasterStyleSettings | undefined, bandCount:
   return next
 }
 
-function buildColorRamp(style: RasterStyleSettings): (t: number) => [number, number, number, number] {
-  const stops = normalizeStops(style.stops?.length ? style.stops : namedRamp(style.ramp ?? 'viridis'))
+function buildColorRamp(
+  style: RasterStyleSettings,
+  stretchMin = 0,
+  stretchMax = 1,
+): (t: number) => [number, number, number, number] {
+  const stops = normalizeStops(
+    style.stops?.length ? style.stops : namedRamp(style.ramp ?? 'viridis'),
+    stretchMin,
+    stretchMax,
+    style.stops?.length ? style.stopsUnit : 'normalized',
+  )
   return (value: number) => interpolateStops(stops, clamp01(value))
 }
 
@@ -565,20 +575,42 @@ function namedRamp(name: RasterColorRampName): RasterColorStop[] {
   }
 }
 
-function normalizeStops(stops: RasterColorStop[]): Required<RasterColorStop>[] {
+function normalizeStops(
+  stops: RasterColorStop[],
+  stretchMin = 0,
+  stretchMax = 1,
+  stopsUnit?: 'normalized' | 'source',
+): Required<RasterColorStop>[] {
+  const useSourceValues = styleUsesSourceStops(stops, stretchMin, stretchMax, stopsUnit)
+  const range = stretchMax - stretchMin || 1
   const normalized = stops
     .map((stop) => ({
-      value: clamp01(Number(stop.value)),
+      value: clamp01(useSourceValues ? (Number(stop.value) - stretchMin) / range : Number(stop.value)),
       color: normalizeHex(stop.color),
       opacity: clamp01(stop.opacity ?? 1),
     }))
     .sort((a, b) => a.value - b.value)
-  if (!normalized.length) return normalizeStops(namedRamp('viridis'))
+  if (!normalized.length) return normalizeStops(namedRamp('viridis'), stretchMin, stretchMax, 'normalized')
   if (normalized[0].value > 0) normalized.unshift({ ...normalized[0], value: 0 })
   if (normalized[normalized.length - 1].value < 1) {
     normalized.push({ ...normalized[normalized.length - 1], value: 1 })
   }
   return normalized
+}
+
+function styleUsesSourceStops(
+  stops: RasterColorStop[],
+  stretchMin: number,
+  stretchMax: number,
+  stopsUnit?: 'normalized' | 'source',
+): boolean {
+  if (stopsUnit) return stopsUnit === 'source'
+  if (stops.some((stop) => Number(stop.value) < 0 || Number(stop.value) > 1)) return true
+  const range = Math.abs(stretchMax - stretchMin)
+  return range > 0 && range < 1 && stops.some((stop) => {
+    const value = Math.abs(Number(stop.value))
+    return value > 0 && value <= Math.max(Math.abs(stretchMin), Math.abs(stretchMax), range) * 1.5
+  })
 }
 
 function interpolateStops(stops: Required<RasterColorStop>[], t: number): [number, number, number, number] {

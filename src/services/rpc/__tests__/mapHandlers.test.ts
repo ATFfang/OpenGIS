@@ -124,6 +124,40 @@ describe('rpc.ui.map.add_layer_from_geojson', () => {
     expect(useMapStore.getState().layers).toHaveLength(1);
   });
 
+  it('does not let structural OSM recursion nodes turn a line layer into points', async () => {
+    const d = makeDispatcher();
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.add_layer_from_geojson', {
+        name: 'roads',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: {
+                type: 'LineString',
+                coordinates: [[121.0, 31.0], [121.1, 31.1]],
+              },
+              properties: { highway: 'residential', _osm_id: 1, _osm_type: 'way' },
+            },
+            ...Array.from({ length: 4 }, (_, index) => ({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121 + index * 0.01, 31] },
+              properties: { _osm_id: 100 + index, _osm_type: 'node' },
+            })),
+          ],
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({ result: { feature_count: 5, geometry_type: 'LineString' } });
+    const layer = useMapStore.getState().layers[0];
+    expect(layer.data.kind).toBe('vector');
+    if (layer.data.kind !== 'vector') throw new Error('expected vector layer');
+    expect(layer.data.geometryType).toBe('LineString');
+    expect(layer.style.renderType).toBe('line');
+  });
+
   it('applies agent style paint while adding a layer', async () => {
     const d = makeDispatcher();
     await d.handleRequest(
@@ -205,6 +239,92 @@ describe('rpc.ui.map.dynamic_layer_update', () => {
     });
     expect(layer?.style.color).toBe('#22c55e');
     expect(layer?.style.radius).toBe(7);
+  });
+
+  it('normalizes worker shorthand paint keys on dynamic updates', async () => {
+    const d = makeDispatcher();
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        sequence: 1,
+        style: {
+          type: 'circle',
+          'circle-color': '#ef4444',
+          'circle-radius': 11,
+          'circle-opacity': 0.65,
+          'circle-stroke-color': '#111827',
+          'circle-stroke-width': 2,
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'live_points',
+        feature_count: 3,
+        geometry_type: 'Point',
+      },
+    });
+    const layer = useMapStore.getState().getLayerById('live_points');
+    expect(layer?.style.color).toBe('#ef4444');
+    expect(layer?.style.radius).toBe(11);
+    expect(layer?.style.opacity).toBe(0.65);
+    expect(layer?.style.strokeColor).toBe('#111827');
+    expect(layer?.style.strokeWidth).toBe(2);
+  });
+
+  it('keeps data-driven paint expressions from worker dynamic styles', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        sequence: 1,
+        style: {
+          type: 'circle',
+          'circle-color': ['get', 'color'],
+          'circle-radius': 9,
+        },
+      }),
+    );
+
+    const layer = useMapStore.getState().getLayerById('live_points');
+    expect(layer?.style.color).toEqual(['get', 'color']);
+    expect(layer?.style.radius).toBe(9);
+  });
+
+  it('immediately syncs dynamic updates to the live map source when the map is ready', async () => {
+    const d = makeDispatcher();
+    const triggerRepaint = vi.fn();
+    const getMap = vi.spyOn(mapEngine, 'getMap').mockReturnValue({
+      isStyleLoaded: () => true,
+      triggerRepaint,
+    } as any);
+    const syncLayer = vi.spyOn(mapEngine, 'syncLayer').mockImplementation(() => {});
+    const setLayerVisibility = vi.spyOn(mapEngine, 'setLayerVisibility').mockImplementation(() => {});
+    const updateLayerPaint = vi.spyOn(mapEngine, 'updateLayerPaint').mockImplementation(() => {});
+
+    await d.handleRequest(
+      req('rpc.ui.map.dynamic_layer_update', {
+        layer_id: 'live_points',
+        name: 'Live Points',
+        geojson: SAMPLE_FC,
+        sequence: 1,
+      }),
+    );
+
+    expect(syncLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'live_points' }));
+    expect(setLayerVisibility).toHaveBeenCalledWith('live_points', true);
+    expect(updateLayerPaint).toHaveBeenCalledWith(expect.objectContaining({ id: 'live_points' }));
+    expect(triggerRepaint).toHaveBeenCalled();
+
+    getMap.mockRestore();
+    syncLayer.mockRestore();
+    setLayerVisibility.mockRestore();
+    updateLayerPaint.mockRestore();
   });
 
   it('skips stale sequence frames', async () => {
@@ -674,9 +794,10 @@ describe('rpc.ui.map.set_layer_style', () => {
     );
   }
 
-  it('maps fill-color / fill-opacity into the LayerStore color / opacity', async () => {
+  it('maps fill-color / fill-opacity into polygon fill style without changing outline opacity', async () => {
     const d = makeDispatcher();
     await addL(d, 'L1');
+    useMapStore.getState().updateLayerStyle('L1', { opacity: 0.9, strokeOpacity: 0.8 });
 
     const resp = await d.handleRequest(
       req('rpc.ui.map.set_layer_style', {
@@ -688,11 +809,13 @@ describe('rpc.ui.map.set_layer_style', () => {
       }),
     );
     expect(resp).toMatchObject({
-      result: { layer_id: 'L1', applied: { color: '#00ff00', opacity: 0.5 } },
+      result: { layer_id: 'L1', applied: { color: '#00ff00', fillOpacity: 0.5 } },
     });
     const layer = useMapStore.getState().getLayerById('L1')!;
     expect(layer.style.color).toBe('#00ff00');
-    expect(layer.style.opacity).toBe(0.5);
+    expect(layer.style.fillOpacity).toBe(0.5);
+    expect(layer.style.opacity).toBe(0.9);
+    expect(layer.style.strokeOpacity).toBe(0.8);
   });
 
   it('maps line and stroke paint without overwriting polygon fill color', async () => {
@@ -952,6 +1075,10 @@ describe('rpc.ui.map semantic layer styling', () => {
           classes: 5,
           values: [0.25, 0.4, 0.55, 0.7, 0.9],
         },
+        sort_variable: {
+          field: 'comment_count',
+          order: 'descending',
+        },
       }),
     );
 
@@ -970,6 +1097,10 @@ describe('rpc.ui.map semantic layer styling', () => {
           classes: 5,
           values: [0.25, 0.4, 0.55, 0.7, 0.9],
         },
+        sort_variable: {
+          field: 'comment_count',
+          order: 'descending',
+        },
       },
     });
 
@@ -977,14 +1108,17 @@ describe('rpc.ui.map semantic layer styling', () => {
     const layer = (listed as { result: { layers: Array<any> } }).result.layers[0];
     expect(layer.style.size_variable).toMatchObject({ field: 'comment_count', range: [4, 18] });
     expect(layer.style.opacity_variable).toMatchObject({ field: 'rating', classes: 5 });
+    expect(layer.style.sort_variable).toMatchObject({ field: 'comment_count', order: 'descending' });
 
     await d.handleRequest(
       req('rpc.ui.map.update_visual_variables', {
         layer_id: 'pois',
         size_variable: null,
+        sort_variable: null,
       }),
     );
     expect(useMapStore.getState().getLayerById('pois')!.style.sizeVariable).toBeUndefined();
+    expect(useMapStore.getState().getLayerById('pois')!.style.sortVariable).toBeUndefined();
   });
 
   it('creates and clears highlight overlay layers from filters', async () => {
@@ -1465,5 +1599,64 @@ describe('rpc.ui.map.add_raster_from_url', () => {
       }),
     );
     expect(resp).toMatchObject({ error: { code: -32603 } });
+  });
+
+  it('keeps source-value custom stops when updating backend tile raster style', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.add_raster_from_url', {
+        url: 'http://127.0.0.1:8765/api/rasters/rst_test/tiles/{z}/{x}/{y}.png?rev=0',
+        name: 'kde',
+        tile_type: 'xyz',
+        raster_id: 'rst_test',
+        raster_style: { ramp: 'magma', opacity: 0.7 },
+        raster_info: {
+          width: 256,
+          height: 256,
+          band_count: 1,
+          band_stats: [{ min: 0, max: 5.79e-10, p2: 0, p98: 5.79e-10 }],
+        },
+      }),
+    );
+    const layerId = useMapStore.getState().layers[0].id;
+    const stops = [
+      { value: 0, color: '#000000', opacity: 0 },
+      { value: 1e-10, color: '#ff9900', opacity: 0.5 },
+      { value: 5.79e-10, color: '#ff0000', opacity: 0.9 },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        style_revision: 2,
+        style: { ramp: 'custom', stops, stopsUnit: 'source', opacity: 0.8 },
+        info: { band_stats: [{ min: 0, max: 5.79e-10, p2: 0, p98: 5.79e-10 }] },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_raster_style', {
+        layer_id: layerId,
+        raster: {
+          stops,
+          stopsUnit: 'source',
+          opacity: 0.8,
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({ result: { layer_id: layerId } });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8765/api/rasters/rst_test/style',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"stopsUnit":"source"'),
+      }),
+    );
+    expect(useMapStore.getState().getLayerById(layerId)?.style.raster).toMatchObject({
+      stopsUnit: 'source',
+      opacity: 0.8,
+    });
+    vi.unstubAllGlobals();
   });
 });

@@ -9,6 +9,7 @@ import {
   sourceIdFor,
 } from './types'
 import {
+  compileSortKey,
   compileNumericVisualVariable,
   hoverColorExpr,
   hoverNumberExpr,
@@ -34,13 +35,14 @@ export const lineRenderer: LayerRenderer = {
       defaultRange: [0.25, def.style.strokeOpacity ?? def.style.opacity],
       clampRange: [0, 1],
     })
+    const sortKey = compileSortKey(def.style.sortVariable)
 
     if (!map.getLayer(lineId)) {
       ctx.addRenderLayer({
         id: lineId,
         type: 'line',
         source: sourceId,
-        layout: { visibility },
+        layout: { visibility, ...(sortKey ? { 'line-sort-key': sortKey } : {}) },
         paint: {
           'line-color': hoverColorExpr(def.style.color, '#818cf8') as any,
           'line-width': hoverNumberExpr(width as any, 3) as any,
@@ -71,6 +73,7 @@ export const lineRenderer: LayerRenderer = {
       ctx.map.setPaintProperty(lineId, 'line-width', hoverNumberExpr(width as any, 3) as any)
       ctx.map.setPaintProperty(lineId, 'line-opacity', opacity as any)
       ctx.map.setPaintProperty(lineId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
+      ctx.map.setLayoutProperty(lineId, 'line-sort-key', compileSortKey(def.style.sortVariable) as any)
     }
   },
 

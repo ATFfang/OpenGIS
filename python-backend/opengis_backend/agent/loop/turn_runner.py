@@ -106,8 +106,6 @@ def tool_intent_progress(tool_name: str, arguments: dict[str, Any] | None = None
         return "tool_intent", _append_target_hint("更新制图画布", target)
     if tool_name.startswith("academic_"):
         return "tool_intent", "处理学术文本"
-    if tool_name.startswith("ext_heatmap"):
-        return "generating_visualization", "生成热力图"
     if tool_name.startswith("export_") or tool_name.endswith("_pdf"):
         return "saving_results", _append_target_hint("导出结果", target)
     if tool_name.startswith("write_report") or tool_name.startswith("interactive_snapshot"):

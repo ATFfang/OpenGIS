@@ -252,7 +252,7 @@ def _compute_geojson_bbox(geojson: dict) -> tuple[Optional[list[float]], int, Op
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
     feature_count = 0
-    geom_types: set[str] = set()
+    geom_types: dict[str, int] = {}
 
     def visit_coords(coords: Any) -> None:
         nonlocal min_x, min_y, max_x, max_y
@@ -279,7 +279,7 @@ def _compute_geojson_bbox(geojson: dict) -> tuple[Optional[list[float]], int, Op
             return
         gtype = geom.get("type")
         if gtype:
-            geom_types.add(gtype)
+            geom_types[gtype] = geom_types.get(gtype, 0) + 1
         if gtype == "GeometryCollection":
             for sub in geom.get("geometries", []) or []:
                 visit_geometry(sub)
@@ -299,11 +299,25 @@ def _compute_geojson_bbox(geojson: dict) -> tuple[Optional[list[float]], int, Op
         visit_geometry(geojson)
 
     if min_x == float("inf"):
-        return None, feature_count, (next(iter(geom_types)) if geom_types else None)
+        return None, feature_count, _dominant_geometry_type(geom_types)
     bbox = [min_x, min_y, max_x, max_y]
-    # Dominant geometry type (first one seen is fine for display purposes)
-    gt = next(iter(geom_types)) if geom_types else None
+    gt = _dominant_geometry_type(geom_types)
     return bbox, feature_count, gt
+
+
+def _dominant_geometry_type(counts: dict[str, int]) -> Optional[str]:
+    if not counts:
+        return None
+    priority = {
+        "MultiPolygon": 60,
+        "Polygon": 55,
+        "MultiLineString": 50,
+        "LineString": 45,
+        "MultiPoint": 40,
+        "Point": 35,
+        "GeometryCollection": 10,
+    }
+    return max(counts, key=lambda key: (counts[key], priority.get(key, 0)))
 
 
 def _resolve_workspace_path(ctx: ToolContext, raw_path: str) -> str:
@@ -1366,12 +1380,18 @@ def set_extrusion_style(
          "description": "Explicit output opacity values per class."},
         {"name": "opacity_breaks", "type": "array", "required": False,
          "description": "Manual numeric breaks for opacity classes."},
+        {"name": "sort_field", "type": "string", "required": False,
+         "description": "Numeric field controlling feature draw order inside the layer."},
+        {"name": "sort_order", "type": "string", "required": False, "default": "descending",
+         "description": "Feature draw order: 'descending' draws higher values on top; 'ascending' draws lower values on top."},
         {"name": "clear_size", "type": "boolean", "required": False,
          "description": "Clear existing size visual variable."},
         {"name": "clear_opacity", "type": "boolean", "required": False,
          "description": "Clear existing opacity visual variable."},
+        {"name": "clear_sort", "type": "boolean", "required": False,
+         "description": "Clear existing feature draw order variable."},
     ],
-    returns="dict with keys: success, layer_id, size_variable, opacity_variable",
+    returns="dict with keys: success, layer_id, size_variable, opacity_variable, sort_variable",
     examples=[
         "Color POIs by type, then set point size by comment_count and opacity by rating",
         "Make road line width follow traffic volume",
@@ -1394,8 +1414,11 @@ def set_layer_visual_variables(
     opacity_range: Any = None,
     opacity_values: Any = None,
     opacity_breaks: Any = None,
+    sort_field: Optional[str] = None,
+    sort_order: str = "descending",
     clear_size: bool = False,
     clear_opacity: bool = False,
+    clear_sort: bool = False,
 ) -> dict:
     payload: dict[str, Any] = {"layer_id": layer_id}
     if clear_size:
@@ -1420,8 +1443,19 @@ def set_layer_visual_variables(
             values=opacity_values,
             breaks=opacity_breaks,
         )
+    if clear_sort:
+        payload["sort_variable"] = None
+    elif sort_field:
+        normalized_order = str(sort_order or "descending").replace("_", "-").lower()
+        if normalized_order in {"desc", "high", "higher", "high-on-top", "高值在上"}:
+            normalized_order = "descending"
+        elif normalized_order in {"asc", "low", "lower", "low-on-top", "低值在上"}:
+            normalized_order = "ascending"
+        if normalized_order not in {"ascending", "descending"}:
+            raise ValueError("sort_order must be 'ascending' or 'descending'")
+        payload["sort_variable"] = {"field": sort_field, "order": normalized_order}
     if len(payload) == 1:
-        raise ValueError("Provide size_field, opacity_field, clear_size, or clear_opacity")
+        raise ValueError("Provide size_field, opacity_field, sort_field, clear_size, clear_opacity, or clear_sort")
     result = run_async_from_sync(ctx.request("rpc.ui.map.update_visual_variables", payload))
     return {"success": True, "layer_id": layer_id, **(result or {})}
 
@@ -1630,7 +1664,9 @@ def update_legend_spec(
         {"name": "band", "type": "number", "required": False,
          "description": "1-based band index for single-band rendering."},
         {"name": "stops", "type": "array", "required": False,
-         "description": "Custom color/alpha stops. Example: [{value:0,color:'#0000ff',opacity:0.2},{value:1,color:'#ff0000',opacity:1}]."},
+         "description": "Custom color/alpha stops. For agent calls, value is a source pixel value by default, e.g. band_stats p2/mean/p98. Use stops_unit='normalized' for 0-1 stops."},
+        {"name": "stops_unit", "type": "string", "required": False,
+         "description": "Value coordinate system for custom stops: 'source' (default for agent/tool calls) or 'normalized' (0-1 UI color-ramp positions)."},
         {"name": "min", "type": "number", "required": False,
          "description": "Stretch minimum in source values."},
         {"name": "max", "type": "number", "required": False,
@@ -1661,6 +1697,7 @@ def add_raster(
     ramp: Optional[str] = None,
     band: Optional[int] = None,
     stops: Any = None,
+    stops_unit: Optional[str] = None,
     min: Optional[float] = None,  # noqa: A002 - tool parameter name
     max: Optional[float] = None,  # noqa: A002 - tool parameter name
     reverse: Optional[bool] = None,
@@ -1693,6 +1730,7 @@ def add_raster(
             ramp=ramp,
             band=band,
             stops=stops,
+            stops_unit=stops_unit,
             min=min,
             max=max,
             reverse=reverse,
@@ -1707,6 +1745,7 @@ def add_raster(
             ramp=ramp,
             band=band,
             stops=stops,
+            stops_unit=stops_unit,
             min=min,
             max=max,
             reverse=reverse,
@@ -1728,6 +1767,7 @@ def add_raster(
             **({"band": int(band)} if band is not None else {}),
             **({"opacity": float(opacity)} if opacity is not None else {}),
             **({"stops": _coerce_jsonish(stops)} if stops is not None else {}),
+            **({"stopsUnit": _normalize_raster_stops_unit(stops_unit)} if stops is not None else {}),
             **({"min": float(min)} if min is not None else {}),
             **({"max": float(max)} if max is not None else {}),
             **({"reverse": bool(reverse)} if reverse is not None else {}),
@@ -1767,12 +1807,22 @@ def _backend_http_base() -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _normalize_raster_stops_unit(value: Optional[str]) -> str:
+    unit = str(value or "source").strip().lower().replace("-", "_")
+    if unit in {"source", "data", "pixel", "pixel_value", "raw"}:
+        return "source"
+    if unit in {"normalized", "normalised", "normalize", "normalise", "0_1", "zero_one"}:
+        return "normalized"
+    raise ValueError("stops_unit must be 'source' or 'normalized'")
+
+
 def _raster_style_payload(
     *,
     opacity: Optional[float] = None,
     ramp: Optional[str] = None,
     band: Optional[int] = None,
     stops: Any = None,
+    stops_unit: Optional[str] = None,
     min: Optional[float] = None,
     max: Optional[float] = None,
     reverse: Optional[bool] = None,
@@ -1785,6 +1835,7 @@ def _raster_style_payload(
     }
     if stops is not None:
         payload["stops"] = _coerce_jsonish(stops)
+        payload["stopsUnit"] = _normalize_raster_stops_unit(stops_unit)
         payload["ramp"] = "custom"
     if min is not None:
         payload["min"] = float(min)
@@ -1804,13 +1855,14 @@ def _add_raster_backend_tiles(
     ramp: Optional[str] = None,
     band: Optional[int] = None,
     stops: Any = None,
+    stops_unit: Optional[str] = None,
     min: Optional[float] = None,
     max: Optional[float] = None,
     reverse: Optional[bool] = None,
 ) -> dict:
     from opengis_backend.integrations.gis.raster_service import register_raster
 
-    style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, min=min, max=max, reverse=reverse)
+    style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, stops_unit=stops_unit, min=min, max=max, reverse=reverse)
     registration = register_raster(path, style=style)
     tile_url = (
         f"{_backend_http_base()}/api/rasters/{registration.raster_id}"
@@ -1857,6 +1909,7 @@ def _add_raster_backend_preview(
     ramp: Optional[str] = None,
     band: Optional[int] = None,
     stops: Any = None,
+    stops_unit: Optional[str] = None,
     min: Optional[float] = None,
     max: Optional[float] = None,
     reverse: Optional[bool] = None,
@@ -1869,12 +1922,13 @@ def _add_raster_backend_preview(
         band=int(band or 1),
         ramp=ramp or "viridis",
         stops=_coerce_jsonish(stops) if stops is not None else None,
+        stops_unit=_normalize_raster_stops_unit(stops_unit) if stops is not None else None,
         min_value=min,
         max_value=max,
         opacity=1.0 if opacity is None else float(opacity),
         reverse=bool(reverse) if reverse is not None else False,
     )
-    raster_style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, min=min, max=max, reverse=reverse)
+    raster_style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, stops_unit=stops_unit, min=min, max=max, reverse=reverse)
     result = run_async_from_sync(ctx.request("rpc.ui.map.add_image_overlay", {
         "path": preview.image_path,
         "name": name,
@@ -1955,7 +2009,9 @@ def get_raster_info(
         {"name": "ramp", "type": "string", "required": False,
          "description": "Named ramp: viridis, magma, plasma, inferno, turbo, gray, terrain, spectral."},
         {"name": "stops", "type": "array", "required": False,
-         "description": "Custom stops, e.g. [{value:0,color:'#0000ff',opacity:0.2},{value:1,color:'#ff0000',opacity:0.9}]. JSON string accepted."},
+         "description": "Custom stops. For agent calls, value is a source pixel value by default, e.g. values from band_stats. Use stops_unit='normalized' for 0-1 stops."},
+        {"name": "stops_unit", "type": "string", "required": False,
+         "description": "Value coordinate system for custom stops: 'source' (default for agent/tool calls) or 'normalized' (0-1 UI color-ramp positions)."},
         {"name": "band", "type": "number", "required": False,
          "description": "1-based band index."},
         {"name": "min", "type": "number", "required": False,
@@ -1979,6 +2035,7 @@ def set_raster_style(
     layer_id: str,
     ramp: Optional[str] = None,
     stops: Any = None,
+    stops_unit: Optional[str] = None,
     band: Optional[int] = None,
     min: Optional[float] = None,  # noqa: A002 - tool parameter name
     max: Optional[float] = None,  # noqa: A002 - tool parameter name
@@ -1991,6 +2048,7 @@ def set_raster_style(
         raster["ramp"] = ramp
     if stops is not None:
         raster["stops"] = _coerce_jsonish(stops)
+        raster["stopsUnit"] = _normalize_raster_stops_unit(stops_unit)
     if band is not None:
         raster["band"] = int(band)
     if min is not None:

@@ -138,8 +138,8 @@ export interface ParsedRasterData {
    * 像素 nodata 值（导入时会被渲染成透明）。GeoTIFF parser 会从 tag 里读。
    */
   noDataValue?: number | null
-  /** 每个 band 的真实 min/max，用于分档 / 颜色映射 UI。 */
-  bandStats?: Array<{ min: number; max: number }>
+  /** 每个 band 的真实统计值，用于分档 / 颜色映射 UI。 */
+  bandStats?: Array<{ min: number; max: number; mean?: number | null; p2?: number | null; p98?: number | null }>
   /**
    * 实际编码成 imageUrl 的四角坐标（WGS84，顺时针 NW→NE→SE→SW）。
    * MapLibre ImageSource 需要它而不是 bbox；非地理 tiff 会反推成一个矩形。
@@ -265,6 +265,12 @@ export interface NumericVisualVariable {
   range?: [number, number]
 }
 
+export interface SortVisualVariable {
+  field: string
+  /** Higher values are drawn above lower values by default. */
+  order?: 'ascending' | 'descending'
+}
+
 export type LayerFilterOperator = '=' | '!=' | '>' | '<' | '>=' | '<=' | 'contains' | 'in'
 
 export interface LayerAttributeFilter {
@@ -325,7 +331,7 @@ export type RasterColorRampName =
   | 'custom'
 
 export interface RasterColorStop {
-  /** Normalized stop position in [0, 1]. */
+  /** Stop position. Values in [0, 1] are normalized; other values are source pixel values. */
   value: number
   /** CSS hex color. */
   color: string
@@ -338,8 +344,10 @@ export interface RasterStyleSettings {
   band?: number
   /** Palette name, or 'custom' when `stops` is provided. */
   ramp?: RasterColorRampName
-  /** Custom color/alpha stops in normalized value space. */
+  /** Custom color/alpha stops. Supports normalized [0, 1] or source pixel values. */
   stops?: RasterColorStop[]
+  /** Coordinate space for custom stops. Agent tools default to source values; UI defaults to normalized. */
+  stopsUnit?: 'normalized' | 'source'
   /** Stretch min/max in source pixel values. Defaults to robust P2/P98 stats. */
   min?: number
   max?: number
@@ -369,6 +377,8 @@ export interface LayerStyle {
   sizeVariable?: NumericVisualVariable
   /** Field-driven fill / line / circle opacity. */
   opacityVariable?: NumericVisualVariable
+  /** Feature-level draw order inside one layer. */
+  sortVariable?: SortVisualVariable
   /** Stable legend metadata shared by map UI, layout composer, and agent tools. */
   legend?: LegendSpec
 

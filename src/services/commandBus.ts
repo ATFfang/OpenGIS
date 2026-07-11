@@ -27,8 +27,8 @@ import {
   type ParsedVectorData,
   type GeoJSONFeatureCollection,
   type GeoJSONFeature,
-  type GeometryType,
   type BBox,
+  detectGeometryType,
 } from './geo'
 
 type CommandHandler = (params: any) => Promise<void> | void
@@ -184,25 +184,6 @@ function normalizeToFeatureCollection(raw: any): GeoJSONFeatureCollection | null
   }
 
   return null
-}
-
-function detectGeometryType(fc: GeoJSONFeatureCollection): GeometryType {
-  const counts = new Map<string, number>()
-  for (const feature of fc.features) {
-    const t = feature.geometry?.type
-    if (t) counts.set(t, (counts.get(t) || 0) + 1)
-  }
-  if (counts.size === 0) return 'Point'
-
-  let best: string = 'Point'
-  let bestCount = 0
-  for (const [t, c] of counts) {
-    if (c > bestCount) {
-      best = t
-      bestCount = c
-    }
-  }
-  return best as GeometryType
 }
 
 function computeBBox(fc: GeoJSONFeatureCollection): BBox {
