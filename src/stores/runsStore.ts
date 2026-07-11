@@ -9,7 +9,7 @@ import { useAssetStore } from './assetStore'
 export interface RunSummary {
   run_id: string
   created_at: string           // ISO 8601
-  status: 'running' | 'completed' | 'error' | 'cancelled' | 'unknown'
+  status: 'running' | 'success' | 'completed' | 'error' | 'cancelled' | 'unknown'
   prompt: string
   model?: string
   pre_sha?: string | null
@@ -31,12 +31,129 @@ export interface RunStep {
   [key: string]: unknown
 }
 
+export interface RunToolCall {
+  call_id: string
+  name: string
+  arguments?: Record<string, unknown>
+  output?: string
+  error?: string | null
+  duration_ms?: number | null
+  status?: 'running' | 'completed' | 'error' | string
+  metadata?: Record<string, unknown>
+  ts?: string
+}
+
+export interface RunArtifact {
+  id?: string
+  kind: string
+  path?: string | null
+  layer_id?: string | null
+  title?: string
+  metadata?: Record<string, unknown>
+  created_at?: number
+  ts?: string
+}
+
+export interface RunSession {
+  id: string
+  kind: string
+  profile_name: string
+  parent_id?: string | null
+  run_id?: string | null
+  title?: string
+  status?: string
+  children?: string[]
+  summary?: string
+  metadata?: Record<string, unknown>
+}
+
+export type AgentWorkStatus = 'queued' | 'running' | 'completed' | 'success' | 'error' | 'cancelled' | 'unknown'
+
+export interface AgentInboxItem {
+  id: string
+  prompt: string
+  conversation_id?: string | null
+  profile_name?: string | null
+  session_id?: string | null
+  run_id?: string | null
+  status: AgentWorkStatus
+  error?: string
+  created_at?: number
+  updated_at?: number
+  metadata?: Record<string, unknown>
+}
+
+export interface AgentQueueItem {
+  id: string
+  inbox_id: string
+  status: AgentWorkStatus
+  run_id?: string | null
+  workspace_path?: string | null
+  profile_name?: string | null
+  conversation_id?: string | null
+  error?: string
+  created_at?: number
+  updated_at?: number
+  metadata?: Record<string, unknown>
+}
+
+export interface PermissionRule {
+  id: string
+  tool: string
+  action: 'allow' | 'ask' | 'deny' | string
+  scope?: string
+  reason?: string
+  profile_name?: string | null
+  created_at?: number
+}
+
 export interface RunDetail extends RunSummary {
   steps: RunStep[]
+  tool_calls?: RunToolCall[]
+  tool_call_events?: RunToolCall[]
+  artifacts?: RunArtifact[]
+  session?: RunSession | null
   stdout?: string
   final_answer?: string | null
   error?: string | null
   risky_ops?: Array<{ op: string; path?: string; ts?: string }>
+}
+
+interface RunDetailResponse {
+  status?: string
+  meta?: Partial<RunDetail> & Record<string, unknown>
+  steps?: RunStep[]
+  tool_calls?: RunToolCall[]
+  tool_call_events?: RunToolCall[]
+  artifacts?: RunArtifact[]
+}
+
+function normalizeRunDetail(raw: RunDetailResponse | RunDetail | null | undefined): RunDetail | null {
+  if (!raw) return null
+  const meta = ('meta' in raw && raw.meta && typeof raw.meta === 'object') ? raw.meta : raw
+  const steps = Array.isArray((raw as RunDetailResponse).steps)
+    ? (raw as RunDetailResponse).steps!
+    : Array.isArray((meta as any).steps)
+      ? (meta as any).steps
+      : []
+  return {
+    ...(meta as RunDetail),
+    run_id: String((meta as any).run_id || ''),
+    created_at: String((meta as any).created_at || ''),
+    status: ((meta as any).status || 'unknown') as RunDetail['status'],
+    prompt: String((meta as any).prompt || ''),
+    steps,
+    tool_calls: Array.isArray((raw as RunDetailResponse).tool_calls)
+      ? (raw as RunDetailResponse).tool_calls
+      : [],
+    tool_call_events: Array.isArray((raw as RunDetailResponse).tool_call_events)
+      ? (raw as RunDetailResponse).tool_call_events
+      : [],
+    artifacts: Array.isArray((raw as RunDetailResponse).artifacts)
+      ? (raw as RunDetailResponse).artifacts
+      : [],
+    session: ((meta as any).session || null) as RunSession | null,
+  }
 }
 
 interface RunsStore {
@@ -47,9 +164,18 @@ interface RunsStore {
 
   /** 缓存的 run detail，按需懒加载 */
   details: Record<string, RunDetail | undefined>
+  inboxItems: AgentInboxItem[]
+  queueItems: AgentQueueItem[]
+  permissionRules: PermissionRule[]
+  controlLoading: boolean
 
   /** 从后端刷新 run 列表（可指定条数上限）。 */
   refresh: (limit?: number) => Promise<void>
+  refreshControlPlane: () => Promise<void>
+  processQueue: () => Promise<void>
+  retryQueueItem: (queueId: string) => Promise<void>
+  cancelQueueItem: (queueId: string) => Promise<void>
+  removePermissionRule: (ruleId: string) => Promise<void>
 
   /** 读某条 run 的完整 detail；命中缓存直接返回。 */
   getDetail: (runId: string) => Promise<RunDetail | null>
@@ -67,6 +193,10 @@ export const useRunsStore = create<RunsStore>((set, get) => ({
   loaded: false,
   error: null,
   details: {},
+  inboxItems: [],
+  queueItems: [],
+  permissionRules: [],
+  controlLoading: false,
 
   refresh: async (limit = 50) => {
     set({ isLoading: true, error: null })
@@ -93,15 +223,84 @@ export const useRunsStore = create<RunsStore>((set, get) => ({
     }
   },
 
+  refreshControlPlane: async () => {
+    const workspacePath = useAssetStore.getState().workspacePath || undefined
+    set({ controlLoading: true })
+    try {
+      if (workspacePath) {
+        await pythonClient.send('rpc.agent.queue.resume', { workspace_path: workspacePath })
+      }
+      const [inboxRes, queueRes, rulesRes] = await Promise.all([
+        pythonClient.send<{ items: AgentInboxItem[] }>(
+          'rpc.agent.inbox.list',
+          { workspace_path: workspacePath, limit: 20 },
+        ),
+        pythonClient.send<{ items: AgentQueueItem[] }>(
+          'rpc.agent.queue.list',
+          { limit: 20 },
+        ),
+        workspacePath
+          ? pythonClient.send<{ rules: PermissionRule[] }>(
+            'rpc.agent.permissions.rules.list',
+            { workspace_path: workspacePath },
+          )
+          : Promise.resolve({ rules: [] }),
+      ])
+      set({
+        inboxItems: Array.isArray(inboxRes?.items) ? inboxRes.items : [],
+        queueItems: Array.isArray(queueRes?.items) ? queueRes.items : [],
+        permissionRules: Array.isArray(rulesRes?.rules) ? rulesRes.rules : [],
+        controlLoading: false,
+      })
+    } catch (e) {
+      console.warn('[runsStore] refreshControlPlane failed:', e)
+      set({ controlLoading: false })
+    }
+  },
+
+  processQueue: async () => {
+    const workspacePath = useAssetStore.getState().workspacePath || undefined
+    await pythonClient.send(
+      'rpc.agent.queue.process',
+      { workspace_path: workspacePath, limit: 1 },
+      10 * 60 * 1000,
+    )
+    await get().refreshControlPlane()
+    await get().refresh()
+  },
+
+  retryQueueItem: async (queueId) => {
+    const workspacePath = useAssetStore.getState().workspacePath || undefined
+    await pythonClient.send('rpc.agent.queue.retry', { queue_id: queueId, workspace_path: workspacePath })
+    await get().refreshControlPlane()
+  },
+
+  cancelQueueItem: async (queueId) => {
+    const workspacePath = useAssetStore.getState().workspacePath || undefined
+    await pythonClient.send('rpc.agent.queue.cancel', { queue_id: queueId, workspace_path: workspacePath })
+    await get().refreshControlPlane()
+  },
+
+  removePermissionRule: async (ruleId) => {
+    const workspacePath = useAssetStore.getState().workspacePath || undefined
+    if (!workspacePath) return
+    await pythonClient.send('rpc.agent.permissions.rules.remove', {
+      workspace_path: workspacePath,
+      rule_id: ruleId,
+    })
+    await get().refreshControlPlane()
+  },
+
   getDetail: async (runId) => {
     const cached = get().details[runId]
     if (cached) return cached
     try {
       const workspacePath = useAssetStore.getState().workspacePath || undefined
-      const detail = await pythonClient.send<RunDetail>(
+      const raw = await pythonClient.send<RunDetailResponse>(
         'rpc.runs.get',
         { run_id: runId, workspace_path: workspacePath },
       )
+      const detail = normalizeRunDetail(raw)
       if (!detail) return null
       set((state) => ({ details: { ...state.details, [runId]: detail } }))
       return detail

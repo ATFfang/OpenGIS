@@ -19,7 +19,13 @@
  * - nodata → 透明像素。
  */
 import { fromArrayBuffer, type GeoTIFFImage } from 'geotiff'
-import type { ParsedRasterData, BBox } from '../types'
+import type { ParsedRasterData, BBox, RasterColorRampName, RasterColorStop, RasterStyleSettings } from '../types'
+
+export interface GeoTIFFParseOptions {
+  rasterStyle?: RasterStyleSettings
+  sourcePath?: string
+  sourceBufferId?: string
+}
 
 /**
  * 解析一个 GeoTIFF buffer，返回 ParsedRasterData。
@@ -30,6 +36,15 @@ import type { ParsedRasterData, BBox } from '../types'
 export async function parseGeoTIFF(
   buffer: ArrayBuffer,
   fileName: string,
+  options: GeoTIFFParseOptions = {},
+): Promise<ParsedRasterData> {
+  return renderGeoTIFFFromBuffer(buffer, fileName, options)
+}
+
+export async function renderGeoTIFFFromBuffer(
+  buffer: ArrayBuffer,
+  fileName: string,
+  options: GeoTIFFParseOptions = {},
 ): Promise<ParsedRasterData> {
   const tiff = await fromArrayBuffer(buffer)
   const image = (await tiff.getImage()) as GeoTIFFImage
@@ -37,10 +52,12 @@ export async function parseGeoTIFF(
   const width = image.getWidth()
   const height = image.getHeight()
   const bandCount = image.getSamplesPerPixel()
+  const rasterStyle = normalizeRasterStyle(options.rasterStyle, bandCount)
 
   // ── 读地理信息 ─────────────────────────────────────────
-  const bbox = readBBox(image, fileName)
+  const sourceBbox = readBBox(image, fileName)
   const crs = readCRS(image)
+  const bbox = rasterBBoxForMap(sourceBbox, crs, fileName)
   const noDataValue = readNoData(image)
 
   // ── Downsample oversized rasters ──────────────────────────
@@ -84,17 +101,20 @@ export async function parseGeoTIFF(
   }
   const imageData = ctx.createImageData(renderWidth, renderHeight)
 
-  if (bandCount >= 3) {
+  if (bandCount >= 3 && rasterStyle.mode !== 'singleband') {
     renderRGB(imageData, rasters, renderWidth, renderHeight, noDataValue)
   } else {
+    const bandIndex = Math.min(Math.max(1, rasterStyle.band ?? 1), rasters.length) - 1
+    const stats = bandStats[bandIndex] ?? bandStats[0]
     renderSingleBand(
       imageData,
-      rasters[0],
+      rasters[bandIndex],
       renderWidth,
       renderHeight,
-      bandStats[0].min,
-      bandStats[0].max,
+      rasterStyle.min ?? stats.min,
+      rasterStyle.max ?? stats.max,
       noDataValue,
+      rasterStyle,
     )
   }
 
@@ -135,6 +155,10 @@ export async function parseGeoTIFF(
     noDataValue,
     bandStats,
     imageCoordinates,
+    sourcePath: options.sourcePath,
+    sourceBufferId: options.sourceBufferId,
+    rasterStyle,
+    rerenderable: !!(options.sourcePath || options.sourceBufferId),
   }
 }
 
@@ -157,6 +181,62 @@ function readBBox(image: GeoTIFFImage, fileName: string): BBox {
     throw new Error(
       `parseGeoTIFF: "${fileName}" has no geographic extent (missing ModelTiepoint/ModelPixelScale). ` +
         `Re-export with gdal_translate or QGIS to assign a CRS.`,
+    )
+  }
+}
+
+export function rasterBBoxForMap(sourceBbox: BBox, crs: string, fileName: string): BBox {
+  const normalized = crs.toUpperCase()
+  if (normalized === 'EPSG:4326' || normalized === 'OGC:CRS84') {
+    assertLonLatBBox(sourceBbox, fileName)
+    return sourceBbox
+  }
+  if (normalized === 'EPSG:3857' || normalized === 'EPSG:900913') {
+    return webMercatorBBoxToLonLat(sourceBbox, fileName)
+  }
+  throw new Error(
+    `parseGeoTIFF: "${fileName}" uses ${crs}. OpenGIS can display GeoTIFF rasters in EPSG:4326 or EPSG:3857 only. ` +
+      `Warp it first, for example with gdalwarp -t_srs EPSG:4326.`,
+  )
+}
+
+function webMercatorBBoxToLonLat(bbox: BBox, fileName: string): BBox {
+  const max = 20037508.342789244
+  const clampMeters = (value: number) => Math.max(-max, Math.min(max, value))
+  const project = (x: number, y: number): [number, number] => {
+    const clampedX = clampMeters(x)
+    const clampedY = clampMeters(y)
+    const lon = (clampedX / max) * 180
+    const lat = (Math.atan(Math.sinh(Math.PI * clampedY / max)) * 180) / Math.PI
+    return [lon, lat]
+  }
+  const [minLon, minLat] = project(bbox.minX, bbox.minY)
+  const [maxLon, maxLat] = project(bbox.maxX, bbox.maxY)
+  const out = {
+    minX: Math.min(minLon, maxLon),
+    minY: Math.min(minLat, maxLat),
+    maxX: Math.max(minLon, maxLon),
+    maxY: Math.max(minLat, maxLat),
+  }
+  assertLonLatBBox(out, fileName)
+  return out
+}
+
+function assertLonLatBBox(bbox: BBox, fileName: string): void {
+  const values = [bbox.minX, bbox.minY, bbox.maxX, bbox.maxY]
+  if (!values.every(Number.isFinite)) {
+    throw new Error(`parseGeoTIFF: "${fileName}" has a non-finite geographic extent.`)
+  }
+  if (
+    bbox.minX < -180 || bbox.maxX > 180 ||
+    bbox.minY < -90 || bbox.maxY > 90 ||
+    bbox.minX >= bbox.maxX ||
+    bbox.minY >= bbox.maxY
+  ) {
+    throw new Error(
+      `parseGeoTIFF: "${fileName}" has an invalid lon/lat extent ` +
+        `[${bbox.minX}, ${bbox.minY}, ${bbox.maxX}, ${bbox.maxY}]. ` +
+        `Warp or assign the raster CRS before loading it.`,
     )
   }
 }
@@ -311,10 +391,13 @@ function renderSingleBand(
   min: number,
   max: number,
   noData: number | null,
+  style: RasterStyleSettings,
 ): void {
   const pixels = imageData.data
   const range = max - min || 1
   const total = width * height
+  const ramp = buildColorRamp(style)
+  const globalOpacity = clamp01(style.opacity ?? 1)
 
   for (let i = 0; i < total; i++) {
     const v = band[i]
@@ -329,12 +412,12 @@ function renderSingleBand(
     }
 
     // Clamp to [0,1] — values outside P2/P98 get clamped, not wrapped
-    const t = Math.max(0, Math.min(1, (v - min) / range))
-    const [r, g, b] = viridis(t)
+    const t = clamp01((v - min) / range)
+    const [r, g, b, a] = ramp(style.reverse ? 1 - t : t)
     pixels[px] = r
     pixels[px + 1] = g
     pixels[px + 2] = b
-    pixels[px + 3] = 255
+    pixels[px + 3] = Math.round(255 * a * globalOpacity)
   }
 }
 
@@ -392,32 +475,157 @@ function renderRGB(
   }
 }
 
-/**
- * 近似 viridis 色带，t ∈ [0,1]。
- *
- * 不做完整 256 档 LUT，6 个关键节点 + 线性插值对人眼来说和真 viridis 差异
- * 很小，代码量能小很多。
- */
-function viridis(t: number): [number, number, number] {
-  const stops: Array<[number, [number, number, number]]> = [
-    [0.0, [68, 1, 84]],
-    [0.2, [70, 50, 127]],
-    [0.4, [54, 92, 141]],
-    [0.6, [39, 127, 142]],
-    [0.8, [120, 209, 79]],
-    [1.0, [253, 231, 37]],
-  ]
-  for (let i = 1; i < stops.length; i++) {
-    const [t1, c1] = stops[i]
-    if (t <= t1) {
-      const [t0, c0] = stops[i - 1]
-      const k = (t - t0) / (t1 - t0 || 1)
+function normalizeRasterStyle(style: RasterStyleSettings | undefined, bandCount: number): RasterStyleSettings {
+  const next: RasterStyleSettings = {
+    mode: style?.mode ?? 'auto',
+    band: style?.band ?? 1,
+    ramp: style?.stops?.length ? 'custom' : (style?.ramp ?? 'viridis'),
+    stops: style?.stops,
+    min: style?.min,
+    max: style?.max,
+    opacity: style?.opacity ?? 1,
+    reverse: style?.reverse ?? false,
+  }
+  if (next.mode === 'auto' && bandCount < 3) next.mode = 'singleband'
+  return next
+}
+
+function buildColorRamp(style: RasterStyleSettings): (t: number) => [number, number, number, number] {
+  const stops = normalizeStops(style.stops?.length ? style.stops : namedRamp(style.ramp ?? 'viridis'))
+  return (value: number) => interpolateStops(stops, clamp01(value))
+}
+
+function namedRamp(name: RasterColorRampName): RasterColorStop[] {
+  switch (name) {
+    case 'gray':
       return [
-        Math.round(c0[0] + (c1[0] - c0[0]) * k),
-        Math.round(c0[1] + (c1[1] - c0[1]) * k),
-        Math.round(c0[2] + (c1[2] - c0[2]) * k),
+        { value: 0, color: '#000000' },
+        { value: 1, color: '#ffffff' },
+      ]
+    case 'magma':
+      return [
+        { value: 0, color: '#000004' },
+        { value: 0.25, color: '#51127c' },
+        { value: 0.5, color: '#b73779' },
+        { value: 0.75, color: '#fc8961' },
+        { value: 1, color: '#fcfdbf' },
+      ]
+    case 'plasma':
+      return [
+        { value: 0, color: '#0d0887' },
+        { value: 0.25, color: '#7e03a8' },
+        { value: 0.5, color: '#cc4778' },
+        { value: 0.75, color: '#f89540' },
+        { value: 1, color: '#f0f921' },
+      ]
+    case 'inferno':
+      return [
+        { value: 0, color: '#000004' },
+        { value: 0.25, color: '#420a68' },
+        { value: 0.5, color: '#932667' },
+        { value: 0.75, color: '#dd513a' },
+        { value: 1, color: '#fcffa4' },
+      ]
+    case 'turbo':
+      return [
+        { value: 0, color: '#30123b' },
+        { value: 0.2, color: '#466be3' },
+        { value: 0.4, color: '#35c5a3' },
+        { value: 0.6, color: '#b5de2b' },
+        { value: 0.8, color: '#f89540' },
+        { value: 1, color: '#7a0403' },
+      ]
+    case 'terrain':
+      return [
+        { value: 0, color: '#0b3d91' },
+        { value: 0.25, color: '#2b8cbe' },
+        { value: 0.45, color: '#41ab5d' },
+        { value: 0.7, color: '#d9c179' },
+        { value: 1, color: '#ffffff' },
+      ]
+    case 'spectral':
+      return [
+        { value: 0, color: '#9e0142' },
+        { value: 0.25, color: '#f46d43' },
+        { value: 0.5, color: '#ffffbf' },
+        { value: 0.75, color: '#66c2a5' },
+        { value: 1, color: '#5e4fa2' },
+      ]
+    case 'viridis':
+    case 'custom':
+    default:
+      return [
+        { value: 0.0, color: '#440154' },
+        { value: 0.2, color: '#46327f' },
+        { value: 0.4, color: '#365c8d' },
+        { value: 0.6, color: '#277f8e' },
+        { value: 0.8, color: '#78d151' },
+        { value: 1.0, color: '#fde725' },
+      ]
+  }
+}
+
+function normalizeStops(stops: RasterColorStop[]): Required<RasterColorStop>[] {
+  const normalized = stops
+    .map((stop) => ({
+      value: clamp01(Number(stop.value)),
+      color: normalizeHex(stop.color),
+      opacity: clamp01(stop.opacity ?? 1),
+    }))
+    .sort((a, b) => a.value - b.value)
+  if (!normalized.length) return normalizeStops(namedRamp('viridis'))
+  if (normalized[0].value > 0) normalized.unshift({ ...normalized[0], value: 0 })
+  if (normalized[normalized.length - 1].value < 1) {
+    normalized.push({ ...normalized[normalized.length - 1], value: 1 })
+  }
+  return normalized
+}
+
+function interpolateStops(stops: Required<RasterColorStop>[], t: number): [number, number, number, number] {
+  for (let i = 1; i < stops.length; i++) {
+    const upper = stops[i]
+    if (t <= upper.value) {
+      const lower = stops[i - 1]
+      const span = upper.value - lower.value || 1
+      const k = (t - lower.value) / span
+      const c0 = hexToRgb(lower.color)
+      const c1 = hexToRgb(upper.color)
+      return [
+        Math.round(lerp(c0[0], c1[0], k)),
+        Math.round(lerp(c0[1], c1[1], k)),
+        Math.round(lerp(c0[2], c1[2], k)),
+        lerp(lower.opacity, upper.opacity, k),
       ]
     }
   }
-  return stops[stops.length - 1][1]
+  const last = stops[stops.length - 1]
+  const rgb = hexToRgb(last.color)
+  return [rgb[0], rgb[1], rgb[2], last.opacity]
+}
+
+function normalizeHex(color: string): string {
+  const raw = String(color || '').trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase()
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase()
+  }
+  return '#000000'
+}
+
+function hexToRgb(color: string): [number, number, number] {
+  const hex = normalizeHex(color).slice(1)
+  return [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16),
+  ]
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
 }

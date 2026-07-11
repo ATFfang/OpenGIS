@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { Map, Code2, X } from 'lucide-react'
+import { ArrowLeft, Map } from 'lucide-react'
 import { useT } from '@/i18n'
 import { Sidebar } from './Sidebar'
 import { MapView } from '@/features/map/MapView'
@@ -16,9 +16,20 @@ import { ScriptRunnerView } from '@/features/script-runner/ScriptRunnerView'
 import { WorkflowsPanel } from '@/features/workflows/WorkflowsPanel'
 import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
 import { RunsPanel } from '@/features/runs/RunsPanel'
-import { SkillsPanel } from '@/features/skills/SkillsPanel'
+import { ToolAndSkillPanel } from '@/features/tool-catalog/ToolAndSkillPanel'
+import { WorkersPanel } from '@/features/workers/WorkersPanel'
+import { OperationsPanel } from '@/features/operations/OperationsPanel'
+import { OperationEditorView } from '@/features/operations/OperationEditorView'
+import { DataPivotPanel } from '@/features/pivot/DataPivotPanel'
+import { LayoutComposerView } from '@/features/layout-composer/LayoutComposerView'
+import { captureCurrentMapSnapshot } from '@/features/layout-composer/mapSnapshot'
+import { useLayoutComposerStore } from '@/features/layout-composer/layoutComposerStore'
 import { useMapStore } from '@/stores/mapStore'
 import { useViewStore, type ViewTab } from '@/stores/viewStore'
+import { mapEngine } from '@/features/map/engine/MapEngine'
+import superAppIconImg from '../../resources/icons/super-app-icon.png'
+
+const BOARD_MODE_EXIT_MS = 240
 
 /**
  * Main application layout with resizable panels.
@@ -33,39 +44,119 @@ import { useViewStore, type ViewTab } from '@/stores/viewStore'
  */
 export function MainLayout() {
   const [activeSidebarTab, setActiveSidebarTab] = useState<string>('layers')
-  const [showBottomPanel, setShowBottomPanel] = useState(false)
+  const [sidebarContentVisible, setSidebarContentVisible] = useState(true)
+  const [showBottomPanel] = useState(false)
   const [showChat, setShowChat] = useState(true)
   const [mapFullscreen, setMapFullscreen] = useState(false)
+  const [boardMode, setBoardMode] = useState(false)
+  const [boardChatOpen, setBoardChatOpen] = useState(false)
+  const [boardClosing, setBoardClosing] = useState(false)
+  const previousActiveTabRef = useRef<string | null>(null)
+  const boardExitTimerRef = useRef<number | null>(null)
 
   const isWindows = (window as any).electronAPI?.getPlatform?.() === 'win32'
 
   const isSettingsView = activeSidebarTab === 'settings'
+  const isCanvasView = activeSidebarTab === 'canvas'
+  const isWorkersView = activeSidebarTab === 'workers'
+
+  useEffect(() => {
+    return () => {
+      if (boardExitTimerRef.current != null) {
+        window.clearTimeout(boardExitTimerRef.current)
+      }
+    }
+  }, [])
+
+  const enterBoardMode = useCallback(() => {
+    if (boardExitTimerRef.current != null) {
+      window.clearTimeout(boardExitTimerRef.current)
+      boardExitTimerRef.current = null
+    }
+    setBoardClosing(false)
+    setBoardChatOpen(false)
+    setBoardMode(true)
+    if (!boardMode) {
+      previousActiveTabRef.current = useViewStore.getState().activeTabId
+      useViewStore.getState().setActiveTab('map')
+    }
+  }, [boardMode])
+
+  const exitBoardMode = useCallback(() => {
+    if (!boardMode || boardClosing) return
+    setBoardChatOpen(false)
+    setBoardClosing(true)
+    boardExitTimerRef.current = window.setTimeout(() => {
+      if (previousActiveTabRef.current) {
+        useViewStore.getState().setActiveTab(previousActiveTabRef.current)
+        previousActiveTabRef.current = null
+      }
+      setBoardMode(false)
+      setBoardClosing(false)
+      boardExitTimerRef.current = null
+    }, BOARD_MODE_EXIT_MS)
+  }, [boardMode, boardClosing])
 
   const toggleFullscreen = () => setMapFullscreen((v) => !v)
+  const toggleBoardMode = () => {
+    if (boardMode) exitBoardMode()
+    else enterBoardMode()
+  }
 
-  // Fullscreen mode: render only MapView
+  const handleSidebarTabChange = useCallback((tab: string) => {
+    if (tab === 'canvas') {
+      const snapshot = captureCurrentMapSnapshot()
+      if (snapshot) useLayoutComposerStore.getState().setMapSnapshotUrl(snapshot)
+    }
+
+    if (tab === 'settings') {
+      setActiveSidebarTab(tab)
+      setSidebarContentVisible(false)
+      return
+    }
+
+    if (tab === activeSidebarTab) {
+      setSidebarContentVisible((visible) => !visible)
+      return
+    }
+
+    setActiveSidebarTab(tab)
+    setSidebarContentVisible(true)
+  }, [activeSidebarTab])
+
+  // Fullscreen mode hides chrome, chat, and sidebars, but still keeps the
+  // primary tab container alive so image / CSV / code tabs can open.
   if (mapFullscreen) {
     return (
       <div className="h-screen w-screen overflow-hidden">
-        <MapView onToggleFullscreen={toggleFullscreen} isFullscreen />
+        <PrimaryPanel onToggleFullscreen={toggleFullscreen} isFullscreen />
       </div>
     )
   }
 
   // Determine if sidebar content panel should be shown
-  const showSidebarContent = !isSettingsView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'skills' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs')
+  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs' || activeSidebarTab === 'operations')
 
   return (
-    <div className="h-screen w-screen flex overflow-hidden">
-      {/* Icon Sidebar */}
-      <Sidebar
-        activeTab={activeSidebarTab}
-        onTabChange={setActiveSidebarTab}
+    <div className="relative h-screen w-screen overflow-hidden select-none">
+      <div
+        className={`h-full w-full flex overflow-hidden transition-opacity duration-150 ${
+          boardMode ? 'opacity-0 pointer-events-none select-none' : 'opacity-100'
+        }`}
+        aria-hidden={boardMode}
+      >
+        {/* Icon Sidebar */}
+        <Sidebar
+          activeTab={activeSidebarTab}
+          isContentVisible={showSidebarContent || isSettingsView || isCanvasView}
+        onTabChange={handleSidebarTabChange}
         showChat={showChat}
         onToggleChat={() => setShowChat(!showChat)}
+        boardMode={boardMode}
+        onToggleBoardMode={toggleBoardMode}
       />
 
-      {/* Sidebar Content Panel (Layer Panel, Files, Skills) — resizable */}
+      {/* Sidebar content panel (layers, files, tools, workflows, runs) */}
       {showSidebarContent && (
         <ResizableSidebarPanel activeTab={activeSidebarTab} />
       )}
@@ -73,11 +164,20 @@ export function MainLayout() {
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Windows frameless title bar drag region */}
-        {isWindows && <div className="h-8 shrink-0" style={{ WebkitAppRegion: 'drag' }} />}
+        {isWindows && <div className="h-8 shrink-0 app-region-drag" />}
         {isSettingsView ? (
           /* Settings takes full width when active */
           <div className="flex-1 overflow-hidden">
             <SettingsView />
+          </div>
+        ) : isWorkersView ? (
+          <div className="flex-1 overflow-hidden">
+            <WorkersPanel
+              onOpenScriptTab={() => {
+                setActiveSidebarTab('layers')
+                setSidebarContentVisible(false)
+              }}
+            />
           </div>
         ) : (
           <>
@@ -85,7 +185,10 @@ export function MainLayout() {
             <PanelGroup direction="horizontal" className="flex-1">
               {/* Primary panel: Map + Code tab container */}
               <Panel defaultSize={showChat ? 68 : 100} minSize={30}>
-                <PrimaryPanel onToggleFullscreen={toggleFullscreen} />
+                <PrimaryPanel
+                  onToggleFullscreen={toggleFullscreen}
+                  mode={isCanvasView ? 'canvas' : 'map'}
+                />
               </Panel>
 
               {showChat && (
@@ -113,10 +216,120 @@ export function MainLayout() {
         )}
 
         {/* Bottom bar */}
-        <StatusBar
-          showBottomPanel={showBottomPanel}
-          onToggleBottomPanel={() => setShowBottomPanel(!showBottomPanel)}
-        />
+        <StatusBar />
+      </div>
+      <DataPivotPanel />
+    </div>
+    {boardMode && (
+      <BoardModeShell
+        chatOpen={boardChatOpen}
+        onToggleChat={() => setBoardChatOpen((v) => !v)}
+        onExit={exitBoardMode}
+        exiting={boardClosing}
+      />
+    )}
+    </div>
+  )
+}
+
+function BoardModeShell({
+  chatOpen,
+  onToggleChat,
+  onExit,
+  exiting,
+}: {
+  chatOpen: boolean
+  onToggleChat: () => void
+  onExit: () => void
+  exiting: boolean
+}) {
+  const t = useT()
+  const mapHostRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const host = mapHostRef.current
+    let originalParent: HTMLElement | null = null
+    let originalNextSibling: ChildNode | null = null
+    let movedContainer: HTMLElement | null = null
+
+    const resize = () => mapEngine.getMap()?.resize()
+    const attachMap = () => {
+      if (!host) return false
+      const map = mapEngine.getMap()
+      const container = map?.getContainer()
+      if (!map || !container) return false
+      if (container.parentElement === host) return true
+      originalParent = container.parentElement
+      originalNextSibling = container.nextSibling
+      movedContainer = container
+      host.appendChild(container)
+      resize()
+      return true
+    }
+
+    const raf = window.requestAnimationFrame(() => {
+      attachMap()
+      window.setTimeout(resize, 180)
+    })
+    const retry = window.setTimeout(() => {
+      attachMap()
+      resize()
+    }, 80)
+    window.addEventListener('resize', resize)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.clearTimeout(retry)
+      window.removeEventListener('resize', resize)
+      if (movedContainer && originalParent) {
+        originalParent.insertBefore(movedContainer, originalNextSibling)
+        window.requestAnimationFrame(resize)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => mapEngine.getMap()?.resize())
+    return () => window.cancelAnimationFrame(raf)
+  }, [chatOpen])
+
+  return (
+    <div className={`board-mode-shell absolute inset-0 z-[9000] overflow-hidden bg-bg-primary p-3 sm:p-4 ${exiting ? 'board-mode-shell--exit' : ''}`}>
+      <div className="board-mode-shell__stage relative h-full w-full overflow-hidden rounded-[22px] bg-bg-secondary shadow-2xl">
+        <div ref={mapHostRef} className="board-mode-shell__map h-full w-full" />
+
+        <div className="pointer-events-none absolute inset-0 z-30">
+          {chatOpen && (
+            <div className="pointer-events-auto absolute bottom-[108px] right-4 h-[min(680px,calc(100vh-148px))] w-[min(440px,calc(100vw-32px))] animate-slide-up">
+              <ChatView variant="floating" />
+            </div>
+          )}
+
+          <div className="pointer-events-auto absolute bottom-4 right-4 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onExit}
+              className="relative z-20 flex h-9 w-9 items-center justify-center rounded-full bg-bg-primary/55 text-text-secondary/90 shadow-lg backdrop-blur-xl transition-all duration-200 hover:-translate-x-0.5 hover:scale-105 hover:bg-bg-primary/75 hover:text-accent-primary active:scale-95"
+              title={t.sidebar.exitBoard}
+              aria-label={t.sidebar.exitBoard}
+            >
+              <ArrowLeft className="h-4 w-4" strokeWidth={2.4} />
+            </button>
+            <button
+              type="button"
+              onClick={onToggleChat}
+              className="board-agent-orb group relative flex h-[76px] w-[76px] items-center justify-center rounded-[24px] bg-transparent transition-transform duration-200 hover:scale-[1.035] active:scale-95"
+              title={chatOpen ? t.sidebar.hideChat : t.sidebar.showChat}
+            >
+              <span className="board-agent-orb__halo" aria-hidden />
+              <span className="board-agent-orb__glow" aria-hidden />
+              <img
+                src={superAppIconImg}
+                alt="OpenGIS Agent"
+                className="relative z-10 h-[62px] w-[62px] rounded-[20px] object-contain drop-shadow-2xl"
+              />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -184,8 +397,12 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
       return <WorkflowsPanel />
     case 'runs':
       return <RunsPanel />
-    case 'skills':
-      return <SkillsPanel />
+    case 'operations':
+      return <OperationsPanel />
+    case 'workers':
+      return <WorkersPanel />
+    case 'tools':
+      return <ToolAndSkillPanel />
     default:
       return null
   }
@@ -194,13 +411,7 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
 /**
  * Status bar at the bottom of the application.
  */
-function StatusBar({
-  showBottomPanel,
-  onToggleBottomPanel,
-}: {
-  showBottomPanel: boolean
-  onToggleBottomPanel: () => void
-}) {
+function StatusBar() {
   const t = useT()
   const layers = useMapStore((s) => s.layers)
   const activeLayerId = useMapStore((s) => s.activeLayerId)
@@ -211,12 +422,6 @@ function StatusBar({
 
   return (
     <div className="h-6 bg-bg-secondary border-t border-border flex items-center px-3 text-2xs text-text-muted select-none">
-      <button
-        onClick={onToggleBottomPanel}
-        className="hover:text-text-primary transition-colors mr-4"
-      >
-        {showBottomPanel ? `▼ ${t.layout.hideTable}` : `▲ ${t.layout.showTable}`}
-      </button>
       <span className="mr-4">{crs}</span>
       {activeLayer && (
         <>
@@ -243,7 +448,23 @@ function PythonStatusIndicator() {
     stopped: 'bg-text-muted',
   }
 
-  const status = 'stopped' // Placeholder
+  const [status, setStatus] = useState<'stopped' | 'starting' | 'ready' | 'error'>('stopped')
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api) return
+
+    // Get initial status
+    api.getPythonStatus().then((s: any) => {
+      if (s?.status) setStatus(s.status)
+    }).catch(() => {})
+
+    // Subscribe to status changes
+    const unsubscribe = api.onPythonStatusChanged((s: any) => {
+      if (s?.status) setStatus(s.status)
+    })
+    return unsubscribe
+  }, [])
 
   return (
     <div className="flex items-center gap-1.5">
@@ -260,34 +481,46 @@ function PythonStatusIndicator() {
  * switch between Map view and Code viewer. Supports split view
  * (map + code side by side or top/bottom).
  */
-function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }) {
+function PrimaryPanel({
+  onToggleFullscreen,
+  isFullscreen = false,
+  mode = 'map',
+}: {
+  onToggleFullscreen: () => void
+  isFullscreen?: boolean
+  mode?: 'map' | 'canvas'
+}) {
   const t = useT()
   const tabs = useViewStore((s) => s.tabs)
   const activeTabId = useViewStore((s) => s.activeTabId)
   const setActiveTab = useViewStore((s) => s.setActiveTab)
   const closeTab = useViewStore((s) => s.closeTab)
 
-  const codeTabs = tabs.filter((t) => t.type === 'code' || t.type === 'text')
-  const activeCodeTab = tabs.find((t) => t.id === activeTabId)
+  const viewTabs = tabs.filter((t) => t.type === 'code' || t.type === 'text' || t.type === 'image')
+  const activeViewTab = tabs.find((t) => t.id === activeTabId)
 
-  // No code tabs — just show the map
-  if (codeTabs.length === 0) {
-    return <MapView onToggleFullscreen={onToggleFullscreen} />
+  if (mode === 'canvas') {
+    return <LayoutComposerView />
+  }
+
+  // No file/image tabs — just show the map
+  if (viewTabs.length === 0) {
+    return <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
   }
 
   // Tab view: switch between map and code
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
-      <div className="h-9 border-b border-border bg-bg-secondary flex items-center shrink-0">
+      <div className="h-10 border-b border-border bg-bg-secondary flex items-center shrink-0 app-region-drag">
         {/* Map tab */}
         <button
           onClick={() => setActiveTab('map')}
           className={`
-            flex items-center gap-1.5 px-3 h-full border-r border-border shrink-0 transition-colors
+            app-region-no-drag mx-1.5 flex h-7 items-center gap-1.5 rounded-md px-2.5 shrink-0 transition-colors
             ${activeTabId === 'map'
-              ? 'bg-bg-primary text-text-primary'
-              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              ? 'bg-bg-primary text-text-primary shadow-sm ring-1 ring-border/70'
+              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/80'
             }
           `}
         >
@@ -297,7 +530,7 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
 
         {/* Code tabs */}
         <CodeTabHeader
-          tabs={codeTabs}
+          tabs={viewTabs}
           activeTabId={activeTabId}
           onTabClick={setActiveTab}
           onTabClose={closeTab}
@@ -307,11 +540,11 @@ function PrimaryPanel({ onToggleFullscreen }: { onToggleFullscreen: () => void }
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTabId === 'map' ? (
-          <MapView onToggleFullscreen={onToggleFullscreen} />
-        ) : activeCodeTab ? (
-          <CodeTabContent tab={activeCodeTab} />
+          <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
+        ) : activeViewTab ? (
+          <CodeTabContent tab={activeViewTab} />
         ) : (
-          <MapView onToggleFullscreen={onToggleFullscreen} />
+          <MapView onToggleFullscreen={onToggleFullscreen} isFullscreen={isFullscreen} />
         )}
       </div>
     </div>
@@ -339,6 +572,10 @@ function CodeTabContent({ tab }: { tab: ViewTab }) {
   // ".flow.json" without going through the Workflows sidebar.
   if (lang === 'workflow') {
     return <WorkflowEditorView tab={tab} />
+  }
+
+  if (lang === 'operation') {
+    return <OperationEditorView tab={tab} />
   }
 
   const isPython = lang === 'python' || path.endsWith('.py')

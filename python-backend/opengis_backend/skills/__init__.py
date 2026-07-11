@@ -1,1 +1,1 @@
-"""Skill system package."""
+"""User-loadable skill package discovery."""

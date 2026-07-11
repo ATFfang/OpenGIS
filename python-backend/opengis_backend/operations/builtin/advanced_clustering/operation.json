@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0",
+  "id": "advanced_clustering",
+  "name": "空间聚类分析",
+  "version": "0.1.0",
+  "status": "validated",
+  "description": "支持点、线、面多种要素类型的空间聚类分析，支持5种聚类方法（DBSCAN、K-Means、HDBSCAN、OPTICS、层次聚类），支持GeoJSON、SHP、CSV、GPKG、KML多源数据输入。",
+  "entry": "main.py",
+  "runtime": {
+    "language": "python",
+    "python": ">=3.12",
+    "dependencies": [
+      "geopandas",
+      "scikit-learn",
+      "numpy",
+      "pandas",
+      "shapely"
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "input_path"
+    ],
+    "properties": {
+      "input_path": {
+        "type": "string",
+        "description": "输入文件路径（支持 GeoJSON, SHP, CSV, GPKG, KML）"
+      },
+      "output_dir": {
+        "type": "string",
+        "description": "输出目录，默认与输入文件同目录"
+      },
+      "method": {
+        "type": "string",
+        "default": "dbscan",
+        "enum": [
+          "dbscan",
+          "kmeans",
+          "hdbscan",
+          "optics",
+          "agglomerative"
+        ],
+        "description": "聚类方法：DBSCAN、K-Means、HDBSCAN、OPTICS、层次聚类"
+      },
+      "centroid_method": {
+        "type": "string",
+        "default": "centroid",
+        "enum": [
+          "centroid",
+          "representative"
+        ],
+        "description": "线/面要素提取点的方法：centroid（质心）、representative（代表点）"
+      },
+      "coord_x": {
+        "type": "string",
+        "description": "CSV格式的经度列名（仅CSV格式需要）"
+      },
+      "coord_y": {
+        "type": "string",
+        "description": "CSV格式的纬度列名（仅CSV格式需要）"
+      },
+      "coord_crs": {
+        "type": "string",
+        "default": "EPSG:4326",
+        "description": "CSV坐标系，默认 WGS84"
+      },
+      "eps_meters": {
+        "type": "number",
+        "default": 500,
+        "description": "DBSCAN聚类半径，单位：米"
+      },
+      "min_samples": {
+        "type": "integer",
+        "default": 5,
+        "description": "DBSCAN/OPTICS形成聚类的最少点数"
+      },
+      "n_clusters": {
+        "type": "integer",
+        "default": 5,
+        "description": "KMeans/Agglomerative聚类数量"
+      },
+      "distance_threshold_meters": {
+        "type": "number",
+        "description": "Agglomerative聚类的距离阈值（米），设置后忽略n_clusters"
+      },
+      "min_cluster_size": {
+        "type": "integer",
+        "default": 15,
+        "description": "HDBSCAN最小聚类大小"
+      },
+      "max_eps_meters": {
+        "type": "number",
+        "default": 1000,
+        "description": "OPTICS最大搜索距离（米）"
+      },
+      "prefix": {
+        "type": "string",
+        "default": "",
+        "description": "输出文件名前缀"
+      },
+      "suffix": {
+        "type": "string",
+        "default": "",
+        "description": "输出文件名后缀"
+      },
+      "save_centers": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否输出聚类中心点"
+      },
+      "save_stats": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否输出统计 JSON"
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean"
+      },
+      "n_features": {
+        "type": "integer",
+        "description": "输入要素总数"
+      },
+      "geometry_type": {
+        "type": "string",
+        "description": "输入几何类型（point/line/polygon/mixed）"
+      },
+      "method": {
+        "type": "string",
+        "description": "使用的聚类方法"
+      },
+      "n_clusters": {
+        "type": "integer",
+        "description": "聚类数量"
+      },
+      "n_noise": {
+        "type": "integer",
+        "description": "噪声点数"
+      },
+      "n_clustered": {
+        "type": "integer",
+        "description": "聚类内要素数"
+      },
+      "clustering_ratio": {
+        "type": "number",
+        "description": "聚类比例"
+      },
+      "clustered_path": {
+        "type": "string",
+        "description": "带聚类标签的 GeoJSON"
+      },
+      "centers_path": {
+        "type": "string",
+        "description": "聚类中心点 GeoJSON"
+      },
+      "stats_path": {
+        "type": "string",
+        "description": "统计信息 JSON"
+      },
+      "top_clusters": {
+        "type": "array",
+        "description": "按要素数排序的前10大聚类"
+      }
+    }
+  },
+  "tunable_parameters": {},
+  "validation": {
+    "input_checks": [],
+    "output_checks": []
+  },
+  "provenance": {
+    "created_by": "opengis",
+    "source": "builtin",
+    "created_at": "2026-07-10T18:00:00"
+  },
+  "created_at": "2026-07-10T18:00:00",
+  "updated_at": "2026-07-11T11:42:48",
+  "revision": 2
+}

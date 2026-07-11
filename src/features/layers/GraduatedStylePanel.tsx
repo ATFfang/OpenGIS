@@ -21,13 +21,20 @@ import {
   BarChart3,
   Tag,
   Check,
+  ArrowUp,
+  ArrowDown,
+  ChevronsUp,
+  ChevronsDown,
 } from 'lucide-react'
+import { useT } from '@/i18n'
+import type { TranslationKeys } from '@/i18n'
 import type {
   MapLayerDefinition,
   LayerStyle,
   FieldDescriptor,
   GeoJSONFeatureCollection,
   ClassificationMethod,
+  NumericVisualVariable,
 } from '@/services/geo'
 import { useMapStore } from '@/stores/mapStore'
 
@@ -212,11 +219,49 @@ interface GraduatedStylePanelProps {
 }
 
 type RenderMode = 'graduated' | 'categorized'
+type LayerTranslations = TranslationKeys['layers']
+
+interface VisualVariableDraft {
+  enabled: boolean
+  field: string
+  method: ClassificationMethod
+  classes: number
+  min: number
+  max: number
+}
+
+function draftFromVariable(
+  variable: NumericVisualVariable | undefined,
+  fallbackField: string,
+  fallbackRange: [number, number],
+): VisualVariableDraft {
+  return {
+    enabled: Boolean(variable?.field),
+    field: variable?.field || fallbackField,
+    method: variable?.method || 'quantile',
+    classes: variable?.classes || variable?.values?.length || 5,
+    min: variable?.range?.[0] ?? variable?.values?.[0] ?? fallbackRange[0],
+    max: variable?.range?.[1] ?? variable?.values?.[variable.values.length - 1] ?? fallbackRange[1],
+  }
+}
+
+function variableFromDraft(draft: VisualVariableDraft): NumericVisualVariable | undefined {
+  if (!draft.enabled || !draft.field) return undefined
+  return {
+    field: draft.field,
+    method: draft.method,
+    classes: draft.classes,
+    range: [draft.min, draft.max],
+  }
+}
 
 // ─── Main Component ─────────────────────────────────────────────
 
 export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps) {
+  const t = useT()
   const updateLayerStyle = useMapStore((s) => s.updateLayerStyle)
+  const layers = useMapStore((s) => s.layers)
+  const reorderLayers = useMapStore((s) => s.reorderLayers)
 
   // Determine initial mode from current style
   const initialMode: RenderMode =
@@ -260,6 +305,20 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
   const [radius, setRadius] = useState(layer.style.radius ?? 5)
   const [strokeColor, setStrokeColor] = useState(layer.style.strokeColor)
   const [fillOpacity, setFillOpacity] = useState(layer.style.fillOpacity ?? layer.style.opacity)
+  const [sizeVariable, setSizeVariable] = useState<VisualVariableDraft>(() =>
+    draftFromVariable(layer.style.sizeVariable, numericFields[0]?.name || '', isPointGeom ? [3, 14] : [1, 8])
+  )
+  const [opacityVariable, setOpacityVariable] = useState<VisualVariableDraft>(() =>
+    draftFromVariable(layer.style.opacityVariable, numericFields[0]?.name || '', [0.25, layer.style.opacity])
+  )
+
+  const currentLayerIndex = layers.findIndex((item) => item.id === layer.id)
+  const canMoveDown = currentLayerIndex > 0
+  const canMoveUp = currentLayerIndex >= 0 && currentLayerIndex < layers.length - 1
+  const moveLayerTo = useCallback((toIndex: number) => {
+    if (currentLayerIndex < 0 || toIndex === currentLayerIndex) return
+    reorderLayers(currentLayerIndex, Math.max(0, Math.min(layers.length - 1, toIndex)))
+  }, [currentLayerIndex, layers.length, reorderLayers])
 
   // ── Computed breaks for graduated ──
   const gradBreaks = useMemo(() => {
@@ -299,6 +358,8 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
       strokeColor,
       ...(isPointGeom ? { radius } : {}),
       ...(isFillGeom ? { fillOpacity } : {}),
+      sizeVariable: variableFromDraft(sizeVariable),
+      opacityVariable: variableFromDraft(opacityVariable),
     }
     if (mode === 'graduated') {
       const updates: Partial<LayerStyle> = {
@@ -330,6 +391,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
     mode, gradField, gradMethod, gradClasses, gradBreaks, gradPalette,
     catField, catMaxCategories, catColors, layer.id, updateLayerStyle, onClose,
     strokeWidth, strokeColor, radius, fillOpacity, isPointGeom, isFillGeom,
+    sizeVariable, opacityVariable,
   ])
 
   // ── Reset to single-color ──
@@ -345,6 +407,8 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
       renderType: defaultType,
       graduated: undefined,
       categorized: undefined,
+      sizeVariable: undefined,
+      opacityVariable: undefined,
     })
     onClose()
   }, [layer, updateLayerStyle, onClose])
@@ -353,12 +417,12 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="bg-bg-primary border border-border rounded-xl shadow-2xl w-[420px] max-h-[85vh] flex flex-col overflow-hidden animate-fade-in">
+      <div className="bg-bg-primary border-[0.5px] border-border/35 rounded-xl shadow-2xl w-[420px] max-h-[85vh] flex flex-col overflow-hidden animate-fade-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b-[0.5px] border-border/20 shrink-0">
           <div className="flex items-center gap-2">
             <Palette className="w-4 h-4 text-accent-primary" />
-            <span className="text-sm font-semibold text-text-primary">Classification Renderer</span>
+            <span className="text-sm font-semibold text-text-primary">{t.layers.classificationRenderer}</span>
           </div>
           <button
             onClick={onClose}
@@ -369,28 +433,28 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
         </div>
 
         {/* Mode tabs */}
-        <div className="flex border-b border-border shrink-0">
+        <div className="flex border-b-[0.5px] border-border/20 shrink-0">
           <button
             onClick={() => setMode('graduated')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${
               mode === 'graduated'
-                ? 'text-accent-primary border-b-2 border-accent-primary bg-accent-primary/5'
+                ? 'text-accent-primary border-b-[0.5px] border-accent-primary/60 bg-accent-primary/5'
                 : 'text-text-muted hover:text-text-secondary'
             }`}
           >
             <BarChart3 className="w-3.5 h-3.5" />
-            Graduated
+            {t.layers.graduated}
           </button>
           <button
             onClick={() => setMode('categorized')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${
               mode === 'categorized'
-                ? 'text-accent-primary border-b-2 border-accent-primary bg-accent-primary/5'
+                ? 'text-accent-primary border-b-[0.5px] border-accent-primary/60 bg-accent-primary/5'
                 : 'text-text-muted hover:text-text-secondary'
             }`}
           >
             <Tag className="w-3.5 h-3.5" />
-            Categorized
+            {t.layers.categorized}
           </button>
         </div>
 
@@ -412,6 +476,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
               showRampPicker={showRampPicker}
               onToggleRampPicker={() => setShowRampPicker(!showRampPicker)}
               onSelectRamp={(id) => { setSelectedRampId(id); setShowRampPicker(false) }}
+              t={t.layers}
             />
           ) : (
             <CategorizedControls
@@ -427,21 +492,22 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
               showRampPicker={showRampPicker}
               onToggleRampPicker={() => setShowRampPicker(!showRampPicker)}
               onSelectRamp={(id) => { setSelectedRampId(id); setShowRampPicker(false) }}
+              t={t.layers}
             />
           )}
 
           {/* Common style controls — shared by both modes */}
-          <div className="border-t border-border pt-3 mt-1 space-y-2.5">
+          <div className="border-t-[0.5px] border-border/20 pt-3 mt-1 space-y-2.5">
             <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-2">
-              Common Style
+              {t.layers.commonStyle}
             </div>
 
             {/* Stroke color */}
             {(isFillGeom || isPointGeom) && (
-              <ControlRow label="Stroke color">
+              <ControlRow label={t.layers.strokeColor}>
                 <div className="flex items-center gap-2 flex-1">
                   <label
-                    className="w-5 h-5 rounded border border-border shrink-0 cursor-pointer relative overflow-hidden"
+                    className="w-5 h-5 rounded border-[0.5px] border-border/35 shrink-0 cursor-pointer relative overflow-hidden"
                     style={{ backgroundColor: strokeColor }}
                   >
                     <input
@@ -457,7 +523,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
             )}
 
             {/* Stroke width */}
-            <ControlRow label="Stroke width">
+            <ControlRow label={t.layers.strokeWidth}>
               <div className="flex items-center gap-2 flex-1">
                 <input
                   type="range"
@@ -476,7 +542,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
 
             {/* Point radius */}
             {isPointGeom && (
-              <ControlRow label="Point radius">
+              <ControlRow label={t.layers.pointRadius}>
                 <div className="flex items-center gap-2 flex-1">
                   <input
                     type="range"
@@ -496,7 +562,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
 
             {/* Fill opacity */}
             {isFillGeom && (
-              <ControlRow label="Fill opacity">
+              <ControlRow label={t.layers.fillOpacity}>
                 <div className="flex items-center gap-2 flex-1">
                   <input
                     type="range"
@@ -514,29 +580,64 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
               </ControlRow>
             )}
           </div>
+
+          <VisualVariableControls
+            numericFields={numericFields}
+            geometryLabel={isPointGeom ? t.layers.pointSize : isFillGeom ? t.layers.borderWidth : t.layers.lineWidth}
+            sizeVariable={sizeVariable}
+            onSizeVariableChange={setSizeVariable}
+            opacityVariable={opacityVariable}
+            onOpacityVariableChange={setOpacityVariable}
+            t={t.layers}
+          />
+
+          <div className="border-t-[0.5px] border-border/20 pt-3 mt-1 space-y-2.5">
+            <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-2">
+              {t.layers.layerOrder}
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              <OrderButton label={t.layers.bottom} disabled={!canMoveDown} onClick={() => moveLayerTo(0)}>
+                <ChevronsDown className="w-3.5 h-3.5" />
+              </OrderButton>
+              <OrderButton label={t.layers.down} disabled={!canMoveDown} onClick={() => moveLayerTo(currentLayerIndex - 1)}>
+                <ArrowDown className="w-3.5 h-3.5" />
+              </OrderButton>
+              <OrderButton label={t.layers.up} disabled={!canMoveUp} onClick={() => moveLayerTo(currentLayerIndex + 1)}>
+                <ArrowUp className="w-3.5 h-3.5" />
+              </OrderButton>
+              <OrderButton label={t.layers.top} disabled={!canMoveUp} onClick={() => moveLayerTo(layers.length - 1)}>
+                <ChevronsUp className="w-3.5 h-3.5" />
+              </OrderButton>
+            </div>
+            <div className="text-2xs text-text-muted">
+              {t.layers.currentPosition
+                .replace('{current}', currentLayerIndex >= 0 ? String(currentLayerIndex + 1) : '-')
+                .replace('{total}', String(layers.length))}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-t-[0.5px] border-border/20 shrink-0">
           <button
             onClick={handleReset}
             className="px-3 py-1.5 text-xs text-text-muted hover:text-accent-danger transition-colors"
           >
-            Reset to single color
+            {t.layers.resetToSingleColor}
           </button>
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
               className="px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary bg-bg-secondary rounded-lg transition-colors"
             >
-              Cancel
+              {t.common.cancel}
             </button>
             <button
               onClick={handleApply}
               className="px-4 py-1.5 text-xs font-medium text-white bg-accent-primary hover:bg-accent-primary/90 rounded-lg transition-colors flex items-center gap-1.5"
             >
               <Check className="w-3.5 h-3.5" />
-              Apply
+              {t.common.confirm}
             </button>
           </div>
         </div>
@@ -548,6 +649,7 @@ export function GraduatedStylePanel({ layer, onClose }: GraduatedStylePanelProps
 // ─── Graduated Controls ─────────────────────────────────────────
 
 interface GraduatedControlsProps {
+  t: LayerTranslations
   numericFields: FieldDescriptor[]
   field: string
   onFieldChange: (f: string) => void
@@ -565,6 +667,7 @@ interface GraduatedControlsProps {
 }
 
 function GraduatedControls({
+  t,
   numericFields,
   field,
   onFieldChange,
@@ -583,14 +686,14 @@ function GraduatedControls({
   return (
     <>
       {/* Field selector */}
-      <ControlRow label="Value field">
+      <ControlRow label={t.valueField}>
         <select
           value={field}
           onChange={(e) => onFieldChange(e.target.value)}
-          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border border-border focus:border-accent-primary outline-none"
+          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
         >
           {numericFields.length === 0 && (
-            <option value="">No numeric fields</option>
+            <option value="">{t.noNumericFields}</option>
           )}
           {numericFields.map((f) => (
             <option key={f.name} value={f.name}>
@@ -601,20 +704,20 @@ function GraduatedControls({
       </ControlRow>
 
       {/* Method */}
-      <ControlRow label="Method">
+      <ControlRow label={t.method}>
         <select
           value={method}
           onChange={(e) => onMethodChange(e.target.value as ClassificationMethod)}
-          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border border-border focus:border-accent-primary outline-none"
+          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
         >
-          <option value="quantile">Quantile (Equal Count)</option>
-          <option value="equal-interval">Equal Interval</option>
-          <option value="jenks">Natural Breaks (Jenks)</option>
+          <option value="quantile">{t.quantile}</option>
+          <option value="equal-interval">{t.equalInterval}</option>
+          <option value="jenks">{t.naturalBreaks}</option>
         </select>
       </ControlRow>
 
       {/* Classes */}
-      <ControlRow label="Classes">
+      <ControlRow label={t.classes}>
         <div className="flex items-center gap-2 flex-1">
           <input
             type="range"
@@ -632,17 +735,17 @@ function GraduatedControls({
       </ControlRow>
 
       {/* Color ramp */}
-      <ControlRow label="Color ramp">
+      <ControlRow label={t.colorRamp}>
         <div className="flex-1 relative">
           <button
             onClick={onToggleRampPicker}
-            className="w-full flex items-center gap-2 px-2 py-1.5 bg-bg-secondary border border-border rounded-lg hover:border-accent-primary transition-colors"
+            className="w-full flex items-center gap-2 px-2 py-1.5 bg-bg-secondary border-[0.5px] border-border/35 rounded-lg hover:border-accent-primary/60 transition-colors"
           >
             <RampPreview colors={selectedRamp.colors(classes)} className="flex-1 h-4 rounded" />
             <ChevronDown className="w-3 h-3 text-text-muted shrink-0" />
           </button>
           {showRampPicker && (
-            <div className="absolute left-0 right-0 top-full mt-1 bg-bg-primary border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+            <div className="absolute left-0 right-0 top-full mt-1 bg-bg-primary border-[0.5px] border-border/35 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
               {COLOR_RAMPS.map((ramp) => (
                 <button
                   key={ramp.id}
@@ -664,7 +767,7 @@ function GraduatedControls({
       {field && breaks.length > 0 && (
         <div className="mt-2">
           <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-2">
-            Legend Preview
+            {t.classification}
           </div>
           <div className="space-y-0.5">
             {Array.from({ length: breaks.length + 1 }, (_, i) => {
@@ -673,7 +776,7 @@ function GraduatedControls({
               const hi = i < breaks.length ? breaks[i].toFixed(2) : '+∞'
               return (
                 <div key={i} className="flex items-center gap-2">
-                  <label className="relative w-5 h-4 rounded-sm border border-border shrink-0 cursor-pointer overflow-hidden" style={{ backgroundColor: color }}>
+                  <label className="relative w-5 h-4 rounded-sm border-[0.5px] border-border/35 shrink-0 cursor-pointer overflow-hidden" style={{ backgroundColor: color }}>
                     <input
                       type="color"
                       value={color}
@@ -701,6 +804,7 @@ function GraduatedControls({
 // ─── Categorized Controls ───────────────────────────────────────
 
 interface CategorizedControlsProps {
+  t: LayerTranslations
   allFields: FieldDescriptor[]
   field: string
   onFieldChange: (f: string) => void
@@ -716,6 +820,7 @@ interface CategorizedControlsProps {
 }
 
 function CategorizedControls({
+  t,
   allFields,
   field,
   onFieldChange,
@@ -732,14 +837,14 @@ function CategorizedControls({
   return (
     <>
       {/* Field selector */}
-      <ControlRow label="Category field">
+      <ControlRow label={t.categoryField}>
         <select
           value={field}
           onChange={(e) => onFieldChange(e.target.value)}
-          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border border-border focus:border-accent-primary outline-none"
+          className="flex-1 bg-bg-secondary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
         >
           {allFields.length === 0 && (
-            <option value="">No fields available</option>
+            <option value="">{t.noFields}</option>
           )}
           {allFields.map((f) => (
             <option key={f.name} value={f.name}>
@@ -750,7 +855,7 @@ function CategorizedControls({
       </ControlRow>
 
       {/* Max categories */}
-      <ControlRow label="Max categories">
+      <ControlRow label={t.maxCategories}>
         <div className="flex items-center gap-2 flex-1">
           <input
             type="range"
@@ -768,17 +873,17 @@ function CategorizedControls({
       </ControlRow>
 
       {/* Color ramp */}
-      <ControlRow label="Color ramp">
+      <ControlRow label={t.colorRamp}>
         <div className="flex-1 relative">
           <button
             onClick={onToggleRampPicker}
-            className="w-full flex items-center gap-2 px-2 py-1.5 bg-bg-secondary border border-border rounded-lg hover:border-accent-primary transition-colors"
+            className="w-full flex items-center gap-2 px-2 py-1.5 bg-bg-secondary border-[0.5px] border-border/35 rounded-lg hover:border-accent-primary/60 transition-colors"
           >
             <RampPreview colors={selectedRamp.colors(Math.min(uniqueValues.length || maxCategories, 12))} className="flex-1 h-4 rounded" />
             <ChevronDown className="w-3 h-3 text-text-muted shrink-0" />
           </button>
           {showRampPicker && (
-            <div className="absolute left-0 right-0 top-full mt-1 bg-bg-primary border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+            <div className="absolute left-0 right-0 top-full mt-1 bg-bg-primary border-[0.5px] border-border/35 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
               {COLOR_RAMPS.map((ramp) => (
                 <button
                   key={ramp.id}
@@ -800,13 +905,13 @@ function CategorizedControls({
       {field && uniqueValues.length > 0 && (
         <div className="mt-2">
           <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-2">
-            Categories ({uniqueValues.length})
+            {t.categorized} ({uniqueValues.length})
           </div>
           <div className="space-y-0.5 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
             {uniqueValues.map((val) => (
               <div key={val} className="flex items-center gap-2">
                 <label
-                  className="relative w-5 h-4 rounded-sm border border-border shrink-0 cursor-pointer overflow-hidden"
+                  className="relative w-5 h-4 rounded-sm border-[0.5px] border-border/35 shrink-0 cursor-pointer overflow-hidden"
                   style={{ backgroundColor: colors[val] || '#9ca3af' }}
                 >
                   <input
@@ -827,6 +932,230 @@ function CategorizedControls({
         </div>
       )}
     </>
+  )
+}
+
+// ─── Visual Variables ───────────────────────────────────────────
+
+interface VisualVariableControlsProps {
+  t: LayerTranslations
+  numericFields: FieldDescriptor[]
+  geometryLabel: string
+  sizeVariable: VisualVariableDraft
+  onSizeVariableChange: (next: VisualVariableDraft) => void
+  opacityVariable: VisualVariableDraft
+  onOpacityVariableChange: (next: VisualVariableDraft) => void
+}
+
+function VisualVariableControls({
+  t,
+  numericFields,
+  geometryLabel,
+  sizeVariable,
+  onSizeVariableChange,
+  opacityVariable,
+  onOpacityVariableChange,
+}: VisualVariableControlsProps) {
+  return (
+    <div className="border-t-[0.5px] border-border/20 pt-3 mt-1 space-y-3">
+      <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider">
+        {t.visualVariables}
+      </div>
+      <VariableEditor
+        title={geometryLabel}
+        fields={numericFields}
+        draft={sizeVariable}
+        onChange={onSizeVariableChange}
+        min={0.5}
+        max={32}
+        step={0.5}
+        suffix="px"
+        t={t}
+      />
+      <VariableEditor
+        title={t.opacity}
+        fields={numericFields}
+        draft={opacityVariable}
+        onChange={onOpacityVariableChange}
+        min={0}
+        max={1}
+        step={0.05}
+        suffix="%"
+        format={(value) => String(Math.round(value * 100))}
+        t={t}
+      />
+    </div>
+  )
+}
+
+interface VariableEditorProps {
+  t: LayerTranslations
+  title: string
+  fields: FieldDescriptor[]
+  draft: VisualVariableDraft
+  onChange: (next: VisualVariableDraft) => void
+  min: number
+  max: number
+  step: number
+  suffix: string
+  format?: (value: number) => string
+}
+
+function VariableEditor({
+  t,
+  title,
+  fields,
+  draft,
+  onChange,
+  min,
+  max,
+  step,
+  suffix,
+  format = (value) => value.toFixed(step < 1 ? 2 : 1),
+}: VariableEditorProps) {
+  const patch = (updates: Partial<VisualVariableDraft>) => onChange({ ...draft, ...updates })
+  return (
+    <div className="rounded-lg bg-bg-secondary/70 border-[0.5px] border-border/25 px-2.5 py-2 space-y-2">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(e) => patch({ enabled: e.target.checked })}
+          className="w-3.5 h-3.5 accent-accent-primary"
+        />
+        <span className="text-xs font-medium text-text-secondary">{title}</span>
+      </label>
+      {draft.enabled && (
+        <div className="space-y-2">
+          <ControlRow label={t.field}>
+            <select
+              value={draft.field}
+              onChange={(e) => patch({ field: e.target.value })}
+              className="flex-1 bg-bg-primary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
+            >
+              {fields.length === 0 && <option value="">{t.noNumericFields}</option>}
+              {fields.map((field) => (
+                <option key={field.name} value={field.name}>
+                  {field.name}
+                </option>
+              ))}
+            </select>
+          </ControlRow>
+          <ControlRow label={t.method}>
+            <select
+              value={draft.method}
+              onChange={(e) => patch({ method: e.target.value as ClassificationMethod })}
+              className="flex-1 bg-bg-primary text-xs text-text-primary px-2 py-1.5 rounded-lg border-[0.5px] border-border/35 focus:border-accent-primary/60 outline-none"
+            >
+              <option value="quantile">{t.quantile}</option>
+              <option value="equal-interval">{t.equalInterval}</option>
+              <option value="jenks">{t.naturalBreaks}</option>
+            </select>
+          </ControlRow>
+          <ControlRow label={t.classes}>
+            <div className="flex items-center gap-2 flex-1">
+              <input
+                type="range"
+                min={2}
+                max={12}
+                step={1}
+                value={draft.classes}
+                onChange={(e) => patch({ classes: parseInt(e.target.value) })}
+                className="flex-1 h-1 accent-accent-primary cursor-pointer"
+              />
+              <span className="text-xs text-text-primary font-mono w-6 text-center tabular-nums">
+                {draft.classes}
+              </span>
+            </div>
+          </ControlRow>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberControl
+              label={t.min}
+              value={draft.min}
+              onChange={(value) => patch({ min: Math.min(value, draft.max) })}
+              min={min}
+              max={max}
+              step={step}
+              suffix={suffix}
+              format={format}
+            />
+            <NumberControl
+              label={t.max}
+              value={draft.max}
+              onChange={(value) => patch({ max: Math.max(value, draft.min) })}
+              min={min}
+              max={max}
+              step={step}
+              suffix={suffix}
+              format={format}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NumberControl({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  suffix,
+  format,
+}: {
+  label: string
+  value: number
+  onChange: (value: number) => void
+  min: number
+  max: number
+  step: number
+  suffix: string
+  format: (value: number) => string
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-2xs text-text-muted">
+      <span className="w-7">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="min-w-0 flex-1 h-1 accent-accent-primary cursor-pointer"
+      />
+      <span className="w-10 text-right text-text-secondary font-mono tabular-nums">
+        {format(value)}{suffix}
+      </span>
+    </label>
+  )
+}
+
+function OrderButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-bg-secondary text-text-secondary border-[0.5px] border-border/35 hover:text-text-primary hover:bg-bg-hover disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
+      title={label}
+    >
+      {children}
+      <span className="text-2xs">{label}</span>
+    </button>
   )
 }
 

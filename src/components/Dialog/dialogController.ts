@@ -90,6 +90,12 @@ function emit() {
 }
 
 function enqueue(req: DialogRequest) {
+  if (listeners.size === 0) {
+    if (req.kind === 'prompt') req.resolve(null)
+    else if (req.kind === 'confirm') req.resolve(false)
+    else req.resolve()
+    return
+  }
   // The host renders one dialog at a time. If a second `confirm`
   // fires while one is open we overwrite — this matches the
   // browser's native behaviour (the second call blocks until the

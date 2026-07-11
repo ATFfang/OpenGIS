@@ -6,15 +6,14 @@ import sys
 from pathlib import Path
 
 # --- Force UTF-8 on stdio BEFORE anything else imports a library that
-# captures sys.stdout / sys.stderr (rich.Console, smolagents.AgentLogger,
-# uvicorn's default logger, etc.).
+# captures sys.stdout / sys.stderr (rich.Console, uvicorn's default logger,
+# etc.).
 #
 # Why this matters on Windows: when Electron spawns this sidecar, the
 # inherited console codepage is usually cp936 (GBK). Libraries like rich
 # wrap sys.stdout with a TextIOWrapper that honours that codepage, and
-# any non-GBK character (e.g. smolagents prints a '\u2713' check-mark
-# between steps) will raise UnicodeEncodeError deep inside the agent
-# loop. That exception surfaces to the user as
+# any non-GBK progress character can raise UnicodeEncodeError deep inside
+# the agent loop. That exception surfaces to the user as
 # "Agent error: 'gbk' codec can't encode character '\u2713'" and aborts
 # the run.
 #
@@ -32,7 +31,7 @@ for _stream_name in ("stdout", "stderr"):
 
 import uvicorn
 
-from opengis_backend.logging_setup import configure_logging
+from opengis_backend.runtime.logging import configure_logging
 
 
 def main():

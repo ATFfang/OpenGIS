@@ -6,17 +6,19 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from opengis_backend.config import settings
-from opengis_backend.rpc_handler import RpcHandler
-from opengis_backend.skills.registry import SkillRegistry
+from opengis_backend.runtime.config import settings
+from opengis_backend.rpc.handler import RpcHandler
+from opengis_backend.skills.discovery import UserSkillDiscovery, add_source_path
+from opengis_backend.tools.registry import ToolRegistry
+from opengis_backend.worker import get_worker_manager
 
 logger = logging.getLogger(__name__)
 
 # Global instances
-skill_registry = SkillRegistry()
+tool_registry = ToolRegistry()
 
 # 生成 WebSocket 认证 token（防御性深度防护）
 WS_TOKEN = secrets.token_urlsafe(32)
@@ -28,8 +30,8 @@ async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
     # Startup
     logger.info("Initializing backend...")
-    await skill_registry.discover_and_load()
-    logger.info("Loaded %d skills", len(skill_registry.list_all()))
+    await tool_registry.discover_and_load()
+    logger.info("Loaded %d executable tools", len(tool_registry.list_all()))
     # 输出 WebSocket 认证 token（必须在 OPENGIS_READY 之前，确保 Electron 先收到 token）
     print(f"OPENGIS_WS_TOKEN={WS_TOKEN}", flush=True)
     # Signal to Electron that backend is ready.
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down backend...")
+    get_worker_manager().pause_all(reason="app_shutdown")
 
 
 app = FastAPI(
@@ -83,20 +86,85 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
-@app.get("/api/skills")
-async def list_skills():
-    """List all available skills."""
-    return {
-        "skills": [s.to_dict() for s in skill_registry.list_all()]
-    }
+@app.get("/api/tools")
+async def list_tools():
+    """List executable function-call tools registered by the backend."""
+    tools = [s.to_dict() for s in tool_registry.list_all()]
+    return {"tools": tools}
+
+
+@app.get("/api/user-skills")
+async def list_user_skills(workspace_path: str | None = None):
+    """List user-loadable instruction skills discovered on disk."""
+    skills = UserSkillDiscovery(workspace_path=workspace_path).list()
+    return {"skills": [item.to_dict() for item in skills]}
+
+
+@app.post("/api/user-skills/sources")
+async def add_user_skill_source(body: dict):
+    """Persist an additional user skill source path."""
+    result = add_source_path(
+        str(body.get("path") or body.get("source_path") or ""),
+        workspace_path=body.get("workspace_path") or None,
+        scope=str(body.get("scope") or "workspace"),
+    )
+    return result
 
 
 @app.get("/api/system/logs-dir")
 async def get_logs_dir():
     """Return the absolute path of the active log directory (None if not configured)."""
-    from opengis_backend.logging_setup import get_log_dir
+    from opengis_backend.runtime.logging import get_log_dir
     log_dir = get_log_dir()
     return {"log_dir": str(log_dir) if log_dir else None}
+
+
+@app.get("/api/rasters/{raster_id}/metadata")
+async def get_raster_metadata(raster_id: str):
+    """Return backend tile-raster metadata and current render style."""
+    from opengis_backend.integrations.gis.raster_service import get_registered_raster
+
+    try:
+        return get_registered_raster(raster_id).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/rasters/{raster_id}/style")
+async def update_raster_style(raster_id: str, body: dict):
+    """Update a backend tile-raster style.
+
+    The tile URL carries a style revision query param. Updating the revision
+    lets the frontend invalidate MapLibre's tile cache without recreating the
+    whole layer.
+    """
+    from opengis_backend.integrations.gis.raster_service import update_registered_raster_style
+
+    try:
+        return update_registered_raster_style(raster_id, dict(body or {})).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/rasters/{raster_id}/tiles/{z}/{x}/{y}.png")
+async def get_raster_tile(raster_id: str, z: int, x: int, y: int):
+    """Render a local raster as an XYZ PNG tile."""
+    from opengis_backend.integrations.gis.raster_service import render_registered_raster_tile
+
+    try:
+        tile = render_registered_raster_tile(raster_id, z, x, y)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.debug("Raster tile render failed", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return Response(
+        content=tile,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.post("/api/rpc")
@@ -111,9 +179,9 @@ async def http_rpc(body: dict):
     For streaming methods (chat.*), only the initial acknowledgement is returned;
     background notifications are not delivered over HTTP.
     """
-    from opengis_backend.rpc_http import dispatch_http
+    from opengis_backend.rpc.http import dispatch_http
 
-    return await dispatch_http(body, skill_registry)
+    return await dispatch_http(body, tool_registry)
 
 
 # ─── WebSocket Endpoint ───
@@ -140,7 +208,7 @@ async def websocket_endpoint(
 
     await websocket.accept()
     logger.info("WebSocket client connected (authenticated)")
-    handler = RpcHandler(websocket, skill_registry)
+    handler = RpcHandler(websocket, tool_registry)
 
     # Track background tasks so we can clean up on disconnect.
     background_tasks: set[asyncio.Task] = set()
@@ -167,6 +235,14 @@ async def websocket_endpoint(
         except Exception:
             pass
     finally:
+        # A websocket disconnect/reload must stop the active agent, not just
+        # cancel the request coroutine. Otherwise the worker thread can keep
+        # driving the previous plan run and leak stale events/state into the
+        # next renderer connection.
+        try:
+            await handler.shutdown()
+        except Exception:
+            logger.debug("websocket handler shutdown failed", exc_info=True)
         # Cancel any lingering background tasks on disconnect.
         for t in background_tasks:
             t.cancel()

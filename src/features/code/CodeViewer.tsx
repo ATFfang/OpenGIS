@@ -26,13 +26,13 @@ import {
   GitBranch,
   Eye,
   FileCode2,
+  PackageOpen,
 } from 'lucide-react'
-import { useViewStore, type CodeExecutionResult } from '@/stores/viewStore'
+import type { CodeExecutionResult } from '@/stores/viewStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useT } from '@/i18n'
 import type { ViewTab } from '@/stores/viewStore'
 import MarkdownRenderer from '@/features/chat/components/MarkdownBlock'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // ─── Syntax highlighter themes ──────────────────────────────────
 
@@ -98,7 +98,8 @@ export function CodeViewer({ tab }: CodeViewerProps) {
   // Directory of the markdown file for resolving relative image paths
   const mdDir = useMemo(() => {
     if (!tab.filePath) return ''
-    return tab.filePath.substring(0, tab.filePath.lastIndexOf('/'))
+    const normalized = tab.filePath.replace(/\\/g, '/')
+    return normalized.substring(0, normalized.lastIndexOf('/'))
   }, [tab.filePath])
 
   // Auto-show result when it arrives
@@ -130,7 +131,7 @@ export function CodeViewer({ tab }: CodeViewerProps) {
   return (
     <div className="flex flex-col h-full bg-bg-tertiary">
       {/* Toolbar */}
-      <div className="h-9 border-b border-border bg-bg-secondary flex items-center px-3 shrink-0 gap-1">
+      <div className="h-9 border-b border-border bg-bg-secondary flex items-center px-3 shrink-0 gap-1 app-region-drag">
         {/* File icon + name */}
         <FileCode className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
         <span className="text-xs text-text-secondary truncate flex-1">{tab.title}</span>
@@ -220,13 +221,7 @@ export function CodeViewer({ tab }: CodeViewerProps) {
             <div className="p-6 max-w-[800px] mx-auto text-[14px] leading-[1.8] text-text-primary">
               <MarkdownRenderer
                 markdown={tab.content || ''}
-                resolveImageSrc={mdDir ? (relPath: string) => {
-                  // If it's already an absolute URL, return as-is
-                  if (/^https?:\/\//.test(relPath)) return Promise.resolve(relPath)
-                  // Resolve relative path against the markdown file's directory
-                  const absPath = `${mdDir}/${relPath}`
-                  return pathToImageUrl(absPath)
-                } : undefined}
+                baseDir={mdDir}
               />
             </div>
           ) : (
@@ -404,42 +399,64 @@ export function CodeTabHeader({ tabs, activeTabId, onTabClick, onTabClose }: Cod
   if (tabs.length === 0) return null
 
   return (
-    <div className="h-9 border-b border-border bg-bg-secondary flex items-center shrink-0 overflow-x-auto scrollbar-none">
-      {tabs.map((tab) => {
-        // Workflow tabs get a dedicated icon so they stand out from
-        // regular source files in a crowded tab bar.
-        const isWorkflow = tab.language === 'workflow'
-        return (
-        <div
-          key={tab.id}
-          className={`
-            group/tab flex items-center gap-1.5 px-3 h-full cursor-pointer
-            border-r border-border shrink-0 transition-colors
-            ${tab.id === activeTabId
-              ? 'bg-bg-primary text-text-primary'
-              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-            }
-          `}
-          onClick={() => onTabClick(tab.id)}
-        >
-          {isWorkflow ? (
-            <GitBranch className="w-3 h-3 text-accent-geo shrink-0" />
-          ) : (
-            <FileCode className="w-3 h-3 text-yellow-400 shrink-0" />
-          )}
-          <span className="text-xs truncate max-w-[120px]">{tab.title}</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onTabClose(tab.id)
-            }}
-            className="w-4 h-4 rounded flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors opacity-0 group-hover/tab:opacity-100"
-          >
-            <X className="w-2.5 h-2.5" />
-          </button>
-        </div>
-        )
-      })}
+    <div className="app-region-no-drag h-full min-w-0 flex-1 overflow-x-auto overflow-y-hidden scrollbar-none">
+      <div className="flex h-full w-max items-center gap-1.5 px-1.5">
+        {tabs.map((tab) => {
+          const isWorkflow = tab.language === 'workflow'
+          const isOperation = tab.language === 'operation'
+          const isActive = tab.id === activeTabId
+          const Icon = isWorkflow ? GitBranch : isOperation ? PackageOpen : FileCode
+          const iconClass = isWorkflow
+            ? 'text-accent-geo'
+            : isOperation
+              ? 'text-accent-success'
+              : 'text-yellow-400'
+          return (
+            <div
+              role="button"
+              tabIndex={0}
+              key={tab.id}
+              className={`
+                app-region-no-drag group/tab flex h-7 max-w-[190px] shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-left
+                transition-colors
+                ${isActive
+                  ? 'bg-bg-primary text-text-primary shadow-sm ring-1 ring-border/70'
+                  : 'text-text-secondary hover:bg-bg-hover/80 hover:text-text-primary'
+                }
+              `}
+              title={tab.title}
+              onClick={() => onTabClick(tab.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onTabClick(tab.id)
+                }
+              }}
+            >
+              <Icon className={`h-3.5 w-3.5 shrink-0 ${iconClass}`} />
+              <span className="min-w-0 flex-1 truncate text-xs">{tab.title}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTabClose(tab.id)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onTabClose(tab.id)
+                  }
+                }}
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-text-muted opacity-55 transition-colors hover:bg-bg-hover hover:text-text-primary group-hover/tab:opacity-100"
+                aria-label={`Close ${tab.title}`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

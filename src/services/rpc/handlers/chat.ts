@@ -1,8 +1,9 @@
 /**
- * rpc.ui.chat.* handlers — 3 个
+ * rpc.ui.chat.* handlers.
  *
- * Stage 1：show_text / show_table 仍是 stub（轻量内容直接走 stream_delta）。
- * Stage 3.12 (2026-04-28)：show_image 真实现。后端 save_plot skill 把
+ * show_text / show_table remain lightweight stubs; normal assistant text
+ * arrives through MessagePart events. show_image is implemented: the backend
+ * save_plot tool writes
  *   PNG 落到 workspace/assets/plots/ 后调用本 handler，参数仅传路径，
  *   前端读文件 → Blob URL → 注入 chatStore 渲染。
  */
@@ -18,7 +19,13 @@ import {
 } from './schemas';
 import { useChatStore } from '@/stores/chatStore';
 import { pathToImageUrl } from './_image_url';
-import type { PlanData, SubagentData } from '@/types/chat';
+import type { MessagePart, PlanData, SubagentData } from '@/types/chat';
+
+type ScreenshotData = {
+  requestId: string
+  savePath: string
+  prompt: string
+}
 
 export const chatHandlers: Record<string, RpcHandler> = {
   'rpc.ui.chat.show_text': (params) => {
@@ -30,10 +37,27 @@ export const chatHandlers: Record<string, RpcHandler> = {
     const parsed = parseParams(ShowImageSchema, params, 'rpc.ui.chat.show_image');
 
     const url = await pathToImageUrl(parsed.path);
+    const store = useChatStore.getState();
+    const conv = store.activeConversation();
+
+    // A plot can arrive while the agent is still inside execute_code. Close
+    // any transient spinner so the image is visible as a first-class result.
+    if (conv) {
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const msg = conv.messages[i];
+        if ((msg.say === 'progress' || msg.say === 'thinking') && msg.partial) {
+          store._updateMessage(msg.ts, { partial: false });
+          break;
+        }
+        if (msg.say === 'image' || msg.say === 'text' || msg.say === 'code_result') {
+          break;
+        }
+      }
+    }
 
     // Inject as a `say='image'` message. ImageRow renders the image and
-    // a "Pin to map" button which calls rpc.ui.map.add_image_overlay.
-    useChatStore.getState()._addMessage({
+    // a persistent "Pin to map" button.
+    store._addMessage({
       ts: Date.now(),
       type: 'say',
       say: 'image',
@@ -42,6 +66,13 @@ export const chatHandlers: Record<string, RpcHandler> = {
       // Stash the absolute path so the Pin button can pass it back to
       // the map handler without re-reading the blob URL.
       files: [parsed.path],
+      runId: parsed.run_id,
+      parts: [imageMessagePart({
+        caption: parsed.caption ?? '',
+        images: [url],
+        files: [parsed.path],
+        runId: parsed.run_id,
+      })],
     });
 
     return { ok: true, path: parsed.path };
@@ -53,7 +84,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
   },
 
   /**
-   * Plan / TODO checklist. The backend `update_plan` skill sends the FULL
+   * Plan / TODO checklist. The backend `update_plan` tool sends the FULL
    * plan on every call; we upsert a single `say='plan'` message keyed by
    * `plan_id` so repeated updates animate the same card in place rather
    * than spamming the chat with one card per update.
@@ -66,6 +97,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
       title: parsed.title,
       steps: parsed.steps,
       runId: parsed.run_id,
+      workflow: Boolean(parsed.workflow),
       updatedAt: Date.now(),
     };
 
@@ -87,19 +119,24 @@ export const chatHandlers: Record<string, RpcHandler> = {
     }
 
     if (existingTs != null) {
-      store._updateMessage(existingTs, { planData });
+      store._updateMessage(existingTs, { planData, parts: [planMessagePart(planData)] });
     } else {
       store._addMessage({
         ts: Date.now(),
         type: 'say',
         say: 'plan',
         planData,
+        runId: parsed.run_id,
+        parts: [planMessagePart(planData)],
       });
     }
 
-    // Track workflow plan state for compact UI mode
+    // Track workflow compact mode only while a workflow is actively running.
+    // Completed / failed / skipped-only plans should not suppress later normal
+    // agent messages in the same conversation.
     if (parsed.workflow) {
-      useChatStore.setState({ workflowPlanActive: true })
+      const active = parsed.steps.some((step) => step.status === 'in_progress')
+      useChatStore.setState({ workflowPlanActive: active })
     }
 
     return { ok: true, plan_id: parsed.plan_id, steps: parsed.steps.length };
@@ -107,7 +144,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
 
   /**
    * Sub-agent running indicator. The backend run_subagent / run_subagents
-   * skills push a content-free status card (task titles + state) while an
+   * tools push a content-free status card (task titles + state) while an
    * isolated child agent churns — mirroring opencode's collapsed sub-agent
    * affordance. Upserted by `subagent_id` so the running → done transition
    * (and per-task progress in a parallel fan-out) animates the same card.
@@ -136,7 +173,11 @@ export const chatHandlers: Record<string, RpcHandler> = {
       subagentId: parsed.subagent_id,
       status: parsed.status,
       parallel: parsed.parallel ?? parsed.tasks.length > 1,
-      tasks: parsed.tasks,
+      tasks: parsed.tasks.map((task) =>
+        parsed.status !== 'running' && task.status === 'running'
+          ? { ...task, status: parsed.status === 'done' ? 'done' : parsed.status }
+          : task
+      ),
       okCount: parsed.ok_count,
       total: parsed.total ?? parsed.tasks.length,
       runId: parsed.run_id,
@@ -145,7 +186,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
     };
 
     if (existingTs != null) {
-      store._updateMessage(existingTs, { subagentData });
+      store._updateMessage(existingTs, { subagentData, parts: [subagentMessagePart(subagentData)] });
     } else {
       store._addMessage({
         ts: now,
@@ -153,6 +194,7 @@ export const chatHandlers: Record<string, RpcHandler> = {
         say: 'subagent',
         subagentData,
         runId: parsed.run_id,
+        parts: [subagentMessagePart(subagentData)],
       });
     }
 
@@ -160,28 +202,95 @@ export const chatHandlers: Record<string, RpcHandler> = {
   },
 
   /**
-   * Interactive map screenshot request. The backend skill sends this
+   * Interactive map screenshot request. The backend tool sends this
    * to show a capture card in the chat. The user adjusts the map and
    * clicks "Capture" — the frontend saves the image and writes a
-   * result marker so the backend skill can unblock.
+   * result marker so the backend tool can unblock.
    */
   'rpc.ui.chat.interactive_snapshot': (params) => {
-    const requestId = params?.request_id as string;
-    const savePath = params?.save_path as string;
-    const prompt = params?.prompt as string;
+    const raw = (params ?? {}) as Record<string, unknown>;
+    const requestId = raw.request_id as string;
+    const savePath = raw.save_path as string;
+    const prompt = raw.prompt as string;
 
     if (!requestId || !savePath) {
       return { ok: false, error: 'Missing request_id or save_path' };
     }
 
     const store = useChatStore.getState();
+    const screenshotData = { requestId, savePath, prompt: prompt || '' };
     store._addMessage({
       ts: Date.now(),
       type: 'say',
       say: 'screenshot',
-      screenshotData: { requestId, savePath, prompt: prompt || '' },
+      screenshotData,
+      parts: [screenshotMessagePart(screenshotData)],
     });
 
     return { ok: true, request_id: requestId };
   },
 };
+
+function planMessagePart(planData: PlanData): MessagePart {
+  return {
+    id: `plan:${planData.planId}`,
+    type: 'plan',
+    status: planData.steps.some((step) => step.status === 'in_progress')
+      ? 'running'
+      : planData.steps.some((step) => step.status === 'failed')
+        ? 'failed'
+        : 'completed',
+    runId: planData.runId,
+    data: { planData },
+    createdAt: planData.updatedAt,
+  }
+}
+
+function subagentMessagePart(subagentData: SubagentData): MessagePart {
+  return {
+    id: `subagent:${subagentData.subagentId}`,
+    type: 'progress',
+    status: subagentData.status === 'running'
+      ? 'running'
+      : subagentData.status === 'failed'
+        ? 'failed'
+        : subagentData.status === 'cancelled'
+          ? 'cancelled'
+          : 'completed',
+    runId: subagentData.runId,
+    data: { kind: 'subagent', subagentData },
+    createdAt: subagentData.updatedAt,
+  }
+}
+
+function imageMessagePart({
+  caption,
+  images,
+  files,
+  runId,
+}: {
+  caption: string
+  images: string[]
+  files: string[]
+  runId?: string
+}): MessagePart {
+  return {
+    id: `image:${runId ?? 'no-run'}:${files[0] ?? images[0] ?? Date.now()}`,
+    type: 'artifact',
+    status: 'completed',
+    text: caption,
+    runId,
+    data: { kind: 'image', images, files },
+    createdAt: Date.now(),
+  }
+}
+
+function screenshotMessagePart(screenshotData: ScreenshotData): MessagePart {
+  return {
+    id: `screenshot:${screenshotData.requestId}`,
+    type: 'approval',
+    status: 'pending',
+    data: { kind: 'screenshot', screenshotData },
+    createdAt: Date.now(),
+  }
+}

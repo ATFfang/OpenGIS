@@ -21,11 +21,9 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronRight,
-  Plus,
   MapPin,
   Trash2,
   Pencil,
-  Info,
   X,
   ArrowUpDown,
   Globe,
@@ -37,6 +35,7 @@ import {
   FolderPlus,
   ScrollText,
   Loader2,
+  BarChart3,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 import { useAssetStore, type FileNode, type SortMode } from '@/stores/assetStore'
@@ -45,6 +44,9 @@ import { useViewStore } from '@/stores/viewStore'
 import { loadGeoFiles, isSupportedExtension } from '@/services/geo'
 import { mapEngine } from '@/features/map/engine/MapEngine'
 import { useDialog } from '@/components/Dialog'
+import { usePivotStore } from '@/stores/pivotStore'
+import { canPivotFile } from '@/features/pivot/pivotData'
+import { targetFromFile } from '@/features/pivot/types'
 
 // ─── GIS file extension sets ──────────────────────────────────────
 
@@ -54,6 +56,8 @@ const GIS_TABLE_EXTS = new Set(['.csv', '.tsv', '.xlsx', '.xls', '.dbf'])
 const CODE_EXTS = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.r', '.ipynb', '.md'])
 const TEXT_EXTS = new Set(['.json', '.yaml', '.yml', '.toml', '.xml', '.html', '.css', '.scss', '.sh', '.bash', '.sql', '.md', '.rst', '.txt', '.log', '.ini', '.cfg', '.conf', '.env', '.gitignore', '.editorconfig'])
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.gif', '.bmp', '.webp'])
+const CSV_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
+const LARGE_LAYER_THRESHOLD_BYTES = 20 * 1024 * 1024
 
 /**
  * Extensions that are openable in the tab viewer in addition to code/text:
@@ -168,6 +172,17 @@ export function AssetExplorer() {
     if (workspacePath) {
       loadDirectory(workspacePath)
     }
+  }, [workspacePath, loadDirectory])
+
+  useEffect(() => {
+    const onAssetsRefresh = () => {
+      if (workspacePath) {
+        loadDirectory(workspacePath)
+      }
+    }
+
+    window.addEventListener('opengis:assets-refresh', onAssetsRefresh)
+    return () => window.removeEventListener('opengis:assets-refresh', onAssetsRefresh)
   }, [workspacePath, loadDirectory])
 
   // ─── Toggle search ────────────────────────────────────────────
@@ -361,10 +376,9 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
   const selectedPath = useAssetStore((s) => s.selectedPath)
   const setSelectedPath = useAssetStore((s) => s.setSelectedPath)
   const updateDirectoryChildren = useAssetStore((s) => s.updateDirectoryChildren)
-  const setExpanded = useAssetStore((s) => s.setExpanded)
   const addLayers = useMapStore((s) => s.addLayers)
   const layers = useMapStore((s) => s.layers)
-  const openFileAsTab = useViewStore((s) => s.openFileAsTab)
+  const openPivot = usePivotStore((s) => s.open)
   const { alert } = useDialog()
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -376,14 +390,14 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
   const isSelected = selectedPath === node.path
   const isDirectory = node.type === 'directory'
   const isGisFile = isSupportedExtension(node.name)
-  // Defensive: agent-created layers or legacy entries may lack `meta`.
+  const canPivot = canPivotFile(node)
+  // Defensive: agent-created layers may lack `meta`.
   // Never assume it's present — otherwise a single bad layer crashes the
   // whole sidebar tree.
   //
-  // Match by full filePath first (unique), fall back to fileName for legacy
-  // layers loaded before filePath was tracked. Matching by fileName alone
-  // falsely marks unrelated same-named files as loaded and hides the
-  // "Add to Map" menu item.
+  // Match by full filePath first (unique), then fileName as a lossy fallback.
+  // Matching by fileName alone falsely marks unrelated same-named files as
+  // loaded and hides the "Add to Map" menu item.
   const isLayerLoaded = layers.some((l) => {
     const meta = l?.meta
     if (!meta) return false
@@ -433,10 +447,10 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
       // Single-click opens code scripts and image files directly
       const ext = node.extension.toLowerCase()
       if (isCodeScript(ext) || IMAGE_EXTS.has(ext)) {
-        openFileInViewer(node)
+        openFileInViewer(node, alert)
       }
     }
-  }, [node, isDirectory, setSelectedPath, handleToggle])
+  }, [node, isDirectory, setSelectedPath, handleToggle, alert])
 
   // ─── Double-click: add to map ─────────────────────────────────
 
@@ -635,8 +649,13 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
           position={contextMenu}
           isGisFile={isGisFile}
           isLayerLoaded={isLayerLoaded}
+          canPivot={canPivot}
           onClose={() => setContextMenu(null)}
           onRename={handleStartRename}
+          onOpenPivot={() => {
+            setContextMenu(null)
+            openPivot(targetFromFile(node))
+          }}
           onAddToMap={async () => {
             setContextMenu(null)
             if (isLoadingToMap) return
@@ -715,9 +734,11 @@ interface ContextMenuProps {
   position: { x: number; y: number }
   isGisFile: boolean
   isLayerLoaded: boolean
+  canPivot: boolean
   onClose: () => void
   onRename: () => void
   onAddToMap: () => void
+  onOpenPivot: () => void
 }
 
 function ContextMenu({
@@ -725,14 +746,16 @@ function ContextMenu({
   position,
   isGisFile,
   isLayerLoaded,
+  canPivot,
   onClose,
   onRename,
   onAddToMap,
+  onOpenPivot,
 }: ContextMenuProps) {
   const t = useT()
   const removeNode = useAssetStore((s) => s.removeNode)
   const menuRef = useRef<HTMLDivElement>(null)
-  const { confirm } = useDialog()
+  const { confirm, alert } = useDialog()
 
   // Close on click outside
   useEffect(() => {
@@ -812,6 +835,15 @@ function ContextMenu({
         />
       )}
 
+      {canPivot && node.type === 'file' && (
+        <ContextMenuItem
+          icon={<BarChart3 className="w-3.5 h-3.5" />}
+          label="数据透视"
+          onClick={onOpenPivot}
+          pivot
+        />
+      )}
+
       {/* View code (code/text/csv/geojson files) */}
       {node.type === 'file' && isViewableInTab(node.extension.toLowerCase()) && (
         <ContextMenuItem
@@ -819,7 +851,7 @@ function ContextMenu({
           label={t.assets.viewCode}
           onClick={() => {
             onClose()
-            openFileInViewer(node)
+            openFileInViewer(node, alert)
           }}
         />
       )}
@@ -870,6 +902,7 @@ function ContextMenuItem({
   label,
   onClick,
   accent,
+  pivot,
   danger,
   disabled,
 }: {
@@ -877,6 +910,7 @@ function ContextMenuItem({
   label: string
   onClick: () => void
   accent?: boolean
+  pivot?: boolean
   danger?: boolean
   disabled?: boolean
 }) {
@@ -890,6 +924,8 @@ function ContextMenuItem({
           ? 'text-text-muted/40 cursor-default'
           : danger
             ? 'text-text-secondary hover:text-accent-danger hover:bg-accent-danger/10'
+            : pivot
+              ? 'text-accent-geo hover:bg-accent-geo/10'
             : accent
               ? 'text-accent-primary hover:bg-accent-primary/10'
               : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
@@ -1072,7 +1108,7 @@ async function addFileToMap(
 
   // Binary formats: shapefiles and raster (GeoTIFF) must be read as ArrayBuffer
   const BINARY_EXTS = new Set(['.shp', '.dbf', '.shx', '.prj', '.cpg', '.tif', '.tiff'])
-  if (BINARY_EXTS.has(ext)) {
+  if (BINARY_EXTS.has(ext) || node.size > LARGE_LAYER_THRESHOLD_BYTES) {
     const result = await window.electronAPI.readFileAsBuffer(node.path)
     if (!result.success || !result.buffer) {
       throw new Error(result.error || 'Failed to read file.')
@@ -1122,7 +1158,13 @@ async function addFileToMap(
  * Open a file in the code viewer tab.
  * Reads the file content via Electron IPC and opens a new tab.
  */
-async function openFileInViewer(node: FileNode) {
+type AlertFn = (options: {
+  title: string
+  message?: string
+  severity?: 'info' | 'warning' | 'error'
+}) => Promise<void> | void
+
+async function openFileInViewer(node: FileNode, alert?: AlertFn) {
   if (!window.electronAPI?.readFile) {
     console.warn('readFile not available — running outside Electron?')
     return
@@ -1149,6 +1191,16 @@ async function openFileInViewer(node: FileNode) {
       type: 'image',
       filePath: node.path,
       language: 'image',
+    })
+    return
+  }
+
+  if ((ext === '.csv' || ext === '.tsv') && node.size > CSV_PREVIEW_MAX_BYTES) {
+    const maxMb = Math.round(CSV_PREVIEW_MAX_BYTES / 1024 / 1024)
+    alert?.({
+      title: 'CSV preview skipped',
+      message: `"${node.name}" is larger than ${maxMb}MB. Open smaller CSV/TSV files in the built-in table preview, or load this file as a map/data layer instead.`,
+      severity: 'warning',
     })
     return
   }

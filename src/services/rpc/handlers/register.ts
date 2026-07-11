@@ -11,6 +11,7 @@ import { agentHandlers } from './agent';
 import { askHandlers } from './ask';
 import { chatHandlers } from './chat';
 import { fsHandlers } from './fs';
+import { layoutHandlers } from './layout';
 import { mapHandlers } from './map';
 
 export const ALL_HANDLER_GROUPS = {
@@ -18,6 +19,7 @@ export const ALL_HANDLER_GROUPS = {
   chat: chatHandlers,
   ask: askHandlers,
   fs: fsHandlers,
+  layout: layoutHandlers,
   agent: agentHandlers,
 };
 
@@ -39,7 +41,7 @@ export function registerAllHandlers(
   return registered.sort();
 }
 
-/** 列出 Stage 1 应覆盖的全部 method 名（便于测试断言）。 */
+/** 列出当前注册表应覆盖的全部 method 名（便于测试断言）。 */
 export function listAllMethods(): string[] {
   const methods: string[] = [];
   for (const group of Object.values(ALL_HANDLER_GROUPS)) {

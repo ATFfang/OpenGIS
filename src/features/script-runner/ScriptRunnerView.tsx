@@ -1,8 +1,8 @@
 /**
  * ScriptRunnerView — a code editor + runner panel that lets the user
- * author Python scripts and execute them inside the Stage 2 subprocess
- * sandbox *without* going through the LLM. Same executor, same skill
- * bindings, same workspace cwd. Think: "Jupyter cell" for OpenGIS.
+ * author Python scripts and execute them inside the subprocess sandbox
+ * *without* going through the LLM. Same executor, same tool bindings,
+ * same workspace cwd. Think: "Jupyter cell" for OpenGIS.
  *
  * Layout:
  *
@@ -46,7 +46,7 @@ import { useScriptRunner, type OutputChunk } from './useScriptRunner'
 const DEFAULT_SCRIPT = `# OpenGIS Script Runner
 # ----------------------------------------------------------------------
 # This script runs in the same subprocess sandbox that the AI agent uses.
-# All registered skills are available as top-level functions.
+# All registered tools are available as top-level functions.
 #
 # Example: load a CSV-derived GeoJSON and add it to the map.
 #

@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { execSync, spawn } from 'node:child_process'
+import { execFileSync, execSync, spawn } from 'node:child_process'
 import { homedir, platform, arch } from 'node:os'
 import { createWriteStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
@@ -109,7 +109,7 @@ async function findSystemPython(): Promise<string | null> {
   const candidates: string[] = []
 
   if (isWin) {
-    candidates.push('python', 'python3')
+    candidates.push('py', 'python', 'python3')
   } else {
     // Try versioned names first (more reliable)
     candidates.push('python3.13', 'python3.12', 'python3.11', 'python3')
@@ -131,7 +131,7 @@ async function findSystemPython(): Promise<string | null> {
       let resolved = cmd
       try {
         const which = platform() === 'win32' ? 'where' : 'which'
-        resolved = execSync(`${which} "${cmd}"`, { encoding: 'utf-8', timeout: 5000 }).trim().split('\n')[0].trim()
+        resolved = execFileSync(which, [cmd], { encoding: 'utf-8', timeout: 5000 }).trim().split('\n')[0].trim()
       } catch { /* use original */ }
       if (resolved.includes('.venv') || resolved.includes('site-packages')) continue
 
@@ -508,10 +508,21 @@ async function downloadFile(
 }
 
 async function extractTarGz(archivePath: string, destDir: string): Promise<void> {
-  execSync(`tar -xzf "${archivePath}" -C "${destDir}"`, {
-    stdio: 'pipe',
-    timeout: 120_000,
-  })
+  try {
+    execFileSync('tar', ['-xzf', archivePath, '-C', destDir], {
+      stdio: 'pipe',
+      timeout: 120_000,
+    })
+  } catch (err) {
+    if (platform() === 'win32') {
+      throw new Error(
+        '无法解压内置 Python。Windows 需要可用的 tar.exe（Windows 10/11 通常自带）。\n\n' +
+        '请确认系统 PATH 中存在 C:\\Windows\\System32\\tar.exe，或安装较新的 Windows 运行环境后重试。\n\n' +
+        `详细错误: ${(err as Error).message}`,
+      )
+    }
+    throw err
+  }
   // Clean up archive
   try {
     const fs = await import('node:fs')
@@ -538,6 +549,7 @@ function checkXcodeCLT(): void {
 
 function classifyPipError(stderr: string, code: number | null): string {
   const lastLines = stderr.split('\n').slice(-8).join('\n')
+  const isWin = platform() === 'win32'
 
   if (stderr.includes('No space left on device') || stderr.includes('ENOSPC')) {
     return `磁盘空间不足，无法安装依赖。\n\n请清理磁盘空间后重试（需要至少 2GB 可用空间）。`
@@ -546,16 +558,32 @@ function classifyPipError(stderr: string, code: number | null): string {
     return `网络连接失败，无法下载依赖。\n\n请检查网络连接后重试。`
   }
   if (stderr.includes('Could not find a version') || stderr.includes('No matching distribution')) {
-    return `依赖版本不兼容。\n\n可能是 Python 版本过低，请确保 Python >= 3.11。`
+    return `依赖版本不兼容。\n\n可能是 Python 版本、系统架构或平台 wheel 不匹配。请确保 Python >= 3.11，Windows 推荐 64 位 Python。`
   }
-  if (stderr.includes('error: command') || stderr.includes('fatal error') || stderr.includes('build failed') || stderr.includes('clang') || stderr.includes('gcc')) {
+  if (
+    stderr.includes('Microsoft Visual C++') ||
+    stderr.includes('MSVC') ||
+    stderr.includes('vcvarsall') ||
+    stderr.includes('cl.exe') ||
+    stderr.includes('error: command') ||
+    stderr.includes('fatal error') ||
+    stderr.includes('build failed') ||
+    stderr.includes('clang') ||
+    stderr.includes('gcc')
+  ) {
+    if (isWin) {
+      return `依赖编译失败。Windows 上 GIS 依赖应优先使用预编译 wheel；如果 pip 退回源码编译，需要 Microsoft C++ Build Tools。\n\n建议：\n• 确认正在使用 64 位 Python\n• 检查网络/镜像能否下载 rasterio、fiona、pyproj、shapely 的 wheel\n• 必要时安装 Microsoft C++ Build Tools 后重试\n\n详细错误:\n${lastLines}`
+    }
     return `依赖编译失败。原生库需要 C 编译器。\n\nmacOS 请在终端运行:\n  xcode-select --install\n\n然后重新打开应用重试。`
   }
   if (stderr.includes('Permission denied') || stderr.includes('EACCES')) {
     return `权限不足，无法写入安装目录。\n\n请检查应用数据目录的写入权限。`
   }
 
-  return `依赖安装失败 (exit code ${code})。\n\n常见原因：\n• 网络不稳定 — 点击"重试"\n• 磁盘空间不足 — 需要至少 2GB\n• 系统缺少编译工具 — 运行 xcode-select --install\n\n详细错误:\n${lastLines}`
+  const platformHint = isWin
+    ? '• Windows GIS 依赖 wheel 下载失败或架构不匹配\n• 必要时安装 Microsoft C++ Build Tools\n'
+    : '• 系统缺少编译工具 — macOS 可运行 xcode-select --install\n'
+  return `依赖安装失败 (exit code ${code})。\n\n常见原因：\n• 网络不稳定 — 点击"重试"\n• 磁盘空间不足 — 需要至少 2GB\n${platformHint}\n详细错误:\n${lastLines}`
 }
 
 function checkVersionMismatch(versionFile: string, currentVersion: string): boolean {

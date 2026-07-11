@@ -121,7 +121,11 @@ export function registerFileHandlers(): void {
         return { success: false, error: `File too large (${(info.size / 1024 / 1024).toFixed(1)} MB, max 100 MB)` }
       }
       const buffer = await readFile(path)
-      return { success: true, buffer: buffer.buffer }
+      const arrayBuffer = buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength,
+      )
+      return { success: true, buffer: arrayBuffer }
     } catch (error) {
       return { success: false, error: String(error) }
     }

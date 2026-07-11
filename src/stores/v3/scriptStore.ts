@@ -1,11 +1,11 @@
 /**
- * ScriptStore (v3) — LLM 每一步落盘脚本的登记
+ * ScriptStore — LLM 每一步落盘脚本的登记
  *
- * 每个 `chat.code_block` 事件对应一个 Script：
+ * 每个代码 MessagePart 对应一个 Script：
  *   - 代码内容写到 `.opengis/scripts/run_xxx/step_N.py`
  *   - 执行结果（stdout 摘要 / status）回填到 Script
  *
- * Stage 1 只存元数据；实际落盘由 Stage 2 的 SubprocessPythonExecutor 处理。
+ * Store keeps script metadata; actual persistence is handled by the Python executor.
  */
 
 import { create } from 'zustand';

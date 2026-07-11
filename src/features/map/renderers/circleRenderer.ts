@@ -8,6 +8,11 @@ import {
   renderLayerId,
   sourceIdFor,
 } from './types'
+import {
+  compileNumericVisualVariable,
+  hoverColorExpr,
+  hoverNumberExpr,
+} from './styleExpressions'
 
 export const circleRenderer: LayerRenderer = {
   renderType: 'circle',
@@ -22,6 +27,13 @@ export const circleRenderer: LayerRenderer = {
     const sourceId = sourceIdFor(def.id)
     const circleId = renderLayerId(def.id, 'circle')
     const visibility = def.visible ? 'visible' : 'none'
+    const radius = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.radius ?? 5, {
+      defaultRange: [3, 14],
+    })
+    const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, def.style.opacity, {
+      defaultRange: [0.25, def.style.opacity],
+      clampRange: [0, 1],
+    })
 
     if (!map.getLayer(circleId)) {
       ctx.addRenderLayer({
@@ -30,31 +42,17 @@ export const circleRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'circle-color': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            '#6366f1',
-            def.style.color,
-          ] as any,
-          'circle-radius': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            (def.style.radius ?? 5) + 3,
-            def.style.radius ?? 5,
-          ] as any,
-          'circle-opacity': def.style.opacity,
-          'circle-stroke-color': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            '#818cf8',
-            def.style.strokeColor,
-          ] as any,
+          'circle-color': hoverColorExpr(def.style.color, '#6366f1') as any,
+          'circle-radius': hoverNumberExpr(radius as any, 3) as any,
+          'circle-opacity': opacity as any,
+          'circle-stroke-color': hoverColorExpr(def.style.strokeColor, '#818cf8') as any,
           'circle-stroke-width': [
             'case',
             ['boolean', ['feature-state', 'hover'], false],
             (def.style.strokeWidth ?? 1) + 2,
             def.style.strokeWidth,
           ] as any,
+          'circle-stroke-opacity': def.style.strokeOpacity ?? 1,
         },
       })
       ctx.registerRenderLayerId(def.id, circleId)
@@ -69,31 +67,24 @@ export const circleRenderer: LayerRenderer = {
   update(def, ctx) {
     const circleId = renderLayerId(def.id, 'circle')
     if (ctx.map.getLayer(circleId)) {
-      ctx.map.setPaintProperty(circleId, 'circle-color', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        '#6366f1',
-        def.style.color,
-      ] as any)
-      ctx.map.setPaintProperty(circleId, 'circle-radius', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        (def.style.radius ?? 5) + 3,
-        def.style.radius ?? 5,
-      ] as any)
-      ctx.map.setPaintProperty(circleId, 'circle-opacity', def.style.opacity)
-      ctx.map.setPaintProperty(circleId, 'circle-stroke-color', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        '#818cf8',
-        def.style.strokeColor,
-      ] as any)
+      const radius = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.radius ?? 5, {
+        defaultRange: [3, 14],
+      })
+      const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, def.style.opacity, {
+        defaultRange: [0.25, def.style.opacity],
+        clampRange: [0, 1],
+      })
+      ctx.map.setPaintProperty(circleId, 'circle-color', hoverColorExpr(def.style.color, '#6366f1') as any)
+      ctx.map.setPaintProperty(circleId, 'circle-radius', hoverNumberExpr(radius as any, 3) as any)
+      ctx.map.setPaintProperty(circleId, 'circle-opacity', opacity as any)
+      ctx.map.setPaintProperty(circleId, 'circle-stroke-color', hoverColorExpr(def.style.strokeColor, '#818cf8') as any)
       ctx.map.setPaintProperty(circleId, 'circle-stroke-width', [
         'case',
         ['boolean', ['feature-state', 'hover'], false],
         (def.style.strokeWidth ?? 1) + 2,
         def.style.strokeWidth,
       ] as any)
+      ctx.map.setPaintProperty(circleId, 'circle-stroke-opacity', def.style.strokeOpacity ?? 1)
     }
   },
 

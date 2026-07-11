@@ -24,6 +24,8 @@ import {
   parseGeoTIFF,
 } from './parsers'
 import { getDefaultStyle } from './defaultStyles'
+import { makeHandledVectorData, shouldHandleLayer } from './layerDataRegistry'
+import { registerRasterBuffer } from './rasterSourceRegistry'
 
 /** Supported file extensions and their source types */
 const EXTENSION_MAP: Record<string, DataSourceType> = {
@@ -98,7 +100,11 @@ export async function loadGeoFile(file: File): Promise<MapLayerDefinition> {
     }
     case 'geotiff': {
       const buffer = await file.arrayBuffer()
-      parsedData = await parseGeoTIFF(buffer, file.name)
+      const sourcePath = typeof (file as File & { path?: unknown }).path === 'string'
+        ? (file as File & { path: string }).path
+        : undefined
+      const sourceBufferId = sourcePath ? undefined : registerRasterBuffer(buffer)
+      parsedData = await parseGeoTIFF(buffer, file.name, { sourcePath, sourceBufferId })
       break
     }
     default:
@@ -141,11 +147,13 @@ export async function loadGeoFiles(files: File[]): Promise<MapLayerDefinition[]>
 
       try {
         const parsedData = await parseShapefile(componentFiles, baseName)
+        const totalSize = Array.from(componentFiles.values())
+          .reduce((sum, buffer) => sum + buffer.byteLength, 0)
         const meta: DataSourceMeta = {
           fileName: `${baseName}.shp`,
           extension: '.shp',
           sourceType: 'shapefile',
-          fileSize: componentFiles.get(`${baseName}.shp`)!.byteLength,
+          fileSize: totalSize,
         }
         results.push(buildLayerDefinition(baseName, meta, parsedData))
       } catch (err) {
@@ -191,15 +199,24 @@ function buildLayerDefinition(
         opacity: 1,
         strokeColor: '#ffffff',
         strokeWidth: 0,
+        raster: data.kind === 'raster' ? data.rasterStyle : undefined,
       }
 
+  const id = uuidv4()
+  const finalData = data.kind === 'vector' && shouldHandleLayer(meta.fileSize)
+    ? makeHandledVectorData(data, {
+        handleId: `vector:${id}`,
+        sizeBytes: meta.fileSize,
+      })
+    : data
+
   return {
-    id: uuidv4(),
+    id,
     name,
     sourceType: meta.sourceType,
     visible: true,
     style,
-    data,
+    data: finalData,
     meta,
     addedAt: Date.now(),
   }

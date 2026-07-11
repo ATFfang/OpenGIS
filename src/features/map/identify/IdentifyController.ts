@@ -128,8 +128,11 @@ class HoverTooltip {
 export class IdentifyController {
   private map: maplibregl.Map
   private tooltip: HoverTooltip
-  /** hover 节流用的 raf/timer 标识 */
+  /** hover 节流用的 timeout 标识 */
   private hoverTimer: number | null = null
+  /** hover 渲染用的 raf 标识 */
+  private hoverFrame: number | null = null
+  private lastHoverAt = 0
   /** 最近一次 mousemove 的事件（节流时延迟处理用） */
   private pendingEvent: maplibregl.MapMouseEvent | null = null
   /** 当前高亮的 feature id（用 feature-state 做高亮光环） */
@@ -173,15 +176,24 @@ export class IdentifyController {
     this.map.off('mousemove', this.boundMove)
     this.map.off('mouseout', this.boundLeave)
     this.map.off('click', this.boundClick)
-    if (this.hoverTimer !== null) {
-      cancelAnimationFrame(this.hoverTimer)
-      this.hoverTimer = null
-    }
+    this.cancelPendingHover()
     this.tooltip.destroy()
     this.clearHover()
     this.unsubStore?.()
     // Clear panel when controller is destroyed (e.g. switching back to pan mode)
     useMapStore.getState().clearIdentifiedFeatures()
+  }
+
+  private cancelPendingHover(): void {
+    if (this.hoverTimer !== null) {
+      window.clearTimeout(this.hoverTimer)
+      this.hoverTimer = null
+    }
+    if (this.hoverFrame !== null) {
+      cancelAnimationFrame(this.hoverFrame)
+      this.hoverFrame = null
+    }
+    this.pendingEvent = null
   }
 
   // ─── 查询范围：只查我们自己的 managed render layer ──────────────
@@ -199,22 +211,21 @@ export class IdentifyController {
 
   private handleMouseMove(e: maplibregl.MapMouseEvent): void {
     this.pendingEvent = e
-    if (this.hoverTimer !== null) return // 节流中
-    const startAt = performance.now()
-    this.hoverTimer = requestAnimationFrame(() => {
+    if (this.hoverTimer !== null || this.hoverFrame !== null) return
+
+    const elapsed = performance.now() - this.lastHoverAt
+    const delay = Math.max(0, HOVER_THROTTLE_MS - elapsed)
+    this.hoverTimer = window.setTimeout(() => {
       this.hoverTimer = null
-      const ev = this.pendingEvent
-      this.pendingEvent = null
-      if (!ev) return
-
-      // 如果 raf 调度比阈值慢，下次 mousemove 立即再排一帧
-      const elapsed = performance.now() - startAt
-      if (elapsed < 0) return // should not happen but guard
-
-      this.doHover(ev)
-    })
-    // 强制 THROTTLE：如果 rAF 短于 HOVER_THROTTLE_MS，再延一个 setTimeout
-    // 这里采用折中：rAF 已足够（通常 16ms），直接靠它节流。
+      this.hoverFrame = requestAnimationFrame(() => {
+        this.hoverFrame = null
+        const ev = this.pendingEvent
+        this.pendingEvent = null
+        if (!ev) return
+        this.lastHoverAt = performance.now()
+        this.doHover(ev)
+      })
+    }, delay)
   }
 
   private doHover(e: maplibregl.MapMouseEvent): void {
@@ -256,6 +267,7 @@ export class IdentifyController {
   }
 
   private handleMouseLeave(): void {
+    this.cancelPendingHover()
     this.tooltip.hide()
     this.map.getCanvas().style.cursor = ''
     this.clearHover()

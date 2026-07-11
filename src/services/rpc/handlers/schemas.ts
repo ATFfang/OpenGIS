@@ -3,7 +3,7 @@
  *
  * 为什么集中放一处：
  *   - 和 INTERFACE.md §1 一一对应，便于对账
- *   - Stage 3 若要把 schema 序列化成 JSON Schema 给 Python 参考，一次导出即可
+ *   - 若要把 schema 序列化成 JSON Schema 给 Python 参考，一次导出即可
  *
  * 命名规则：`<RpcMethodBaseName>Schema`，如 `AddLayerSchema`。
  */
@@ -44,11 +44,53 @@ export const AddLayerFromGeoJsonSchema = z.object({
   visible: z.boolean().optional(),
 });
 
+const DynamicFeatureDiffSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  newGeometry: z.unknown().optional(),
+  removeAllProperties: z.boolean().optional(),
+  removeProperties: z.array(z.string()).optional(),
+  addOrUpdateProperties: z.array(z.object({
+    key: z.string(),
+    value: z.unknown(),
+  })).optional(),
+});
+
+const DynamicSourceDiffSchema = z.object({
+  removeAll: z.boolean().optional(),
+  remove: z.array(z.union([z.string(), z.number()])).optional(),
+  add: z.array(z.unknown()).optional(),
+  // Keep validation permissive here: workers may send either compact patch
+  // objects or full GeoJSON Features. The map handler normalizes both forms.
+  update: z.array(z.union([DynamicFeatureDiffSchema, z.unknown()])).optional(),
+});
+
+export const DynamicLayerUpdateSchema = z.object({
+  mode: z.enum(['full', 'diff']).optional(),
+  layer_id: LayerIdSchema,
+  name: z.string().min(1).optional(),
+  geojson: z.unknown().optional(),
+  diff: DynamicSourceDiffSchema.optional(),
+  bbox: BBoxSchema.optional(),
+  style: LayerStyleSchema.optional(),
+  visible: z.boolean().optional(),
+  worker_id: z.string().optional(),
+  worker_name: z.string().optional(),
+  worker_started_at: z.number().optional(),
+  workspace_path: z.string().optional(),
+  sequence: z.number().int().optional(),
+  schema_changed: z.boolean().optional(),
+  size_bytes: z.number().nonnegative().optional(),
+});
+
 export const AddRasterFromUrlSchema = z.object({
-  url: z.string().url(),
+  url: z.string().min(1),
   name: z.string().min(1),
   tile_type: z.enum(['xyz', 'wmts', 'cog']),
   bounds: BBoxSchema.optional(),
+  raster_id: z.string().optional(),
+  raster_source_path: z.string().optional(),
+  raster_info: z.any().optional(),
+  raster_style: z.any().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -61,9 +103,11 @@ export const AddRasterFromUrlSchema = z.object({
  */
 export const AddRasterFromFileSchema = z.object({
   path: z.string().min(1),
+  layer_id: z.string().min(1).optional(),
   name: z.string().optional(),
   visible: z.boolean().optional(),
   opacity: z.number().min(0).max(1).optional(),
+  raster: z.any().optional(),
 });
 
 /** 分级专题 / 分类专题 / 热力图 / 聚合 / 3D 拔起 的配置 —— 与 LayerStyle 对应字段一致 */
@@ -80,8 +124,20 @@ const GraduatedSchema = z.object({
 const CategorizedSchema = z.object({
   field: z.string().min(1),
   colors: z.record(z.string()).optional(),
+  categories: z.array(z.string()).optional(),
   maxCategories: z.number().int().min(1).max(64).optional(),
   otherColor: z.string().optional(),
+});
+
+const NumericVisualVariableSchema = z.object({
+  field: z.string().min(1),
+  method: z.string().transform((v) => v.replace(/_/g, '-')).pipe(
+    z.enum(['quantile', 'equal-interval', 'jenks', 'manual']),
+  ).optional(),
+  classes: z.number().int().min(2).max(12).optional(),
+  breaks: z.array(z.number()).optional(),
+  values: z.array(z.number()).optional(),
+  range: z.tuple([z.number(), z.number()]).optional(),
 });
 
 const HeatmapSchema = z.object({
@@ -99,6 +155,23 @@ const ExtrusionSchema = z.object({
   heightField: z.string().min(1),
   heightMultiplier: z.number().positive().optional(),
   baseField: z.string().optional(),
+});
+
+const RasterColorStopSchema = z.object({
+  value: z.number().min(0).max(1),
+  color: z.string().min(1),
+  opacity: z.number().min(0).max(1).optional(),
+});
+
+export const RasterStyleSettingsSchema = z.object({
+  band: z.number().int().min(1).optional(),
+  ramp: z.enum(['viridis', 'magma', 'plasma', 'inferno', 'turbo', 'gray', 'terrain', 'spectral', 'custom']).optional(),
+  stops: z.array(RasterColorStopSchema).min(2).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  reverse: z.boolean().optional(),
+  mode: z.enum(['auto', 'singleband', 'rgb']).optional(),
 });
 
 /**
@@ -120,9 +193,26 @@ export const SetLayerRendererSchema = z.object({
   ]),
   graduated: GraduatedSchema.optional(),
   categorized: CategorizedSchema.optional(),
+  sizeVariable: NumericVisualVariableSchema.nullable().optional(),
+  opacityVariable: NumericVisualVariableSchema.nullable().optional(),
   heatmap: HeatmapSchema.optional(),
   cluster: ClusterSchema.optional(),
   extrusion: ExtrusionSchema.optional(),
+});
+
+export const UpdateVisualVariablesSchema = z.object({
+  layer_id: LayerIdSchema,
+  size_variable: NumericVisualVariableSchema.nullable().optional(),
+  opacity_variable: NumericVisualVariableSchema.nullable().optional(),
+});
+
+export const SetRasterStyleSchema = z.object({
+  layer_id: LayerIdSchema,
+  raster: RasterStyleSettingsSchema,
+});
+
+export const GetRasterInfoSchema = z.object({
+  layer_id: LayerIdSchema,
 });
 
 /**
@@ -152,6 +242,9 @@ export const AddImageOverlaySchema = z.object({
   name: z.string().optional(),
   bbox: BBoxSchema.optional(),
   opacity: z.number().min(0).max(1).optional(),
+  raster_source_path: z.string().optional(),
+  raster_info: z.any().optional(),
+  raster_style: z.any().optional(),
 });
 
 
@@ -160,6 +253,60 @@ export const RemoveLayerSchema = z.object({ layer_id: LayerIdSchema });
 export const SetLayerStyleSchema = z.object({
   layer_id: LayerIdSchema,
   style: LayerStyleSchema,
+});
+
+const LayerAttributeFilterSchema = z.object({
+  field: z.string().min(1),
+  op: z.enum(['=', '!=', '>', '<', '>=', '<=', 'contains', 'in']),
+  value: z.unknown().optional(),
+});
+
+export const LayerFilterSchema = z.object({
+  attribute: z.array(LayerAttributeFilterSchema).optional(),
+}).passthrough();
+
+export const SetLayerFilterSchema = z.object({
+  layer_id: LayerIdSchema,
+  filter: LayerFilterSchema.nullable().optional(),
+});
+
+export const SetLayerLabelSchema = z.object({
+  layer_id: LayerIdSchema,
+  field: z.string().min(1).optional(),
+  visible: z.boolean().optional(),
+  font_size: z.number().positive().optional(),
+  color: z.string().optional(),
+  halo_color: z.string().optional(),
+  halo_width: z.number().min(0).optional(),
+  offset: z.tuple([z.number(), z.number()]).optional(),
+  icon: z.string().optional(),
+});
+
+export const HighlightFeaturesSchema = z.object({
+  layer_id: LayerIdSchema,
+  filter: LayerFilterSchema.optional(),
+  name: z.string().optional(),
+  style: LayerStyleSchema.optional(),
+});
+
+export const SetLayerOrderSchema = z.object({
+  layer_id: LayerIdSchema,
+  position: z.enum(['top', 'bottom', 'above', 'below']),
+  target_layer_id: z.string().min(1).optional(),
+});
+
+export const LegendSpecSchema = z.object({
+  visible: z.boolean().optional(),
+  title: z.string().optional(),
+  labels: z.record(z.string()).optional(),
+  order: z.array(z.string()).optional(),
+});
+
+export const GetLegendSpecSchema = z.object({ layer_id: LayerIdSchema });
+
+export const UpdateLegendSpecSchema = z.object({
+  layer_id: LayerIdSchema,
+  legend: LegendSpecSchema,
 });
 
 export const SetLayerVisibilitySchema = z.object({
@@ -179,9 +326,18 @@ export const ZoomToBBoxSchema = z.object({
 
 export const FlyToSchema = z.object({
   center: z.tuple([z.number(), z.number()]),
-  zoom: z.number().optional(),
-  pitch: z.number().optional(),
+  zoom: z.number().min(0).max(24).optional(),
+  pitch: z.number().min(0).max(85).optional(),
   bearing: z.number().optional(),
+  duration: z.number().min(0).optional(),
+});
+
+export const SetMapCameraSchema = z.object({
+  center: z.tuple([z.number(), z.number()]).optional(),
+  zoom: z.number().min(0).max(24).optional(),
+  pitch: z.number().min(0).max(85).optional(),
+  bearing: z.number().optional(),
+  duration: z.number().min(0).optional(),
 });
 
 export const SetBasemapSchema = z.object({
@@ -190,6 +346,12 @@ export const SetBasemapSchema = z.object({
     z.object({ style_url: z.string().url() }),
   ]),
 });
+
+export const SetBasemapVisibilitySchema = z.object({
+  visible: z.boolean(),
+});
+
+export const GetMapStateSchema = z.object({}).passthrough();
 
 export const ListLayersSchema = z.object({}).passthrough();
 
@@ -216,6 +378,101 @@ export const QueryFeaturesSchema = z.object({
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// §1.1ter rpc.ui.layout.* — print/layout composer
+// ─────────────────────────────────────────────────────────────────────
+
+export const LayoutElementTypeSchema = z.enum([
+  'map-frame',
+  'scale-bar',
+  'north-arrow',
+  'legend',
+  'text',
+]);
+
+export const LayoutElementVariantSchema = z.enum([
+  'default',
+  'minimal',
+  'boxed',
+  'alternating',
+  'double-line',
+  'classic',
+  'triangle',
+  'compass',
+  'panel',
+]);
+
+export const LayoutFrameSchema = z.object({
+  x: z.number().min(0).max(100).optional(),
+  y: z.number().min(0).max(100).optional(),
+  width: z.number().min(1).max(100).optional(),
+  height: z.number().min(1).max(100).optional(),
+});
+
+export const LayoutStyleSchema = z.object({
+  variant: LayoutElementVariantSchema.optional(),
+  fillColor: z.string().optional(),
+  strokeColor: z.string().optional(),
+  strokeWidth: z.number().min(0).optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  backgroundColor: z.string().optional(),
+  backgroundOpacity: z.number().min(0).max(1).optional(),
+  borderColor: z.string().optional(),
+  borderWidth: z.number().min(0).optional(),
+  borderRadius: z.number().min(0).optional(),
+  textColor: z.string().optional(),
+  fontSize: z.number().min(1).optional(),
+  fontWeight: z.number().min(100).max(1000).optional(),
+  padding: z.number().min(0).optional(),
+});
+
+export const LayoutMapViewSchema = z.object({
+  x: z.number().min(-250).max(250).optional(),
+  y: z.number().min(-250).max(250).optional(),
+  scale: z.number().min(0.12).max(8).optional(),
+});
+
+export const LayoutSetPageSchema = z.object({
+  preset: z.enum(['a4-landscape', 'a4-portrait', 'letter-landscape', 'screen-16-9', 'screen-4-3', 'square-1-1']).optional(),
+  width_mm: z.number().positive().optional(),
+  height_mm: z.number().positive().optional(),
+  name: z.string().optional(),
+  background: z.string().optional(),
+});
+
+export const LayoutAddElementSchema = z.object({
+  type: LayoutElementTypeSchema,
+  id: z.string().min(1).optional(),
+  label: z.string().optional(),
+  frame: LayoutFrameSchema.optional(),
+});
+
+export const LayoutElementIdSchema = z.object({
+  element_id: z.string().min(1),
+});
+
+export const LayoutUpdateElementFrameSchema = LayoutElementIdSchema.extend({
+  frame: LayoutFrameSchema,
+});
+
+export const LayoutUpdateElementStyleSchema = LayoutElementIdSchema.extend({
+  style: LayoutStyleSchema,
+});
+
+export const LayoutUpdateElementPropsSchema = LayoutElementIdSchema.extend({
+  props: z.record(z.unknown()),
+});
+
+export const LayoutUpdateMapViewSchema = LayoutElementIdSchema.extend({
+  map_view: LayoutMapViewSchema,
+});
+
+export const LayoutExportSchema = z.object({
+  pixel_ratio: z.number().min(1).max(4).optional(),
+  file_name: z.string().optional(),
+  save_path: z.string().optional(),
+});
+
+// ─────────────────────────────────────────────────────────────────────
 // §1.2 rpc.ui.chat.*
 // ─────────────────────────────────────────────────────────────────────
 
@@ -227,6 +484,7 @@ export const ShowTextSchema = z.object({
 export const ShowImageSchema = z.object({
   path: z.string().min(1),
   caption: z.string().optional(),
+  run_id: z.string().optional(),
 });
 
 export const ShowTableSchema = z.object({
@@ -237,7 +495,7 @@ export const ShowTableSchema = z.object({
 });
 
 /**
- * 计划 / TODO 清单更新。后端 `update_plan` skill 调用本 method，每次携带
+ * 计划 / TODO 清单更新。后端 `update_plan` tool 调用本 method，每次携带
  * 完整的步骤列表（声明式全量替换）。前端按 `plan_id` upsert 同一张卡片。
  */
 export const PlanStepStatusSchema = z.enum([
@@ -268,15 +526,15 @@ export const PlanUpdateSchema = z.object({
 });
 
 /**
- * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents skill
+ * 子智能体（sub-agent）运行状态卡。后端 run_subagent / run_subagents tool
  * 在委派子任务时调用本 method，前端按 `subagent_id` upsert 同一张卡片。
  * 只携带任务标题与状态，不携带子智能体的内部步骤/输出（上下文隔离的本意）。
  */
-export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed']);
+export const SubagentTaskStatusSchema = z.enum(['running', 'done', 'failed', 'cancelled']);
 
 export const SubagentUpdateSchema = z.object({
   subagent_id: z.string().min(1),
-  status: z.enum(['running', 'done']),
+  status: z.enum(['running', 'done', 'failed', 'cancelled']),
   parallel: z.boolean().optional(),
   tasks: z
     .array(
@@ -296,11 +554,14 @@ export const SubagentUpdateSchema = z.object({
 // ─────────────────────────────────────────────────────────────────────
 
 export const ApproveCodeSchema = z.object({
+  request_id: z.string().optional(),
+  tool_name: z.string().optional(),
   run_id: z.string().min(1),
   step: z.number().int().nonnegative(),
   code: z.string(),
   risky_operations: z.array(z.string()),
   explanation: z.string().optional(),
+  timeout_seconds: z.number().positive().optional(),
 });
 
 export const AskChooseSchema = z.object({
@@ -318,7 +579,10 @@ export const AskTextSchema = z.object({
 });
 
 export const AskConfirmSchema = z.object({
+  request_id: z.string().optional(),
+  tool_name: z.string().optional(),
   question: z.string().min(1),
+  reason: z.string().optional(),
   danger: z.boolean().optional(),
   timeout_seconds: z.number().positive().optional(),
 });
@@ -332,6 +596,11 @@ export const GetWorkspaceSchema = z.object({}).passthrough();
 export const ListAssetsSchema = z.object({
   pattern: z.string().optional(),
 });
+
+export const RefreshAssetsSchema = z.object({
+  path: z.string().min(1).optional(),
+  reason: z.string().optional(),
+}).passthrough();
 
 export const OpenExternalSchema = z.object({
   path: z.string().min(1),

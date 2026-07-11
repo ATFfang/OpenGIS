@@ -6,8 +6,6 @@
  *   - 把 handler 的返回值包装成 JsonRpcSuccessResponse
  *   - 把 RpcError / 普通异常包装成 JsonRpcErrorResponse
  *   - Notification（无 id）不会返回任何响应
- *
- * Stage 3 会把这个 dispatcher 接到真实 WebSocket；Stage 1 只跑本地单测。
  */
 
 import {
@@ -128,10 +126,7 @@ export class Dispatcher {
     return null;
   }
 
-  /**
-   * 根据 method 前缀返回通道类型，给 Stage 3 的 transport 层用。
-   * 暴露在 dispatcher 上纯粹是为了就近引用。
-   */
+  /** 根据 method 前缀返回通道类型，暴露在 dispatcher 上便于就近引用。 */
   static channelOf(method: string) {
     return getMethodChannel(method);
   }

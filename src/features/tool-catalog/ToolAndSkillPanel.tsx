@@ -1,0 +1,373 @@
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { ChevronDown, ChevronRight, Zap, Search, FileText, Map, HelpCircle, Terminal, BookOpen, Bot, BarChart3 } from 'lucide-react'
+import { pythonClient } from '@/services/pythonClient'
+import { useAssetStore } from '@/stores/assetStore'
+import { useT } from '@/i18n'
+
+// ─── Types matching ToolSchema.to_dict() / ToolParam.to_dict() ───
+interface ToolParamDict {
+  name: string
+  type: string
+  description: string
+  required: boolean
+  default?: unknown
+  options?: string[]
+}
+
+interface ToolSchemaDict {
+  name: string
+  display_name: string
+  description: string
+  category: string
+  params: ToolParamDict[]
+  returns: string
+  examples: string[]
+  tags: string[]
+  version: string
+}
+
+interface UserSkillDict {
+  name: string
+  description?: string
+  location: string
+  directory: string
+  source: string
+  tags: string[]
+  version?: string
+}
+
+type CategoryInfo = {
+  label: string
+  icon: typeof Zap
+  color: string
+  bgColor: string
+  order: number
+}
+
+// ─── Category style registry (auto-discovers new categories) ───
+// New backend categories get a default style automatically.
+// To customize a category's icon/color, add it here.
+const CATEGORY_STYLES: Record<string, Partial<CategoryInfo>> = {
+  system:        { icon: Terminal,     color: 'text-green-400',   bgColor: 'bg-green-500/10',   label: 'File & System',   order: 0 },
+  data:          { icon: FileText,     color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', label: 'Data & Inspection', order: 1 },
+  visualization: { icon: Map,          color: 'text-blue-400',    bgColor: 'bg-blue-500/10',    label: 'Map & Visualization', order: 2 },
+  report:        { icon: BarChart3,    color: 'text-orange-400',  bgColor: 'bg-orange-500/10',  label: 'Report Generation', order: 3 },
+  writing:       { icon: BookOpen,     color: 'text-purple-400',  bgColor: 'bg-purple-500/10',  label: 'Academic Writing',  order: 4 },
+  orchestration: { icon: Bot,          color: 'text-amber-400',   bgColor: 'bg-amber-500/10',   label: 'Agent Orchestration', order: 5 },
+}
+
+const DEFAULT_CATEGORY_STYLE: Omit<CategoryInfo, 'label'> = {
+  icon: HelpCircle,
+  color: 'text-text-muted',
+  bgColor: 'bg-bg-tertiary/50',
+  order: 99,
+}
+
+function getCategoryInfo(cat: string): CategoryInfo {
+  const style = CATEGORY_STYLES[cat]
+  return {
+    label: style?.label ?? cat.charAt(0).toUpperCase() + cat.slice(1),
+    icon: style?.icon ?? DEFAULT_CATEGORY_STYLE.icon,
+    color: style?.color ?? DEFAULT_CATEGORY_STYLE.color,
+    bgColor: style?.bgColor ?? DEFAULT_CATEGORY_STYLE.bgColor,
+    order: style?.order ?? DEFAULT_CATEGORY_STYLE.order,
+  }
+}
+
+// ─── Component ───────────────────────────────────────────────────────
+export function ToolAndSkillPanel() {
+  const [tools, setTools] = useState<ToolSchemaDict[]>([])
+  const [userSkills, setUserSkills] = useState<UserSkillDict[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [mode, setMode] = useState<'tools' | 'skills'>('tools')
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
+  const [expandedSkill, setExpandedSkill] = useState<string | null>(null)
+  const t = useT()
+  const workspacePath = useAssetStore((s) => s.workspacePath)
+
+  const fetchToolAndSkillCatalog = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [toolResp, userSkillResp] = await Promise.all([
+        pythonClient.send('rpc.tool.list', {}),
+        pythonClient.send('rpc.user_skill.list', { workspace_path: workspacePath || undefined }),
+      ])
+      const list: ToolSchemaDict[] = (toolResp as any)?.tools ?? []
+      setTools(list)
+      setUserSkills((userSkillResp as any)?.skills ?? [])
+      // Auto-expand the first category
+      const cats = [...new Set(list.map(s => s.category))]
+      if (cats.length > 0) setExpandedCategory(cats[0]!)
+    } catch (e: any) {
+      setError(e?.message ?? t.common.error)
+    } finally {
+      setLoading(false)
+    }
+  }, [t.common.error, workspacePath])
+
+  useEffect(() => {
+    fetchToolAndSkillCatalog()
+  }, [fetchToolAndSkillCatalog])
+
+  const filtered = search.trim()
+    ? tools.filter(
+        s =>
+          s.name.toLowerCase().includes(search.toLowerCase()) ||
+          s.display_name.toLowerCase().includes(search.toLowerCase()) ||
+          s.description.toLowerCase().includes(search.toLowerCase()) ||
+          s.tags.some(t => t.toLowerCase().includes(search.toLowerCase())),
+      )
+    : tools
+
+  // Auto-discover categories from tool data, sort by defined order
+  const grouped = useMemo(() => {
+    const map: Record<string, ToolSchemaDict[]> = {}
+    for (const s of filtered) {
+      const cat = s.category || 'other'
+      ;(map[cat] ??= []).push(s)
+    }
+    // Sort categories by order defined in CATEGORY_STYLES
+    const sorted: Record<string, ToolSchemaDict[]> = {}
+    for (const cat of Object.keys(map).sort((a, b) => {
+      const oa = getCategoryInfo(a).order
+      const ob = getCategoryInfo(b).order
+      return oa - ob
+    })) {
+      sorted[cat] = map[cat]
+    }
+    return sorted
+  }, [filtered])
+
+  // ── Loading state ──────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-text-muted">
+        <div className="w-6 h-6 border-2 border-accent-primary border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs">{t.skills.loading}</span>
+      </div>
+    )
+  }
+
+  // ── Error state ───────────────────────────────────────────────────
+  if (error) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-accent-danger p-4">
+        <span className="text-xs text-center">{error}</span>
+        <button
+          onClick={fetchToolAndSkillCatalog}
+          className="text-xs px-3 py-1 rounded bg-accent-primary/20 text-accent-primary hover:bg-accent-primary/30 transition-colors"
+        >
+          {t.skills.retry}
+        </button>
+      </div>
+    )
+  }
+
+  const filteredUserSkills = search.trim()
+    ? userSkills.filter(
+        s =>
+          s.name.toLowerCase().includes(search.toLowerCase()) ||
+          (s.description ?? '').toLowerCase().includes(search.toLowerCase()) ||
+          s.tags.some(t => t.toLowerCase().includes(search.toLowerCase())),
+      )
+    : userSkills
+
+  // ── Empty state ───────────────────────────────────────────────────
+  if (tools.length === 0 && userSkills.length === 0) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-xs text-text-muted">
+        {t.skills.noSkills}
+      </div>
+    )
+  }
+
+  // ── Main render ───────────────────────────────────────────────────
+  return (
+    <div className="w-full h-full flex flex-col overflow-hidden bg-bg-primary">
+      {/* Header + search */}
+      <div className="px-3 py-2 border-b border-border">
+        <div className="flex items-center gap-2 mb-2">
+          <Zap className="w-4 h-4 text-accent-primary" />
+          <span className="text-xs font-semibold text-text-primary">{t.skills.title}</span>
+          <span className="ml-auto text-[10px] text-text-muted">
+            {mode === 'tools' ? tools.length : userSkills.length}
+          </span>
+        </div>
+        <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-bg-secondary p-1">
+          <button
+            onClick={() => setMode('tools')}
+            className={`rounded px-2 py-1 text-[11px] transition-colors ${
+              mode === 'tools'
+                ? 'bg-bg-primary text-text-primary shadow-sm'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+          >
+            {t.skills.toolsTab}
+          </button>
+          <button
+            onClick={() => setMode('skills')}
+            className={`rounded px-2 py-1 text-[11px] transition-colors ${
+              mode === 'skills'
+                ? 'bg-bg-primary text-text-primary shadow-sm'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+          >
+            {t.skills.userSkillsTab}
+          </button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder={t.skills.searchPlaceholder}
+            className="w-full pl-7 pr-2 py-1.5 text-xs bg-bg-secondary border border-border rounded-md
+                       text-text-primary placeholder-text-muted
+                       focus:outline-none focus:border-accent-primary/50"
+          />
+        </div>
+      </div>
+
+      {/* Skill list */}
+      <div className="flex-1 overflow-y-auto">
+        {mode === 'skills' ? (
+          <div className="p-2">
+            {filteredUserSkills.length === 0 ? (
+              <div className="px-2 py-8 text-center text-xs text-text-muted">
+                {t.skills.noUserSkills}
+              </div>
+            ) : (
+              filteredUserSkills.map(skill => (
+                <div key={skill.name} className="mb-2 rounded-md border border-border/50 bg-bg-secondary/40 p-2">
+                  <div className="mb-1 flex items-center gap-2">
+                    <BookOpen className="h-3.5 w-3.5 text-accent-primary" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-primary">{skill.name}</span>
+                    <span className="rounded bg-bg-tertiary px-1.5 py-0.5 text-[9px] text-text-muted">{skill.source}</span>
+                  </div>
+                  {skill.description && (
+                    <p className="mb-1 line-clamp-3 text-[11px] leading-relaxed text-text-secondary">{skill.description}</p>
+                  )}
+                  <div className="truncate text-[10px] text-text-muted">{skill.directory}</div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : Object.entries(grouped).map(([cat, items]) => {
+          const info = getCategoryInfo(cat)
+          const Icon = info.icon
+          const isOpen = expandedCategory === cat
+          const categoryLabel = t.skills.categories[cat as keyof typeof t.skills.categories] ?? info.label
+          return (
+            <div key={cat} className="border-b border-border/50 last:border-b-0">
+              {/* Category header */}
+              <button
+                onClick={() => setExpandedCategory(isOpen ? null : cat)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left
+                           hover:bg-bg-hover transition-colors"
+              >
+                {isOpen ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-text-muted" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-text-muted" />
+                )}
+                <Icon className={`w-3.5 h-3.5 ${info.color}`} />
+                <span className="text-[11px] font-medium text-text-secondary">{categoryLabel}</span>
+                <span className="ml-auto text-[10px] text-text-muted">{items.length}</span>
+              </button>
+
+              {/* Skills in this category */}
+              {isOpen && (
+                <div className="pb-1">
+                  {items.map(skill => {
+                    const isSkillOpen = expandedSkill === skill.name
+                    return (
+                      <div
+                        key={skill.name}
+                        className="mx-2 mb-0.5"
+                      >
+                        <button
+                          onClick={() =>
+                            setExpandedSkill(isSkillOpen ? null : skill.name)
+                          }
+                          className="w-full flex items-center gap-2 px-2 py-1 text-left
+                                     hover:bg-bg-hover transition-colors rounded-md"
+                        >
+                          {isSkillOpen ? (
+                            <ChevronDown className="w-3 h-3 text-accent-primary" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3 text-text-muted" />
+                          )}
+                          <span className="text-[11px] font-mono text-accent-primary truncate flex-1">
+                            {skill.name}
+                          </span>
+                          {skill.tags.slice(0, 1).map(t => (
+                            <span
+                              key={t}
+                              className="text-[9px] px-1 py-0.5 rounded bg-accent-primary/10 text-accent-primary/80"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </button>
+
+                        {/* Expanded skill detail */}
+                        {isSkillOpen && (
+                          <div className="px-3 py-2 text-xs text-text-secondary space-y-2
+                                      border-t border-border/50">
+                            <p className="leading-relaxed text-[12px]">{skill.description}</p>
+
+                            {/* Params */}
+                            {skill.params.length > 0 && (
+                              <div>
+                                <div className="mb-1 text-[11px] font-semibold text-text-primary uppercase tracking-wide">{t.skills.params}</div>
+                                <div className="space-y-1">
+                                  {skill.params.map(p => (
+                                    <div key={p.name} className="flex items-start gap-2">
+                                      <span className="font-mono text-[10px] text-accent-primary bg-accent-primary/10 px-1 py-0.5 rounded whitespace-nowrap">
+                                        {p.name}
+                                        {p.required && <span className="text-accent-danger">*</span>}
+                                      </span>
+                                      <span className="text-[10px] text-text-muted leading-tight flex-1">{p.description}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Returns */}
+                            {skill.returns && (
+                              <div>
+                                <div className="mb-0.5 text-[11px] font-semibold text-text-primary uppercase tracking-wide">{t.skills.returns}</div>
+                                <p className="text-[11px] text-text-muted">{skill.returns}</p>
+                              </div>
+                            )}
+
+                            {/* Examples */}
+                            {skill.examples.length > 0 && (
+                              <div>
+                                <div className="mb-0.5 text-[11px] font-semibold text-text-primary uppercase tracking-wide">{t.skills.examples}</div>
+                                <ul className="list-disc list-inside space-y-0.5">
+                                  {skill.examples.map((ex, i) => (
+                                    <li key={i} className="text-[10px] text-text-muted leading-relaxed">{ex}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

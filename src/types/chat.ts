@@ -1,7 +1,7 @@
 /**
  * Chat / Agent UI types — owned by the frontend, decoupled from any
- * upstream Agent framework. Reflects what the OpenGIS Python CodeAgent
- * actually emits over IPC.
+ * upstream Agent framework. Reflects what the OpenGIS Python agent runtime
+ * emits over IPC.
  */
 
 // ── Provider list (mirrors what the backend's litellm understands) ──
@@ -26,12 +26,12 @@ export type ApiProvider =
 
 export const DEFAULT_API_PROVIDER: ApiProvider = 'openai'
 
-// ── UI message taxonomy (matches CodeAgent event stream) ──
+// ── UI message taxonomy (matches the agent event stream) ──
 export type SayType =
   | 'text'             // Plain text response from the agent
   | 'reasoning'        // Thinking / planning step
   | 'user_feedback'    // Echoes the user's input
-  | 'tool'            // A tool/skill invocation summary
+  | 'tool'            // A tool invocation summary
   | 'code'             // A Python code block emitted by the agent
   | 'code_result'      // Stdout/stderr from executing a code block
   | 'image'            // Inline image (e.g. matplotlib plot saved by save_plot)
@@ -39,24 +39,16 @@ export type SayType =
   | 'plan'             // A TODO / plan checklist emitted by update_plan
   | 'progress'         // Execution progress indicator
   | 'subagent'         // Isolated sub-agent delegation card (run_subagent / run_subagents)
-  | 'thinking'         // 🧠 DEPRECATED — "Calling LLM" indicator, UI no longer renders it. Kept for old-data compatibility.
+  | 'thinking'         // transient work indicator, not rendered as assistant content
   | 'error'
-  | 'followup'
-  | 'completion_result'
-  | 'mistake_limit_reached'
-  | 'max_steps_reached'
-  | 'api_req_started'
-  | 'mcp_server_response'
   | 'screenshot'
 
 export type AskType =
-  | 'followup'
   | 'tool'
   | 'command'
-  | 'completion_result'
   | 'resume_task'
 
-// ── Plan / TODO checklist (emitted by the backend `update_plan` skill) ──
+// ── Plan / TODO checklist (emitted by the backend `update_plan` tool) ──
 export type PlanStepStatus =
   | 'pending'
   | 'in_progress'
@@ -77,6 +69,8 @@ export interface PlanData {
   title?: string
   steps: PlanStep[]
   runId?: string
+  /** True when this plan represents a workflow run shown in compact mode. */
+  workflow?: boolean
   /** Wall-clock of the latest update, for subtle "updated" affordances. */
   updatedAt?: number
 }
@@ -95,7 +89,7 @@ export interface SubagentTask {
 export interface SubagentData {
   /** Stable id; repeated updates with the same id replace the same card. */
   subagentId: string
-  status: 'running' | 'done' | 'cancelled'
+  status: 'running' | 'done' | 'failed' | 'cancelled'
   /** True when this is a parallel fan-out (run_subagents with >1 task). */
   parallel: boolean
   tasks: SubagentTask[]
@@ -107,7 +101,43 @@ export interface SubagentData {
   updatedAt?: number
 }
 
-export interface UIMessage {
+export type MessagePartType =
+  | 'text'
+  | 'reasoning'
+  | 'tool'
+  | 'tool_output'
+  | 'code'
+  | 'artifact'
+  | 'approval'
+  | 'plan'
+  | 'progress'
+  | 'error'
+  | 'turn'
+
+export type MessagePartStatus =
+  | 'pending'
+  | 'running'
+  | 'streaming'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface MessagePart {
+  id: string
+  type: MessagePartType
+  status: MessagePartStatus
+  text?: string
+  tool?: string
+  callId?: string
+  call_id?: string
+  runId?: string
+  run_id?: string
+  data?: Record<string, unknown>
+  createdAt?: number
+  created_at?: number
+}
+
+export interface ChatMessage {
   ts: number
   type: 'say' | 'ask'
   say?: SayType
@@ -116,9 +146,12 @@ export interface UIMessage {
   partial?: boolean
   images?: string[]
   files?: string[]
+  /** Directory used to resolve relative Markdown image paths. */
+  markdownBaseDir?: string
 
-  // Tool / skill invocation
+  // Tool invocation
   toolName?: string
+  toolCallId?: string
   toolArgs?: Record<string, unknown>
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed'
 
@@ -127,7 +160,7 @@ export interface UIMessage {
   chartConfig?: unknown
   tableData?: unknown[]
 
-  // CodeAgent step metadata — filled for say='code' / 'code_result'.
+  // Agent code step metadata — filled for say='code' / 'code_result'.
   // `scriptPath` is relative to the opened workspace (or the run directory
   // when no workspace is open) and is safe to pass to openFileAsTab.
   stepNumber?: number
@@ -140,13 +173,6 @@ export interface UIMessage {
 
   // Whether a backend command finished (for command-type messages)
   commandCompleted?: boolean
-
-  // Soft-stop payload — filled for say='max_steps_reached'.
-  maxStepsInfo?: {
-    maxSteps: number
-    stepCount: number
-    summary: string
-  }
 
   // Progress indicator — filled for say='progress'.
   progressStage?: string
@@ -173,16 +199,9 @@ export interface UIMessage {
     providerId?: string
     mode?: string
   }
-}
 
-// API-request metadata stored as JSON inside an `api_req_started` say message.
-export interface ApiReqInfo {
-  request?: string
-  tokensIn?: number
-  tokensOut?: number
-  cacheWrites?: number
-  cacheReads?: number
-  cost?: number
-  cancelReason?: string
-  streamingFailedMessage?: string
+  /**
+   * Event-sourced projection used by ChatView.
+   */
+  parts?: MessagePart[]
 }

@@ -10,6 +10,9 @@ import {
 type JsonRpcCallback = (result: any, error?: any) => void
 type NotificationHandler = (method: string, params: any) => void
 
+const DYNAMIC_LAYER_UPDATE_METHOD = 'rpc.ui.map.dynamic_layer_update'
+const DYNAMIC_LAYER_FRAME_MS = 100
+
 /**
  * Minimal surface of the Dispatcher that the client needs. Avoids a hard
  * import cycle with `src/services/rpc/dispatcher.ts`.
@@ -20,10 +23,9 @@ export interface DispatcherLike {
    * Route a notification (no `id`) to the handler registry. Returns void;
    * any handler error is swallowed by the dispatcher's `onError` hook.
    *
-   * Stage 3.8 fix: before this, ``_handleMessage`` only broadcast inbound
-   * notifications to ``notificationHandlers`` and **never** hit the
-   * dispatcher, so Python-pushed `rpc.ui.map.*` notifications silently
-   * dropped (the map store's handlers were registered but unreachable).
+   * Route Python-pushed notifications through both the handler registry and
+   * external listeners. This keeps map/worker/chat side effects centralized
+   * while preserving subscription hooks for UI code.
    */
   handleNotification(notif: JsonRpcNotification): Promise<void>
 }
@@ -45,6 +47,8 @@ export class PythonClient {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 10
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private dynamicLayerNotifications: Map<string, JsonRpcNotification[]> = new Map()
+  private dynamicLayerFlushTimer: ReturnType<typeof setTimeout> | null = null
   private _isConnected = false
 
   get isConnected(): boolean {
@@ -81,11 +85,9 @@ export class PythonClient {
   /**
    * Register the RPC dispatcher used to service inbound requests from the
    * Python backend (methods with ``rpc.`` / ``chat.`` / ``event.`` prefix
-   * and an ``id`` field). Without a dispatcher, inbound requests fall
-   * through to the notification handlers for backwards compatibility.
-   *
-   * Stage 3.4: this is the wire-up point that finally connects the
-   * Stage-1 Dispatcher + Registry to the real WebSocket.
+   * and an ``id`` field). Notifications are also broadcast through
+   * ``onNotification`` for stores and extension hosts that subscribe to the
+   * shared event stream.
    */
   setDispatcher(dispatcher: DispatcherLike | null): void {
     this.dispatcher = dispatcher
@@ -113,17 +115,10 @@ export class PythonClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    this.clearDynamicLayerQueue()
     this.reconnectAttempts = this.maxReconnectAttempts // Prevent reconnect
     
-    // Reject all pending requests to prevent hanging promises
-    for (const [id, callback] of this.pendingRequests.entries()) {
-      try {
-        callback(null, new Error('WebSocket disconnected'))
-      } catch (e) {
-        console.error(`[PythonClient] Error rejecting pending request ${id}:`, e)
-      }
-    }
-    this.pendingRequests.clear()
+    this.rejectPendingRequests(new Error('WebSocket disconnected'))
     
     if (this.ws) {
       this.ws.close()
@@ -132,12 +127,23 @@ export class PythonClient {
     this._isConnected = false
   }
 
+  private rejectPendingRequests(error: Error): void {
+    for (const [id, callback] of this.pendingRequests.entries()) {
+      try {
+        callback(null, error)
+      } catch (e) {
+        console.error(`[PythonClient] Error rejecting pending request ${id}:`, e)
+      }
+    }
+    this.pendingRequests.clear()
+  }
+
   /**
    * Send a JSON-RPC request and wait for the response.
    *
    * @param timeoutMs  Override the per-request timeout. Defaults are tuned
    *                   per method family: `chat.user_message` gets 10 minutes
-   *                   because CodeAgent runs are multi-step + LLM-bound,
+   *                   because agent runs are multi-step + LLM-bound,
    *                   everything else gets 60 seconds.
    */
   async send<T = any>(
@@ -189,28 +195,28 @@ export class PythonClient {
       this.ws.send(JSON.stringify(request))
 
       // Pick a timeout that reflects the call's cost class.
-      //  - chat.user_message drives the agent loop which may run many
-      //    LLM-bound steps; anything under ~10 minutes is too tight.
+      //  - chat.user_message is streamed by server notifications. Do not put
+      //    a renderer-side wall clock on it: if the UI request times out while
+      //    the backend agent keeps running, chat state becomes inconsistent.
+      //    Backend cancellation, websocket close, or stream_end/error events
+      //    are the source of truth for ending the visible run.
       //  - rpc.code.run_script is user-authored Python inside the
       //    subprocess sandbox; a heavy training script can easily take
       //    minutes. Match chat's 10-min ceiling so the TS side doesn't
       //    time out before the Python-side executor's own exec_timeout
       //    kicks in.
-      //  - rpc.skill.execute can run heavy GIS ops; give it a generous budget.
+      //  - rpc.tool.execute can run heavy GIS ops; give it a generous budget.
       //  - everything else (config, ping, metadata lookups) is fast.
       const isChat = method === 'chat.user_message'
-      const isSkill = method.startsWith('rpc.skill.')
+      const isTool = method.startsWith('rpc.tool.')
       const isScriptRun = method === 'rpc.code.run_script'
-      // chat.user_message drives the agent loop which may run for 10+ minutes
-      // (especially in workflow mode). No client-side timeout — the backend's
-      // exec_timeout (default 600s) handles runaway runs.
       const effectiveTimeout =
         timeoutMs ??
         (isChat
-          ? 0 // no timeout — controlled by backend
+          ? 0 // no frontend timeout; streamed run lifecycle is event-driven
           : isScriptRun
           ? 10 * 60 * 1000 // 10 min
-          : isSkill
+          : isTool
           ? 5 * 60 * 1000 // 5 min
           : 60 * 1000) // 60 sec
 
@@ -241,7 +247,6 @@ export class PythonClient {
       this.ws = new WebSocket(this.url)
 
       this.ws.onopen = () => {
-        console.log('[PythonClient] Connected to', this.url)
         this._isConnected = true
         this.reconnectAttempts = 0
       }
@@ -256,8 +261,8 @@ export class PythonClient {
       }
 
       this.ws.onclose = () => {
-        console.log('[PythonClient] Disconnected')
         this._isConnected = false
+        this.rejectPendingRequests(new Error('WebSocket disconnected'))
         this._scheduleReconnect()
       }
 
@@ -279,8 +284,7 @@ export class PythonClient {
       return
     }
 
-    // JSON-RPC Request from Python → TS (has id + method + routable prefix)
-    // Stage 3.4: dispatch to the Registry via the wired-in Dispatcher.
+    // JSON-RPC Request from Python → TS (has id + method + routable prefix).
     if (data.id !== undefined && typeof data.method === 'string') {
       const channel = getMethodChannel(data.method)
       if (this.dispatcher && channel !== null) {
@@ -317,53 +321,94 @@ export class PythonClient {
           })
         return
       }
-      // No dispatcher wired or unknown channel → fall through so legacy
-      // notification handlers still see the method name.
+      // No dispatcher wired or unknown channel: fall through to the
+      // broadcast notification stream so observers still see the method.
     }
 
     // JSON-RPC Notification (no id).
     //
-    // Stage 3.8: two sinks, in order.
+    // Two sinks, in order.
     //   1. If a dispatcher is wired AND the method sits on one of the
     //      canonical channels (rpc./chat./event.), route it to the
     //      dispatcher. This is how `rpc.ui.map.add_layer_from_geojson`
     //      (and friends) finally reach the handlers in
     //      `src/services/rpc/handlers/`.
-    //   2. Always also fan out to `notificationHandlers`. Legacy Python
-    //      pushes like `chat.stream_delta` / `chat.code_block` / script
-    //      events are consumed by store-level subscribers that were
-    //      registered via `onNotification(...)` — they must keep seeing
-    //      every notification.
+    //   2. Always also fan out to `notificationHandlers`. Store-level
+    //      features such as chat MessageParts, script output, worker logs,
+    //      pivots, and extensions subscribe through `onNotification(...)`.
     //
     // Running both is safe: canonical-channel methods are registered
     // exclusively on the dispatcher's registry; non-canonical methods
     // (e.g. the `map.addLayer` fallback during dev) have no dispatcher
     // handler and go straight to the notification fan-out.
     if (data.method) {
-      const channel = getMethodChannel(data.method)
-      if (this.dispatcher && channel !== null) {
-        const notif: JsonRpcNotification = {
+      if (data.method === DYNAMIC_LAYER_UPDATE_METHOD && data.id === undefined) {
+        this.enqueueDynamicLayerNotification({
           jsonrpc: '2.0',
           method: data.method,
           params: data.params ?? {},
-        }
-        this.dispatcher.handleNotification(notif).catch((err) => {
-          // Dispatcher is supposed to swallow handler errors internally;
-          // this is purely defensive so a rogue reject does not break
-          // the message pump.
-          console.error(
-            '[PythonClient] Dispatcher.handleNotification rejected unexpectedly:',
-            err,
-          )
         })
+        return
       }
+      this.routeNotification({
+        jsonrpc: '2.0',
+        method: data.method,
+        params: data.params ?? {},
+      })
+    }
+  }
 
-      for (const handler of this.notificationHandlers) {
-        try {
-          handler(data.method, data.params)
-        } catch (error) {
-          console.error('[PythonClient] Notification handler error:', error)
-        }
+  private enqueueDynamicLayerNotification(notif: JsonRpcNotification): void {
+    const params = (notif.params ?? {}) as Record<string, any>
+    const layerId = typeof params.layer_id === 'string' && params.layer_id
+      ? params.layer_id
+      : `__unknown__:${this.dynamicLayerNotifications.size}`
+    const existing = this.dynamicLayerNotifications.get(layerId) ?? []
+    const mode = typeof params.mode === 'string' ? params.mode : undefined
+    const hasFullPayload = mode === 'full' || (params.geojson != null && params.diff == null)
+    // A full frame supersedes prior queued frames for the same layer. Diff
+    // frames are incremental and must keep order; dropping them can turn a
+    // valid full+diff burst into an empty/no-op layer on the frontend.
+    this.dynamicLayerNotifications.set(layerId, hasFullPayload ? [notif] : [...existing, notif])
+    if (this.dynamicLayerFlushTimer !== null) return
+    this.dynamicLayerFlushTimer = setTimeout(() => {
+      this.dynamicLayerFlushTimer = null
+      this.flushDynamicLayerNotifications()
+    }, DYNAMIC_LAYER_FRAME_MS)
+  }
+
+  private flushDynamicLayerNotifications(): void {
+    const pending = [...this.dynamicLayerNotifications.values()].flat()
+    this.dynamicLayerNotifications.clear()
+    for (const notif of pending) {
+      this.routeNotification(notif)
+    }
+  }
+
+  private clearDynamicLayerQueue(): void {
+    if (this.dynamicLayerFlushTimer !== null) {
+      clearTimeout(this.dynamicLayerFlushTimer)
+      this.dynamicLayerFlushTimer = null
+    }
+    this.dynamicLayerNotifications.clear()
+  }
+
+  private routeNotification(notif: JsonRpcNotification): void {
+    const channel = getMethodChannel(notif.method)
+    if (this.dispatcher && channel !== null) {
+      this.dispatcher.handleNotification(notif).catch((err) => {
+        console.error(
+          '[PythonClient] Dispatcher.handleNotification rejected unexpectedly:',
+          err,
+        )
+      })
+    }
+
+    for (const handler of this.notificationHandlers) {
+      try {
+        handler(notif.method, notif.params)
+      } catch (error) {
+        console.error('[PythonClient] Notification handler error:', error)
       }
     }
   }
@@ -376,8 +421,6 @@ export class PythonClient {
 
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
     this.reconnectAttempts++
-
-    console.log(`[PythonClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
 
     this.reconnectTimer = setTimeout(() => {
       this._connect()

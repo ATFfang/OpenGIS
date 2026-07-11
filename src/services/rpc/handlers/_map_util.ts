@@ -1,13 +1,9 @@
 /**
  * Map-handler 共享几何工具
  *
- * 抽自原 `src/services/commandBus.ts`。Stage 3.5 把 map handler 从
- * `notImplemented` 改为真实现，多个 handler 都要把 "agent 给的零散
- * GeoJSON / 几何 / 单 Feature" 归一化成 FeatureCollection，并算出
- * bbox / 主几何类型。集中放这里避免重复。
- *
- * 注意：这些工具纯函数，和 CommandBus 解耦——Stage 3.6 删 commandBus.ts
- * 时不会影响 handler 层。
+ * Multiple handlers accept agent-friendly GeoJSON shapes. These helpers
+ * normalize FeatureCollection / Feature / bare geometry inputs and compute
+ * shared bbox / geometry metadata without touching frontend state.
  */
 
 import type {

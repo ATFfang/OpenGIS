@@ -7,38 +7,56 @@ import {
   GitBranch,
   ListRestart,
   FolderSync,
+  LayoutTemplate,
+  Monitor,
+  Activity,
+  PackageOpen,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 
 interface SidebarProps {
   activeTab: string
+  isContentVisible?: boolean
   onTabChange: (tab: string) => void
   showChat: boolean
   onToggleChat: () => void
+  boardMode: boolean
+  onToggleBoardMode: () => void
 }
 
 /**
  * Left sidebar with icon-based navigation tabs.
  * Compact mode: 52px wide, icon only.
  */
-export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: SidebarProps) {
+export function Sidebar({
+  activeTab,
+  isContentVisible = true,
+  onTabChange,
+  showChat,
+  onToggleChat,
+  boardMode,
+  onToggleBoardMode,
+}: SidebarProps) {
   const t = useT()
 
   const sidebarTabs = [
     { id: 'files', icon: FolderOpen, label: t.sidebar.files },
     { id: 'layers', icon: Layers, label: t.sidebar.layers },
+    { id: 'canvas', icon: LayoutTemplate, label: t.sidebar.canvas },
+    { id: 'workers', icon: Activity, label: t.sidebar.workers },
+    { id: 'operations', icon: PackageOpen, label: t.sidebar.operations },
     { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
     { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
-    { id: 'skills', icon: Wrench, label: t.sidebar.skills },
+    { id: 'tools', icon: Wrench, label: t.sidebar.tools },
     { id: 'settings', icon: Settings, label: t.sidebar.settings },
   ]
 
   return (
-    <div className="w-[52px] h-full bg-bg-secondary border-r border-border flex flex-col items-center py-2 select-none">
+    <div className="w-[52px] h-full bg-bg-sidebar border-r border-border flex flex-col items-center py-2 select-none">
       {/* Navigation tabs */}
       <div className="flex flex-col gap-1 flex-1">
         {sidebarTabs.map((tab) => {
-          const isActive = activeTab === tab.id
+          const isActive = activeTab === tab.id && (tab.id === 'settings' || isContentVisible)
           return (
             <button
               key={tab.id}
@@ -76,6 +94,17 @@ export function Sidebar({ activeTab, onTabChange, showChat, onToggleChat }: Side
         title={t.sidebar.switchProject}
       >
         <FolderSync className="w-[18px] h-[18px]" strokeWidth={1.8} />
+      </button>
+      <button
+        onClick={onToggleBoardMode}
+        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150 mb-1 ${
+          boardMode
+            ? 'text-accent-primary bg-accent-primary/10'
+            : 'text-text-muted hover:text-accent-primary hover:bg-accent-primary/10'
+        }`}
+        title={boardMode ? t.sidebar.exitBoard : t.sidebar.board}
+      >
+        <Monitor className="w-[18px] h-[18px]" strokeWidth={boardMode ? 2.2 : 1.8} />
       </button>
       <button
         onClick={onToggleChat}

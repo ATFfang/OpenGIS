@@ -1,41 +1,52 @@
 """
-Skill → callable adapter for the agent's subprocess executor.
+Tool → callable adapter for the agent's subprocess executor.
 
-This module converts ``RegisteredSkill`` records into plain callables
+This module converts ``RegisteredTool`` records into plain callables
 that the subprocess executor can invoke via its tool-bridge RPC.
 
-v3.1 (2026-04): Removed smolagents dependency. Tools are now plain
-callables (not smolagents.Tool subclasses). The executor's tool bridge
-calls them as ``tool(*args, **kwargs)`` — same interface, no framework.
+Tools are plain callables. The executor's tool bridge calls them as
+``tool(*args, **kwargs)``.
 
-The public symbol is ``build_tool_callables``. The legacy name
-``build_smolagents_tools`` is kept as an alias for backward compatibility.
+The public symbol is ``build_tool_callables``.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Callable
-from opengis_backend.skills.registry import RegisteredSkill
+from opengis_backend.tools.context import ToolContext
+from opengis_backend.tools.registry import RegisteredTool
 
 logger = logging.getLogger(__name__)
 
+AGENT_FORBIDDEN_TOOL_NAMES = {
+    # Basemap choice is treated as user/UI state. Agent runs may hide/show the
+    # basemap when explicitly asked, but must not switch the user's selected
+    # basemap style.
+    "set_basemap",
+}
+
+
+def filter_agent_tools(registered: list[RegisteredTool]) -> list[RegisteredTool]:
+    """Remove tools that should not be exposed to autonomous agent loops."""
+    return [rs for rs in registered if rs.schema.name not in AGENT_FORBIDDEN_TOOL_NAMES]
+
 
 def build_tool_callables(
-    registered: list[RegisteredSkill],
-    ctx_provider: (Callable[[], SkillContext] | None) = None,
+    registered: list[RegisteredTool],
+    ctx_provider: (Callable[[], ToolContext] | None) = None,
 ) -> dict[str, Callable]:
-    """Convert RegisteredSkill records into a name → callable dict.
+    """Convert RegisteredTool records into a name → callable dict.
 
     Args:
-        registered: list of RegisteredSkill from the SkillRegistry.
-        ctx_provider: zero-arg callable returning the SkillContext to inject
-                      into context-aware skills. If None, falls back to the
-                      contextvar-based ``get_current_context()`` (legacy path).
+        registered: list of RegisteredTool from the ToolRegistry.
+        ctx_provider: zero-arg callable returning the ToolContext to inject
+                      into context-aware tools. If None, uses the ambient
+                      contextvar-based ``get_current_context()``.
 
     Returns:
-        dict mapping skill name → callable. Each callable accepts the
-        skill's declared parameters as keyword arguments.
+        dict mapping tool name → callable. Each callable accepts the
+        tool's declared parameters as keyword arguments.
     """
     tools: dict[str, Callable] = {}
 
@@ -44,11 +55,11 @@ def build_tool_callables(
         raw_fn = rs.raw_function
         needs_ctx = rs.needs_context
 
-        # Resolve context provider for needs_ctx skills.
+        # Resolve context provider for context-aware tools.
         if ctx_provider is not None:
             _get_ctx = ctx_provider
         else:
-            from opengis_backend.skills.context import (
+            from opengis_backend.tools.context import (
                 get_current_context as _get_ctx,
             )
 
@@ -73,9 +84,4 @@ def build_tool_callables(
     return tools
 
 
-# Legacy aliases for backward compatibility.
-build_smolagents_tools = build_tool_callables
-_build_smolagents_tools = build_tool_callables
-
-
-__all__ = ["build_tool_callables", "build_smolagents_tools", "_build_smolagents_tools"]
+__all__ = ["AGENT_FORBIDDEN_TOOL_NAMES", "filter_agent_tools", "build_tool_callables"]

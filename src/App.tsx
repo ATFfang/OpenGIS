@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { MainLayout } from './layouts/MainLayout'
 import { DialogHost } from '@/components/Dialog'
+import { ApprovalGate } from '@/features/approval/ApprovalGate'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAssetStore } from '@/stores/assetStore'
 import { pythonClient } from '@/services/pythonClient'
@@ -61,9 +62,6 @@ function App() {
     const fetchToken = async () => {
       try {
         wsToken = await api.getPythonWsToken()
-        if (wsToken) {
-          console.log('[App] WebSocket token fetched successfully')
-        }
       } catch (e) {
         console.warn('[App] Failed to fetch WebSocket token:', e)
       }
@@ -71,8 +69,7 @@ function App() {
 
     const tryConnect = (port: number | null | undefined) => {
       if (cancelled || !port) return
-      console.log('[App] Connecting to Python backend on port', port, wsToken ? '(with auth token)' : '(no token)')
-      // 先断开旧连接（防止 token 错误时缓存了无效连接）
+      // Reconnect from a clean socket so stale auth state cannot leak across backend restarts.
       pythonClient.disconnect()
       pythonClient.connect(port, wsToken ?? undefined)
     }
@@ -111,7 +108,6 @@ function App() {
       // 3. Listen for token events from main — when token arrives, reconnect if we have a port
       unsubscribeToken = api.onPythonWsToken?.((token: string) => {
         wsToken = token
-        console.log('[App] Received WebSocket token, reconnecting...')
         if (currentPort) {
           // Reconnect with token
           tryConnect(currentPort)
@@ -178,6 +174,7 @@ function App() {
   return (
     <>
       <MainLayout />
+      <ApprovalGate />
       <DialogHost />
     </>
   )

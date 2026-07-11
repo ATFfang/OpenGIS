@@ -28,6 +28,26 @@ let unsubStore: (() => void) | null = null
 /** 最近一次渲染参数，用于 style reload 后重建 */
 let lastRenderParams: any = null
 
+function buildHeatmapPaint(radius: unknown, intensity: unknown, opacity: unknown): any {
+  return {
+    'heatmap-weight': [
+      'case',
+      ['==', ['typeof', ['get', 'weight']], 'number'],
+      ['get', 'weight'],
+      1,
+    ],
+    'heatmap-intensity': typeof intensity === 'number' ? intensity : 1,
+    'heatmap-radius': typeof radius === 'number' ? radius : 30,
+    'heatmap-opacity': typeof opacity === 'number' ? opacity : 0.8,
+    'heatmap-color': [
+      'interpolate',
+      ['linear'],
+      ['heatmap-density'],
+      ...HEAT_PALETTE,
+    ],
+  }
+}
+
 const heatmapExtension: MapExtension = {
   name: 'heatmap',
   methods: ['ext.heatmap.render', 'ext.heatmap.remove'],
@@ -118,23 +138,7 @@ function renderHeatmap(params: any, ctx: ExtensionContext): void {
     id: LAYER_ID,
     type: 'heatmap',
     source: SOURCE_ID,
-    paint: {
-      'heatmap-weight': [
-        'case',
-        ['==', ['typeof', ['get', 'weight']], 'number'],
-        ['get', 'weight'],
-        1,
-      ],
-      'heatmap-intensity': typeof intensity === 'number' ? intensity : 1,
-      'heatmap-radius': typeof radius === 'number' ? radius : 30,
-      'heatmap-opacity': typeof opacity === 'number' ? opacity : 0.8,
-      'heatmap-color': [
-        'interpolate',
-        ['linear'],
-        ['heatmap-density'],
-        ...HEAT_PALETTE,
-      ] as any,
-    },
+    paint: buildHeatmapPaint(radius, intensity, opacity),
   })
 
   // Register with MapEngine so setBasemapVisible / setLabelsVisible skip it
@@ -259,23 +263,7 @@ function attachStyleLoadListener(): void {
       id: LAYER_ID,
       type: 'heatmap',
       source: SOURCE_ID,
-      paint: {
-        'heatmap-weight': [
-          'case',
-          ['==', ['typeof', ['get', 'weight']], 'number'],
-          ['get', 'weight'],
-          1,
-        ],
-        'heatmap-intensity': typeof intensity === 'number' ? intensity : 1,
-        'heatmap-radius': typeof radius === 'number' ? radius : 30,
-        'heatmap-opacity': typeof opacity === 'number' ? opacity : 0.8,
-        'heatmap-color': [
-          'interpolate',
-          ['linear'],
-          ['heatmap-density'],
-          ...HEAT_PALETTE,
-        ] as any,
-      },
+      paint: buildHeatmapPaint(radius, intensity, opacity),
     })
 
     // Re-register with MapEngine

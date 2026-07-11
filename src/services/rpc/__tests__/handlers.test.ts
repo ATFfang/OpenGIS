@@ -1,6 +1,6 @@
 /**
  * Handler 骨架的契约测试：
- *   - 注册齐 28 个 method
+ *   - 注册齐当前 UI-facing method
  *   - 合法参数 → -32603 notImplemented（证明参数校验通过，落到 stub 抛错）
  *   - 非法参数 → -32602 invalidParams
  */
@@ -9,25 +9,43 @@ import { Dispatcher } from '../dispatcher';
 import { HandlerRegistry } from '../registry';
 import { listAllMethods, registerAllHandlers } from '../handlers/register';
 import type { JsonRpcRequest } from '@/types/protocol';
+import { useChatStore } from '@/stores/chatStore';
+import { useMapStore } from '@/stores/mapStore';
 
 function req(method: string, params: unknown = {}, id = 'r'): JsonRpcRequest {
   return { jsonrpc: '2.0', id, method, params };
 }
 
 describe('Handler registration', () => {
-  it('registers expected method count (17 map + 3 chat + 4 ask + 3 fs + 1 agent.hello = 28 RPC UI-facing)', () => {
+  it('registers expected method count', () => {
     const reg = new HandlerRegistry();
     const names = registerAllHandlers(reg);
-    // 17 map (含 add_image_overlay) + 3 chat + 4 ask + 3 fs + 1 agent = 28
-    expect(names.length).toBe(28);
+    expect(names.length).toBe(53);
     // 抽样检查关键 method 在册
     expect(names).toContain('rpc.ui.map.add_layer');
+    expect(names).toContain('rpc.ui.map.get_state');
+    expect(names).toContain('rpc.ui.map.dynamic_layer_update');
     expect(names).toContain('rpc.ui.map.add_image_overlay');
     expect(names).toContain('rpc.ui.map.query_features');
+    expect(names).toContain('rpc.ui.map.set_basemap_visibility');
+    expect(names).toContain('rpc.ui.map.set_layer_filter');
+    expect(names).toContain('rpc.ui.map.set_layer_label');
+    expect(names).toContain('rpc.ui.map.update_visual_variables');
+    expect(names).toContain('rpc.ui.map.highlight_features');
+    expect(names).toContain('rpc.ui.map.set_layer_order');
+    expect(names).toContain('rpc.ui.map.get_legend_spec');
+    expect(names).toContain('rpc.ui.map.update_legend_spec');
     expect(names).toContain('rpc.ui.chat.show_text');
     expect(names).toContain('rpc.ui.chat.show_image');
     expect(names).toContain('rpc.ui.ask.approve_code');
     expect(names).toContain('rpc.ui.fs.list_assets');
+    expect(names).toContain('rpc.ui.fs.refresh_assets');
+    expect(names).toContain('rpc.ui.layout.get_state');
+    expect(names).toContain('rpc.ui.layout.add_element');
+    expect(names).toContain('rpc.ui.layout.update_frame');
+    expect(names).toContain('rpc.ui.layout.update_style');
+    expect(names).toContain('rpc.ui.layout.update_map_view');
+    expect(names).toContain('rpc.ui.layout.export');
     expect(names).toContain('rpc.agent.hello');
   });
 
@@ -46,30 +64,18 @@ describe('Handler registration', () => {
 });
 
 describe('Handler contract: valid params → -32603 not implemented', () => {
-  // Stage 3.5 + 3.7 已把 12 个 map handler 改为真实现，故不再在这里测：
-  //   Stage 3.5：add_layer_from_geojson / remove_layer / zoom_to_bbox / fly_to /
-  //              set_basemap / set_layer_style / set_layer_visibility
-  //   Stage 3.7：add_layer / zoom_to_layer / list_layers / get_layer / query_features
-  // 这些 method 的契约测试见 `__tests__/mapHandlers.test.ts`。
-  //
-  // 下面只保留**目前仍是 stub** 的 method。13 个 map handler 里唯一没实现的
-  // 是 add_raster_from_url（MapEngine 还没接 raster 源），其余都实装完了。
-  // 下面只保留**目前仍是 stub** 的 method。
+  // Implemented map/chat/ask/fs handlers have dedicated behavior tests.
+  // This block only covers methods that are intentionally declared but still
+  // unavailable in the renderer.
   //   - chat.show_image 已真实现（plot 通道），不在此列。
   //   - chat.show_text / show_table 仍是 stub。
-  //   - ask.* 全是 stub（Stage 4 接 UI）。
-  //   - fs.* 全是 stub。
+  //   - ask.* 已接 Dialog 审批 UI，不在此列。
+  //   - fs.get_workspace / fs.list_assets / fs.open_external 仍是 stub。
+  //   - fs.refresh_assets 已真实现，不在此列。
   //   - agent.hello 是占位 stub。
   const validCases: Array<[string, unknown]> = [
     ['rpc.ui.chat.show_text', { text: 'hi' }],
     ['rpc.ui.chat.show_table', { columns: ['a'], rows: [[1]] }],
-    [
-      'rpc.ui.ask.approve_code',
-      { run_id: 'run_x', step: 0, code: 'print(1)', risky_operations: [] },
-    ],
-    ['rpc.ui.ask.choose', { question: 'pick', options: ['a', 'b'] }],
-    ['rpc.ui.ask.text', { question: 'name?' }],
-    ['rpc.ui.ask.confirm', { question: 'ok?' }],
     ['rpc.ui.fs.get_workspace', {}],
     ['rpc.ui.fs.list_assets', {}],
     ['rpc.ui.fs.open_external', { path: 'a.txt' }],
@@ -110,5 +116,267 @@ describe('Handler contract: invalid params → -32602 invalidParams', () => {
     const d = new Dispatcher({ registry: reg });
     const resp = await d.handleRequest(req(method, params));
     expect(resp).toMatchObject({ error: { code: -32602 } });
+  });
+});
+
+describe('rpc.ui.map read handlers', () => {
+  it('returns current map state for agent inspection', async () => {
+    useMapStore.setState({
+      layers: [],
+      basemapVisible: false,
+      labelsVisible: true,
+      viewState: {
+        center: [121.47, 31.23],
+        zoom: 10,
+        bearing: 3,
+        pitch: 20,
+      },
+    });
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const resp = await d.handleRequest(req('rpc.ui.map.get_state', {}));
+
+    expect(resp).toMatchObject({
+      result: {
+        basemap_visible: false,
+        labels_visible: true,
+        view_state: {
+          center: [121.47, 31.23],
+          zoom: 10,
+          bearing: 3,
+          pitch: 20,
+        },
+        layer_count: 0,
+        visible_layer_count: 0,
+      },
+    });
+  });
+
+  it('includes renderer style in list_layers summaries', async () => {
+    useMapStore.setState({
+      layers: [
+        {
+          id: 'poi',
+          name: 'POI',
+          sourceType: 'geojson',
+          visible: true,
+          style: {
+            renderType: 'circle',
+            color: '#ff0000',
+            opacity: 0.7,
+            radius: 6,
+          },
+          data: {
+            kind: 'vector',
+            geojson: {
+              type: 'FeatureCollection',
+              features: [],
+            },
+            geometryType: 'Point',
+            featureCount: 0,
+            bbox: { minX: 0, minY: 0, maxX: 1, maxY: 1 },
+            crs: 'EPSG:4326',
+            fields: [],
+          },
+          meta: {
+            fileName: 'poi.geojson',
+            extension: '.geojson',
+            sourceType: 'geojson',
+            fileSize: 10,
+          },
+          addedAt: 1,
+        } as any,
+      ],
+    });
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const resp = await d.handleRequest(req('rpc.ui.map.list_layers', {}));
+
+    expect(resp).toMatchObject({
+      result: {
+        count: 1,
+        layers: [
+          {
+            layer_id: 'poi',
+            style: {
+              render_type: 'circle',
+              color: '#ff0000',
+              opacity: 0.7,
+              radius: 6,
+            },
+            meta: {
+              extension: '.geojson',
+              file_name: 'poi.geojson',
+            },
+          },
+        ],
+      },
+    });
+  });
+});
+
+describe('rpc.ui.fs.refresh_assets', () => {
+  it('dispatches the AssetExplorer refresh event', async () => {
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+    const listener = vi.fn();
+    const previousWindow = (globalThis as any).window;
+    const previousCustomEvent = (globalThis as any).CustomEvent;
+    const target = new EventTarget();
+    const customEvent =
+      previousCustomEvent ??
+      class<T = unknown> extends Event {
+        detail: T;
+        constructor(type: string, init?: CustomEventInit<T>) {
+          super(type);
+          this.detail = init?.detail as T;
+        }
+      };
+
+    (globalThis as any).CustomEvent = customEvent;
+    (globalThis as any).window = {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+    };
+
+    try {
+      window.addEventListener('opengis:assets-refresh', listener);
+      const resp = await d.handleRequest(req('rpc.ui.fs.refresh_assets', {
+        path: '/tmp/result.geojson',
+        reason: 'write_file',
+      }));
+      window.removeEventListener('opengis:assets-refresh', listener);
+
+      expect(resp).toMatchObject({ result: { success: true } });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]?.[0]).toMatchObject({
+        detail: { path: '/tmp/result.geojson', reason: 'write_file' },
+      });
+    } finally {
+      (globalThis as any).window = previousWindow;
+      (globalThis as any).CustomEvent = previousCustomEvent;
+    }
+  });
+});
+
+describe('rpc.ui.chat.plan_update', () => {
+  it('creates a renderable MessagePart-backed plan card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.plan_update', {
+      plan_id: 'workflow-test',
+      title: 'Workflow Test',
+      workflow: true,
+      run_id: 'run-1',
+      steps: [{ id: 'step1', title: 'Load data', status: 'in_progress' }],
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const conv = useChatStore.getState().activeConversation();
+    expect(conv?.messages).toHaveLength(1);
+    const msg = conv!.messages[0];
+    expect(msg.say).toBe('plan');
+    expect(msg.planData?.workflow).toBe(true);
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'plan:workflow-test',
+      type: 'plan',
+      status: 'running',
+      data: { planData: expect.objectContaining({ planId: 'workflow-test' }) },
+    });
+    expect(useChatStore.getState().workflowPlanActive).toBe(true);
+  });
+});
+
+describe('rpc.ui.chat.subagent_update', () => {
+  it('creates a renderable MessagePart-backed subagent card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.subagent_update', {
+      subagent_id: 'sub-1',
+      status: 'running',
+      parallel: false,
+      run_id: 'run-1',
+      tasks: [{ title: 'Inspect dataset', status: 'running' }],
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const msg = useChatStore.getState().activeConversation()!.messages[0];
+    expect(msg.say).toBe('subagent');
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'subagent:sub-1',
+      type: 'progress',
+      status: 'running',
+      data: {
+        kind: 'subagent',
+        subagentData: expect.objectContaining({ subagentId: 'sub-1' }),
+      },
+    });
+  });
+});
+
+describe('rpc.ui.chat.interactive_snapshot', () => {
+  it('creates a renderable MessagePart-backed screenshot approval card', async () => {
+    useChatStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isStreaming: false,
+      isCancelling: false,
+      workflowPlanActive: false,
+      _persistenceReady: false,
+    });
+    useChatStore.getState().createConversation();
+
+    const reg = new HandlerRegistry();
+    registerAllHandlers(reg);
+    const d = new Dispatcher({ registry: reg });
+
+    const resp = await d.handleRequest(req('rpc.ui.chat.interactive_snapshot', {
+      request_id: 'shot-1',
+      save_path: '/tmp/shot.png',
+      prompt: 'Capture map',
+    }));
+
+    expect(resp).toMatchObject({ result: { ok: true } });
+    const msg = useChatStore.getState().activeConversation()!.messages[0];
+    expect(msg.say).toBe('screenshot');
+    expect(msg.parts?.[0]).toMatchObject({
+      id: 'screenshot:shot-1',
+      type: 'approval',
+      status: 'pending',
+      data: {
+        kind: 'screenshot',
+        screenshotData: expect.objectContaining({ requestId: 'shot-1' }),
+      },
+    });
   });
 });

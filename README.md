@@ -105,8 +105,8 @@ Subprocess Runner (python -u -m ..._subprocess_runner)  ← 每个 agent run 一
 |---|---|---|---|
 | Renderer | Chromium / React 18 + TS 5 | UI、地图、Zustand Store、反向 RPC 处理 | `src/features/`、`src/stores/`、`src/services/rpc/`、`src/services/pythonClient.ts` |
 | Main | Electron 30 + Node | 窗口、文件 IO、设置持久化、Python 生命周期管理 | `electron/main.ts`、`electron/ipc/pythonManager.ts`、`electron/preload.ts` |
-| Sidecar | Python 3.11 + FastAPI + uvicorn + litellm | JSON-RPC 路由、Agent / Workflow 引擎、Skill / Workspace / Run 归档 | `python-backend/opengis_backend/server.py`、`rpc_handler.py`、`agent/`、`workspace/`、`runs/`、`skills/` |
-| Sandbox 子进程 | Python 解释器（per-run） | 真正 exec LLM 写出来的代码 | `python-backend/opengis_backend/agent/_subprocess_runner.py` |
+| Sidecar | Python 3.11 + FastAPI + uvicorn + litellm | JSON-RPC 路由、Agent / Workflow 引擎、Tool / Skill / Workspace / Run 归档 | `python-backend/opengis_backend/server.py`、`rpc/handler.py`、`agent/`、`workspace/`、`runs/`、`tools/`、`skills/` |
+| Sandbox 子进程 | Python 解释器（per-run） | 真正 exec LLM 写出来的代码 | `python-backend/opengis_backend/agent/execution/subprocess_runner.py` |
 
 启动时序（来自 `pythonManager.ts` + `server.py` 真实代码）：
 
@@ -159,43 +159,38 @@ self._method_handlers = {
 
 **鉴权深度防护**：token 是 sidecar 启动时一次性生成的，Main 进程用正则截 stdout 拿到，再通过 `contextBridge` 暴露给 Renderer。`secrets.token_urlsafe(32)` ≈ 256 bit 熵，加上服务只 listen `127.0.0.1`，构成"绑回环 + 一次性 token"双层防御，杜绝同机其它进程嗅探到端口后挂上来。
 
-### 2.3 Agent 引擎：Hybrid CodeAct Agent Loop
+### 2.3 Agent 引擎：Function-Call Agent Loop
 
 <p align="center">
-  <img src="resources/assets/agentloop.png" alt="Hybrid CodeAct Agent Loop 内部流程" width="100%" />
+  <img src="resources/assets/agentloop.png" alt="Function-call Agent Loop 内部流程" width="100%" />
 </p>
 
-整套 Agent 引擎写在 `agent/agent_loop.py`，核心是一个数据类 `AgentLoop` + 一个 4 状态流式解析器 `StreamingParser`。
+Agent 引擎现在按职责拆成 `agent/loop/`、`agent/execution/`、`agent/context/`、`agent/session/`、`agent/telemetry/`、`agent/workflow/` 和 `agent/governance/`。普通对话入口是 `agent/loop/agent_loop.py`，每轮调度由 `agent/loop/turn_runner.py` 和 `agent/loop/loop_kernel.py` 承担；Python 执行、工具 schema、工具运行时在 `agent/execution/` 下集中管理。
 
-#### 2.3.1 为什么是 CodeAct
+#### 2.3.1 为什么以 Function Call 为主
 
 主流 Agent 范式有两条路线：
 
 - **JSON tool call**（OpenAI function calling、Toolformer）——LLM 输出结构化 JSON，框架按 schema 路由到工具；
 - **CodeAct**（[Wang et al. 2024](https://arxiv.org/abs/2402.01030)，Claude Code / OpenHands / Cline）——LLM 输出 ` ```python` 代码块，框架直接 exec。
 
-GIS 场景里，预定义 tool 的 schema 数量永远追不上 long-tail 需求（"用 GNNWR 做加权回归"、"用 whitebox 算 SCA"……），CodeAct 把"工具空间"从有限 schema 扩展到"整个 Python 生态"。OpenGIS 完整走 CodeAct 路线，连 `final_answer` 也是子进程里的一个 stub 函数（见 §2.6）。
+OpenGIS 现在以 function call 为主：工具都有明确 schema、权限、前端展示协议和事件日志。Python 代码执行仍然作为一个受控工具保留，用来覆盖 GIS 长尾分析场景（例如临时安装包、批处理数据、绘图、空间统计），但普通工具调用不再依赖从自然语言里解析代码块。
 
-#### 2.3.2 4 状态流式解析器
+#### 2.3.2 MessagePart 事件流
 
-LLM 一边吐 token、UI 就要一边把 thought 和 code 分开渲染。`StreamingParser` 是个状态机，支持任意语言围栏（` ```python`、` ```bash`、` ```json` 等，agent 始终以 Python 执行）：
-
-```
-thought ──`──► in_fence_open ──```python\n──► code ──`──► in_fence_close ──```\n──► thought
-                       └─其他字符─► thought（吐回缓冲）        └─其他字符─► code（继续追加）
-```
+后端将模型输出、reasoning、tool call、tool output、Python 代码、artifact、plan、subagent、error 等统一投影为 `MessagePart[]`。前端 Chat 直接渲染 MessagePart，不再从文本 envelope 中推断状态。这样做的目标是让普通回复、工具调用、代码执行、workflow 和 worker 反馈共享同一套展示协议。
 
 #### 2.3.3 一次循环的真实流程
 
-`AgentLoop.run()` 是个同步函数（被 `asyncio.to_thread` 包起来跑）。一次完整循环：
+一次完整循环：
 
 1. `context.build_messages(self.system_prompt)` → 拼出本轮 messages（含历史 + 系统 prompt + 必要时压缩过的摘要）；
-2. `self.llm_call(messages, on_delta=parser.feed)` → 调 LLM，token 流过 `StreamingParser.feed()` 即时分发；
-3. 流结束 `parser.finish()`，再用 `_CODE_FENCE_RE` regex 兜底提取 code（流式解析失败时仍能 fallback）；
-4. **没代码 = 隐式完成**：LLM 自己决定停下来纯文本回复，触发 `on_reasoning_promote`，把"思考气泡"升级为"正式回答气泡"，循环退出；
-5. **有代码 = 一步动作**：`executor_call(code_block)` 把代码扔给子进程跑，拿回 `CodeExecResult(output, logs, error, is_final_answer)`；
-6. `is_final_answer=True`（子进程里调了 `final_answer(...)`）→ 显式完成，退出；
-7. 否则把 `(code, output)` 写回 context，`should_compress()` 检查是否需要压缩历史，循环到第 1 步。
+2. `llm_call(...)` 发起模型请求，流式文本直接进入 MessagePart，function call 进入工具调度；
+3. `TurnRunner` 校验工具参数、权限和执行策略；
+4. 普通工具由 `ToolRuntime` 调用，Python 代码由 sandbox 子进程执行；
+5. 工具结果写回上下文，同时通过事件日志推送给前端；
+6. 模型无后续工具调用时，最终文本完成，loop 退出；
+7. 每轮结束后检查上下文压缩、记忆投影、脚本归档和 run 事件持久化。
 
 终止条件三选一：**隐式完成 / 显式 `final_answer` / 步数上限**（默认 `DEFAULT_MAX_ITERATIONS=10`，外加 `AGENT_LOOP_SAFETY_MULTIPLIER=2` 安全倍乘 → 实际硬顶 20 步，触顶后 LLM 自己写一段总结）。这个策略和 Claude Code / OpenHands / Cline 完全对齐，不再额外发一次"你完成了吗"的自评估调用，节省一倍 LLM 成本。
 
@@ -224,7 +219,7 @@ OpenGIS 的记忆分为四层：
 
 ### 2.5 Workflow Loop：DAG 驱动的多步 Agent
 
-`agent/workflow_loop.py` 把"线性聊天 Agent"扩展成"按 DAG 编排的多步 Agent"，前端 `WorkflowEditorView` 编辑生成 `.flow.json`，附带到聊天里就自动切换执行模式。
+`agent/loop/workflow_loop.py` 把"线性聊天 Agent"扩展成"按 DAG 编排的多步 Agent"，workflow 的构建和模型位于 `agent/workflow/`。前端 `WorkflowEditorView` 编辑生成 `.flow.json`，附带到聊天里就自动切换执行模式。
 
 数据结构：
 
@@ -314,8 +309,8 @@ def stub(*args, **kwargs):
 
 #### 2.5.5 单 run 预算与并发锁
 
-- **per-run timeout**：`SubprocessExecutorConfig.exec_timeout`，默认 600s（`DEFAULT_EXEC_TIMEOUT`），最大 3600s（`MAX_EXEC_TIMEOUT`）、最小 1s（`MIN_EXEC_TIMEOUT`），见 `constants.py`；
-- **per-workspace 串行锁**：`rpc_handler.py` 里 `_workspace_locks: dict[str, str]`（workspace_path → owner run_id），新请求若发现该 workspace 已有活跃 run，直接返回 `{"status": "busy", "owner_run_id": ...}` 而不是排队，避免 cwd / archive 目录竞态；
+- **per-run timeout**：`SubprocessExecutorConfig.exec_timeout`，默认 600s（`DEFAULT_EXEC_TIMEOUT`），最大 3600s（`MAX_EXEC_TIMEOUT`）、最小 1s（`MIN_EXEC_TIMEOUT`），见 `runtime/constants.py`；
+- **per-workspace 串行锁**：`rpc/handler.py` 里 `_workspace_locks: dict[str, str]`（workspace_path → owner run_id），新请求若发现该 workspace 已有活跃 run，直接返回 `{"status": "busy", "owner_run_id": ...}` 而不是排队，避免 cwd / archive 目录竞态；
 - **真杀进程树**：cancel 走 `executor.interrupt()` → `executor.cleanup()`，Windows 走 `CTRL_BREAK_EVENT` + `taskkill /F /T /PID`，POSIX 走 `SIGTERM → 5s → SIGKILL`，确保子进程的子进程（`pip install` fork 出的 build worker 之类）也一起清掉。
 
 ### 2.7 Workspace + Run：事中可中断 + 事后可回滚

@@ -23,9 +23,11 @@ import { PinnedImagePanel } from './PinnedImagePanel'
 export function MapView({
   onToggleFullscreen,
   isFullscreen = false,
+  showControls = true,
 }: {
   onToggleFullscreen?: () => void
   isFullscreen?: boolean
+  showControls?: boolean
 } = {}) {
   const t = useT()
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -42,6 +44,7 @@ export function MapView({
   // init effect (initial seed) and the layer-sync effect (diff-based
   // add/remove). Must be declared before the effects that reference it.
   const prevLayerIdsRef = useRef<string[]>([])
+  const prevLayerDataRef = useRef<Map<string, unknown>>(new Map())
   /**
    * 记录每个 layer 上次挂上去时的 renderType。renderType 发生变化时
    * （e.g. fill → graduated、circle → cluster），MapLibre 的 layer type
@@ -137,13 +140,14 @@ export function MapView({
     // actually on the map. If this callback silently adds layers without
     // updating the ref, the later layer-sync effect's diff will never see
     // them in `prevIds` and therefore never fire `removeMapLayer` when
-    // they get removed from the store. (Stage 3.9 bug: "删除图层但地图
+    // they get removed from the store. This prevents "删除图层但地图
     // 还在".)
     map.on('load', () => {
       const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
       for (const layer of currentLayers) {
         mapEngine.syncLayer(layer)
         prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
+        prevLayerDataRef.current.set(layer.id, layer.data)
       }
       prevLayerIdsRef.current = currentLayers.map((l) => l.id)
       
@@ -165,6 +169,7 @@ export function MapView({
         mapEngine.syncLayer(layer)
         mapEngine.setLayerVisibility(layer.id, layer.visible)
         prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
+        prevLayerDataRef.current.set(layer.id, layer.data)
       }
       prevLayerIdsRef.current = currentLayers.map((l) => l.id)
       mapEngine.applyLayerOrder(currentLayers.map((l) => l.id))
@@ -178,6 +183,7 @@ export function MapView({
       // Reset so a subsequent remount starts clean.
       prevLayerIdsRef.current = []
       prevRenderTypeRef.current.clear()
+      prevLayerDataRef.current.clear()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -229,22 +235,23 @@ export function MapView({
     prevBasemapRef.current = basemap.id
 
     mapEngine.setBasemap(basemap)
-
-    // Re-sync all layers after basemap change (style.load event clears them).
-    // Same reason as the init effect: keep `prevLayerIdsRef` aligned with
-    // what's actually on the map, otherwise the next remove will no-op.
-    const map = mapEngine.getMap()
-    if (map) {
-      map.once('style.load', () => {
-        const currentLayers = useMapStore.getState().layers.filter((l) => !l.extension)
-        for (const layer of currentLayers) {
-          mapEngine.syncLayer(layer)
-          prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
-        }
-        prevLayerIdsRef.current = currentLayers.map((l) => l.id)
-      })
-    }
   }, [basemap])
+
+  // ─── Sync restored/persisted view state to MapLibre ────────────
+
+  useEffect(() => {
+    const map = mapEngine.getMap()
+    if (!map) return
+    const center = map.getCenter()
+    const sameCamera =
+      Math.abs(center.lng - viewState.center[0]) < 1e-7 &&
+      Math.abs(center.lat - viewState.center[1]) < 1e-7 &&
+      Math.abs(map.getZoom() - viewState.zoom) < 1e-5 &&
+      Math.abs(map.getBearing() - viewState.bearing) < 1e-5 &&
+      Math.abs(map.getPitch() - viewState.pitch) < 1e-5
+    if (sameCamera) return
+    mapEngine.jumpTo(viewState)
+  }, [viewState])
 
   // ─── Sync basemap visibility ─────────────────────────────────
 
@@ -327,9 +334,9 @@ export function MapView({
       // Remove layers that are no longer in the store
       for (const id of prevIds) {
         if (!currentIds.has(id)) {
-          console.log('[MapView] Removing layer from map:', id)
           mapEngine.removeMapLayer(id)
           prevRenderTypeRef.current.delete(id)
+          prevLayerDataRef.current.delete(id)
         }
       }
 
@@ -338,27 +345,26 @@ export function MapView({
         const prevRenderType = prevRenderTypeRef.current.get(layer.id)
         if (!prevIds.has(layer.id)) {
           // New layer — add to map
-          console.log('[MapView] Adding new layer to map:', layer.id, layer.name)
           mapEngine.syncLayer(layer)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
+          prevLayerDataRef.current.set(layer.id, layer.data)
         } else if (prevRenderType && prevRenderType !== layer.style.renderType) {
           // renderType switched (e.g. fill → graduated, circle → cluster).
           // MapLibre layer types are immutable, so we MUST remove + re-add;
           // renderer.update() is for paint-only hot patches.
-          console.log(
-            '[MapView] renderType changed for',
-            layer.id,
-            prevRenderType,
-            '→',
-            layer.style.renderType,
-            '— rebuild',
-          )
           mapEngine.removeRenderLayersOnly(layer.id)
           mapEngine.syncLayer(layer)
           mapEngine.setLayerVisibility(layer.id, layer.visible)
           prevRenderTypeRef.current.set(layer.id, layer.style.renderType)
+          prevLayerDataRef.current.set(layer.id, layer.data)
         } else {
-          // Existing layer, same renderType — hot-patch visibility/paint.
+          // Existing layer, same renderType. Worker-driven dynamic updates
+          // replace layer.data while keeping renderType stable; the GeoJSON
+          // source still needs setData/updateData before paint hot patches.
+          if (prevLayerDataRef.current.get(layer.id) !== layer.data) {
+            mapEngine.syncLayer(layer)
+            prevLayerDataRef.current.set(layer.id, layer.data)
+          }
           mapEngine.setLayerVisibility(layer.id, layer.visible)
           mapEngine.updateLayerPaint(layer)
         }
@@ -447,6 +453,7 @@ export function MapView({
       <div ref={mapContainer} className="w-full h-full" />
 
       {/* Map overlay controls */}
+      {showControls && (
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
         <div className="glass rounded-lg px-3 py-1.5 text-xs text-text-secondary">
           <span className="text-accent-geo font-display font-semibold">OpenGIS</span>
@@ -507,6 +514,7 @@ export function MapView({
           </button>
         )}
       </div>
+      )}
 
       {/* Feature Attribute Panel (single-click identify) */}
       <FeatureAttributePanel

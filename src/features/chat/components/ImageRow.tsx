@@ -1,17 +1,18 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { MapPin, Maximize2, X, Check, Loader2 } from 'lucide-react'
-import type { UIMessage } from '@/types/chat'
+import { MapPin, Maximize2, X, Check, Loader2, ImageOff } from 'lucide-react'
 import { useMapStore } from '@/stores/mapStore'
 import type { PinnedImage } from '@/features/map/PinnedImagePanel'
-import { pathToImageUrl } from '@/services/rpc/handlers/_image_url'
+import { pathToImageUrl, releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 interface ImageRowProps {
-  message: UIMessage
+  images?: string[]
+  files?: string[]
+  caption?: string
 }
 
-/**
+ /**
  * ImageRow — renders an inline image (matplotlib plot etc.) emitted by
- * the backend `save_plot` skill via `rpc.ui.chat.show_image`.
+ * the backend `save_plot` tool via `rpc.ui.chat.show_image`.
  *
  * Wire-up:
  *   - `message.images[0]` is the Blob URL the chat handler created from
@@ -21,9 +22,8 @@ interface ImageRowProps {
  * Pin button adds a draggable floating image window on the map
  * (via mapStore.addPinnedImage), preserving the original aspect ratio.
  */
-export const ImageRow = memo(({ message }: ImageRowProps) => {
-  const images = message.images ?? []
-  const path = message.files?.[0]
+export const ImageRow = memo(({ images = [], files = [], caption = '' }: ImageRowProps) => {
+  const path = files[0]
   const storedUrl = images[0]
 
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(storedUrl)
@@ -35,10 +35,19 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
   useEffect(() => {
     if (!path) return
     let cancelled = false
+    let acquired = false
     pathToImageUrl(path).then((url) => {
-      if (!cancelled) setResolvedUrl(url)
+      acquired = true
+      if (cancelled) {
+        releaseImageUrl(path)
+        return
+      }
+      setResolvedUrl(url)
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (acquired) releaseImageUrl(path)
+    }
   }, [path])
 
   const url = resolvedUrl
@@ -67,21 +76,30 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
     }
   }, [path, url, pinState])
 
-  if (!url) return null
+  if (!url) {
+    return (
+      <div className="mt-1 mb-1.5 flex w-full justify-center">
+        <div className="w-full max-w-[min(560px,100%)] rounded-lg border border-border/20 bg-bg-tertiary/40 px-3 py-2 text-[12px] text-text-muted flex items-center gap-2">
+          <ImageOff className="w-3.5 h-3.5" />
+          <span>Loading chart preview…</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
-      <div className="ml-[30px] mt-1 mb-1.5">
-        <div className="relative inline-block group max-w-full">
+      <div className="mt-1 mb-1.5 flex w-full justify-center">
+        <div className="relative group w-full max-w-[min(560px,100%)]">
           <img
             src={url}
-            alt={message.text || 'plot'}
-            className="max-w-[420px] max-h-[320px] rounded-xl border border-border/60 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
+            alt={caption || 'plot'}
+            className="block h-auto max-h-[360px] w-full max-w-full rounded-xl border border-border/20 shadow-sm cursor-zoom-in object-contain bg-bg-tertiary/40"
             onClick={() => setPreviewOpen(true)}
           />
 
-          {/* Hover toolbar */}
-          <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          {/* Toolbar: keep Pin visible so chart -> map remains discoverable. */}
+          <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-95 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               type="button"
               onClick={handlePin}
@@ -116,13 +134,13 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
               <Maximize2 className="w-3 h-3" />
             </button>
           </div>
-        </div>
 
-        {message.text && (
-          <p className="text-[12px] text-text-muted mt-1 max-w-[420px] leading-relaxed">
-            {message.text}
-          </p>
-        )}
+          {caption && (
+            <p className="text-[12px] text-text-muted mt-1 leading-relaxed text-center">
+              {caption}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Lightbox preview */}
@@ -140,7 +158,7 @@ export const ImageRow = memo(({ message }: ImageRowProps) => {
           </button>
           <img
             src={url}
-            alt={message.text || 'plot'}
+            alt={caption || 'plot'}
             className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />

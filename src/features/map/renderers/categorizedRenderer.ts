@@ -14,11 +14,18 @@ import type {
   GeoJSONFeatureCollection,
   MapLayerDefinition,
 } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   type LayerRenderer,
   renderLayerId,
   sourceIdFor,
 } from './types'
+import {
+  compileNumericVisualVariable,
+  hoverColorExpr,
+  hoverNumberExpr,
+  hoverOpacityExpr,
+} from './styleExpressions'
 
 // Tableau 10 — 常用分类配色
 const DEFAULT_PALETTE = [
@@ -64,7 +71,20 @@ export const categorizedRenderer: LayerRenderer = {
     // 存入缓存，不再直接修改 def.style
     categorizedCache.set(def.id, resolved)
 
-    const hoverExpr = (orig: any) => ['case', ['boolean', ['feature-state', 'hover'], false], '#6366f1', orig]
+    const fillOpacity = def.style.fillOpacity ?? def.style.opacity
+    const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, fillOpacity, {
+      defaultRange: [0.15, fillOpacity],
+      clampRange: [0, 1],
+    })
+    const pointRadius = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.radius ?? 5, {
+      defaultRange: [3, 14],
+    })
+    const lineWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
+      defaultRange: [1, 8],
+    })
+    const strokeWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
+      defaultRange: [0.5, 6],
+    })
 
     if (geomRenderType === 'fill') {
       ctx.addRenderLayer({
@@ -73,13 +93,8 @@ export const categorizedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'fill-color': hoverExpr(colorExpr),
-          'fill-opacity': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            Math.min((def.style.fillOpacity ?? def.style.opacity) + 0.25, 0.85),
-            def.style.fillOpacity ?? def.style.opacity,
-          ] as any,
+          'fill-color': hoverColorExpr(colorExpr, '#6366f1') as any,
+          'fill-opacity': hoverOpacityExpr(opacity as any, fillOpacity) as any,
         },
       })
       ctx.registerRenderLayerId(def.id, mainLayerId)
@@ -91,19 +106,10 @@ export const categorizedRenderer: LayerRenderer = {
           source: sourceId,
           layout: { visibility },
           paint: {
-            'line-color': [
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              '#818cf8',
-              def.style.strokeColor || '#555',
-            ] as any,
-            'line-width': [
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              (def.style.strokeWidth ?? 1) + 2,
-              def.style.strokeWidth,
-            ] as any,
+            'line-color': hoverColorExpr(def.style.strokeColor || '#555', '#818cf8') as any,
+            'line-width': hoverNumberExpr(strokeWidth as any, 2) as any,
             'line-opacity': def.style.opacity,
+            ...(def.style.lineDasharray ? { 'line-dasharray': def.style.lineDasharray } : {}),
           },
         })
         ctx.registerRenderLayerId(def.id, strokeId)
@@ -115,20 +121,10 @@ export const categorizedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'circle-color': hoverExpr(colorExpr),
-          'circle-radius': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            (def.style.radius ?? 5) + 3,
-            def.style.radius ?? 5,
-          ] as any,
-          'circle-opacity': def.style.opacity,
-          'circle-stroke-color': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            '#818cf8',
-            def.style.strokeColor,
-          ] as any,
+          'circle-color': hoverColorExpr(colorExpr, '#6366f1') as any,
+          'circle-radius': hoverNumberExpr(pointRadius as any, 3) as any,
+          'circle-opacity': opacity as any,
+          'circle-stroke-color': hoverColorExpr(def.style.strokeColor, '#818cf8') as any,
           'circle-stroke-width': [
             'case',
             ['boolean', ['feature-state', 'hover'], false],
@@ -145,14 +141,10 @@ export const categorizedRenderer: LayerRenderer = {
         source: sourceId,
         layout: { visibility },
         paint: {
-          'line-color': hoverExpr(colorExpr),
-          'line-width': [
-            'case',
-            ['boolean', ['feature-state', 'hover'], false],
-            (def.style.strokeWidth ?? 1) + 3,
-            def.style.strokeWidth,
-          ] as any,
-          'line-opacity': def.style.opacity,
+          'line-color': hoverColorExpr(colorExpr, '#6366f1') as any,
+          'line-width': hoverNumberExpr(lineWidth as any, 3) as any,
+          'line-opacity': opacity as any,
+          ...(def.style.lineDasharray ? { 'line-dasharray': def.style.lineDasharray } : {}),
         },
       })
       ctx.registerRenderLayerId(def.id, mainLayerId)
@@ -170,7 +162,20 @@ export const categorizedRenderer: LayerRenderer = {
     const { colorExpr, resolved } = buildCategorized(def)
     categorizedCache.set(def.id, resolved)
 
-    const hoverExpr = (orig: any) => ['case', ['boolean', ['feature-state', 'hover'], false], '#6366f1', orig]
+    const fillOpacity = def.style.fillOpacity ?? def.style.opacity
+    const opacity = compileNumericVisualVariable(def, def.style.opacityVariable, fillOpacity, {
+      defaultRange: [0.15, fillOpacity],
+      clampRange: [0, 1],
+    })
+    const pointRadius = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.radius ?? 5, {
+      defaultRange: [3, 14],
+    })
+    const lineWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
+      defaultRange: [1, 8],
+    })
+    const strokeWidth = compileNumericVisualVariable(def, def.style.sizeVariable, def.style.strokeWidth ?? 1, {
+      defaultRange: [0.5, 6],
+    })
 
     // Update color expression with hover wrapper
     const prop =
@@ -179,29 +184,27 @@ export const categorizedRenderer: LayerRenderer = {
         : geomRenderType === 'circle'
           ? 'circle-color'
           : 'line-color'
-    ctx.map.setPaintProperty(mainLayerId, prop, hoverExpr(colorExpr))
+    ctx.map.setPaintProperty(mainLayerId, prop, hoverColorExpr(colorExpr, '#6366f1') as any)
 
     // Sync common paint properties with hover support
     if (geomRenderType === 'fill') {
-      ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', [
-        'case', ['boolean', ['feature-state', 'hover'], false],
-        Math.min((def.style.fillOpacity ?? def.style.opacity) + 0.25, 0.85),
-        def.style.fillOpacity ?? def.style.opacity,
-      ] as any)
+      ctx.map.setPaintProperty(mainLayerId, 'fill-opacity', hoverOpacityExpr(opacity as any, fillOpacity) as any)
       const strokeId = renderLayerId(def.id, 'stroke')
       if (ctx.map.getLayer(strokeId)) {
-        ctx.map.setPaintProperty(strokeId, 'line-color', ['case', ['boolean', ['feature-state', 'hover'], false], '#818cf8', def.style.strokeColor || '#555'] as any)
-        ctx.map.setPaintProperty(strokeId, 'line-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 1) + 2, def.style.strokeWidth] as any)
+        ctx.map.setPaintProperty(strokeId, 'line-color', hoverColorExpr(def.style.strokeColor || '#555', '#818cf8') as any)
+        ctx.map.setPaintProperty(strokeId, 'line-width', hoverNumberExpr(strokeWidth as any, 2) as any)
         ctx.map.setPaintProperty(strokeId, 'line-opacity', def.style.opacity)
+        ctx.map.setPaintProperty(strokeId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
       }
     } else if (geomRenderType === 'circle') {
-      ctx.map.setPaintProperty(mainLayerId, 'circle-radius', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.radius ?? 5) + 3, def.style.radius ?? 5] as any)
-      ctx.map.setPaintProperty(mainLayerId, 'circle-opacity', def.style.opacity)
-      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', ['case', ['boolean', ['feature-state', 'hover'], false], '#818cf8', def.style.strokeColor] as any)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-radius', hoverNumberExpr(pointRadius as any, 3) as any)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-opacity', opacity as any)
+      ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-color', hoverColorExpr(def.style.strokeColor, '#818cf8') as any)
       ctx.map.setPaintProperty(mainLayerId, 'circle-stroke-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 0) + 2, def.style.strokeWidth] as any)
     } else {
-      ctx.map.setPaintProperty(mainLayerId, 'line-width', ['case', ['boolean', ['feature-state', 'hover'], false], (def.style.strokeWidth ?? 1) + 3, def.style.strokeWidth] as any)
-      ctx.map.setPaintProperty(mainLayerId, 'line-opacity', def.style.opacity)
+      ctx.map.setPaintProperty(mainLayerId, 'line-width', hoverNumberExpr(lineWidth as any, 3) as any)
+      ctx.map.setPaintProperty(mainLayerId, 'line-opacity', opacity as any)
+      ctx.map.setPaintProperty(mainLayerId, 'line-dasharray', def.style.lineDasharray ?? [1, 0])
     }
   },
 
@@ -265,6 +268,16 @@ function buildCategorized(def: MapLayerDefinition): {
   if (!colors || Object.keys(colors).length === 0) {
     colors = autoCategorize(def, cfg.field, cfg.maxCategories ?? 12)
   }
+  if (cfg.categories?.length) {
+    const ordered: Record<string, string> = {}
+    for (const value of cfg.categories) {
+      if (colors[value]) ordered[value] = colors[value]
+    }
+    for (const [value, color] of Object.entries(colors)) {
+      if (!(value in ordered)) ordered[value] = color
+    }
+    colors = ordered
+  }
 
   const entries = Object.entries(colors)
   if (entries.length === 0) {
@@ -292,7 +305,7 @@ function autoCategorize(
   maxCategories: number,
 ): Record<string, string> {
   if (def.data.kind !== 'vector') return {}
-  const fc = def.data.geojson as GeoJSONFeatureCollection
+  const fc = resolveVectorGeoJSON(def.data) as GeoJSONFeatureCollection
   const counts = new Map<string, number>()
 
   for (const f of fc.features) {

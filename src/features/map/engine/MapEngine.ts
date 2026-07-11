@@ -21,12 +21,14 @@
  */
 import maplibregl from 'maplibre-gl'
 import type { MapLayerDefinition, BasemapSource, ParsedVectorData } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 import {
   getRenderer,
-  type LayerRenderer,
   type RendererContext,
+  renderLayerId,
   sourceIdFor,
 } from '../renderers'
+import { compileLayerFilter } from '../renderers/styleExpressions'
 
 /** 底图样式重新加载完成后的回调函数 */
 export type StyleReloadCallback = () => void
@@ -44,6 +46,14 @@ export interface MapEngineOptions {
   bearing: number
   pitch: number
   onMoveEnd?: (center: [number, number], zoom: number, bearing: number, pitch: number) => void
+}
+
+export interface CameraUpdate {
+  center?: [number, number]
+  zoom?: number
+  bearing?: number
+  pitch?: number
+  duration?: number
 }
 
 // ─── MapEngine 类 ──────────────────────────────────────
@@ -110,10 +120,7 @@ export class MapEngine {
     // 添加控件
     this.map.addControl(new maplibregl.NavigationControl(), 'top-right')
     this.map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
-    this.map.addControl(
-      new maplibregl.AttributionControl({ compact: true }),
-      'bottom-right'
-    )
+    // AttributionControl removed — copyright info is in the basemap source config
 
     // 在地图移动结束时同步视图状态回调
     this.moveEndHandler = () => {
@@ -347,10 +354,15 @@ export class MapEngine {
     const savedBearing = this.map.getBearing()
     const savedPitch = this.map.getPitch()
 
-    this.map.setStyle(style)
+    const map = this.map
+    let styleReloadHandled = false
 
-    // 样式加载后恢复 camera 并重新添加用户图层
-    this.map.once('style.load', () => {
+    // 样式加载后恢复 camera 并重新添加用户图层。监听必须在 setStyle
+    // 之前注册：内联 raster style 可能很快完成加载，先 setStyle 再 once
+    // 会错过 style.load，导致用户图层没有重挂。
+    const handleStyleReload = () => {
+      if (styleReloadHandled || this.map !== map) return
+      styleReloadHandled = true
       // 恢复 camera
       this.map?.jumpTo({
         center: savedCenter,
@@ -382,6 +394,15 @@ export class MapEngine {
       // 通知 MapView 将所有用户图层重新同步到新样式
       if (this.onStyleReload) {
         this.onStyleReload()
+      }
+    }
+
+    map.once('style.load', handleStyleReload)
+    map.setStyle(style)
+
+    queueMicrotask(() => {
+      if (this.map === map && map.isStyleLoaded()) {
+        handleStyleReload()
       }
     })
   }
@@ -454,6 +475,8 @@ export class MapEngine {
     }
 
     renderer.attach(layer, ctx)
+    this.syncLabelLayer(layer)
+    this.applyLayerFilter(layer)
   }
 
   /**
@@ -492,13 +515,6 @@ export class MapEngine {
       this.map.removeSource(sourceId)
     }
     this.managedSourceIds.delete(sourceId)
-
-    console.log(
-      '[MapEngine] Removed layer:',
-      layerId,
-      'render-layers:',
-      layerIdsToRemove,
-    )
   }
 
   /**
@@ -526,13 +542,6 @@ export class MapEngine {
       this.managedLayerIds.delete(id)
       this.renderLayerToDef.delete(id)
     }
-
-    console.log(
-      '[MapEngine] Removed render layers only (kept source):',
-      layerId,
-      'render-layers:',
-      layerIdsToRemove,
-    )
   }
 
   /**
@@ -561,13 +570,84 @@ export class MapEngine {
     const renderer = getRenderer(layer.style.renderType)
     if (!renderer) return
     renderer.update(layer, this.buildRendererContext())
+    this.syncLabelLayer(layer)
+    this.applyLayerFilter(layer)
+  }
+
+  private applyLayerFilter(layer: MapLayerDefinition): void {
+    if (!this.map) return
+    if (layer.style.renderType === 'cluster') return
+    const renderer = getRenderer(layer.style.renderType)
+    if (!renderer) return
+    const compiled = compileLayerFilter(layer.style.filter)
+    for (const renderId of renderer.listRenderLayerIds(layer)) {
+      if (this.map.getLayer(renderId)) {
+        this.map.setFilter(renderId, compiled as any)
+      }
+    }
+    const labelId = renderLayerId(layer.id, 'label')
+    if (this.map.getLayer(labelId)) {
+      this.map.setFilter(labelId, compiled as any)
+    }
+  }
+
+  private syncLabelLayer(layer: MapLayerDefinition): void {
+    if (!this.map || layer.data.kind !== 'vector') return
+    const labelId = renderLayerId(layer.id, 'label')
+    const label = layer.style.label
+    if (!label?.field) {
+      if (this.map.getLayer(labelId)) {
+        this.map.removeLayer(labelId)
+      }
+      this.managedLayerIds.delete(labelId)
+      this.renderLayerToDef.delete(labelId)
+      return
+    }
+
+    const sourceId = sourceIdFor(layer.id)
+    const visibility = layer.visible ? 'visible' : 'none'
+    const layout = {
+      visibility,
+      'text-field': ['to-string', ['get', label.field]],
+      'text-size': label.fontSize ?? 12,
+      'text-anchor': 'center',
+      'text-offset': label.offset ?? [0, 0],
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
+    } as any
+    const paint = {
+      'text-color': label.color ?? layer.style.color,
+      'text-opacity': layer.style.opacity ?? 1,
+      ...(label.haloColor ? { 'text-halo-color': label.haloColor } : {}),
+      ...(label.haloWidth != null ? { 'text-halo-width': label.haloWidth } : {}),
+    } as any
+
+    if (!this.map.getLayer(labelId)) {
+      this.map.addLayer({
+        id: labelId,
+        type: 'symbol',
+        source: sourceId,
+        layout,
+        paint,
+      } as any)
+      this.managedLayerIds.add(labelId)
+      this.renderLayerToDef.set(labelId, layer.id)
+      return
+    }
+
+    for (const [key, value] of Object.entries(layout)) {
+      this.map.setLayoutProperty(labelId, key, value)
+    }
+    for (const [key, value] of Object.entries(paint)) {
+      this.map.setPaintProperty(labelId, key, value)
+    }
   }
 
   /**
    * 重新排序渲染图层。对每个 layer def 取它的 render layer id 列表
    * （通过 renderer.listRenderLayerIds），按 bottom → top 顺序 moveLayer
    *
-   * Stage 3.9 的老实现靠 hard-coded suffix 顺序（fill/line/stroke/circle）
+   * Earlier rendering code relied on hard-coded suffix order（fill/line/stroke/circle）
    * 新版交给 renderer 自己决定顺序：`listRenderLayerIds` 返回的顺序即
    * 从底到顶
    */
@@ -620,9 +700,46 @@ export class MapEngine {
   /**
    * 飞行到指定位置
    */
-  flyTo(center: [number, number], zoom?: number): void {
+  flyTo(center: [number, number], zoom?: number, options?: Omit<CameraUpdate, 'center' | 'zoom'>): void {
     if (!this.map) return
-    this.map.flyTo({ center, zoom: zoom ?? this.map.getZoom() })
+    this.map.flyTo({
+      center,
+      zoom: zoom ?? this.map.getZoom(),
+      bearing: options?.bearing ?? this.map.getBearing(),
+      pitch: options?.pitch ?? this.map.getPitch(),
+      duration: options?.duration,
+      essential: true,
+    })
+  }
+
+  /**
+   * Animate camera fields independently. Useful for switching between
+   * orthographic 2D and oblique 3D views without changing the current center.
+   */
+  setCamera(update: CameraUpdate): void {
+    if (!this.map) return
+    this.map.easeTo({
+      center: update.center ?? this.map.getCenter(),
+      zoom: update.zoom ?? this.map.getZoom(),
+      bearing: update.bearing ?? this.map.getBearing(),
+      pitch: update.pitch ?? this.map.getPitch(),
+      duration: update.duration,
+      essential: true,
+    })
+  }
+
+  /**
+   * Immediately set the camera without animation. Used when restoring a
+   * persisted workspace viewport so startup does not visibly fly from default.
+   */
+  jumpTo(view: { center: [number, number]; zoom: number; bearing: number; pitch: number }): void {
+    if (!this.map) return
+    this.map.jumpTo({
+      center: view.center,
+      zoom: view.zoom,
+      bearing: view.bearing,
+      pitch: view.pitch,
+    })
   }
 
   /**
@@ -685,9 +802,13 @@ export class MapEngine {
 
     const sourceId = sourceIdFor(layer.id)
     const existingSource = this.map.getSource(sourceId) as
-      | (maplibregl.GeoJSONSource & { _options?: { cluster?: boolean } })
+      | (maplibregl.GeoJSONSource & {
+        _options?: { cluster?: boolean }
+        updateData?: (diff: NonNullable<ParsedVectorData['runtimeDiff']>) => maplibregl.GeoJSONSource
+      })
       | undefined
     const vectorData = layer.data as ParsedVectorData
+    const sourceData = resolveVectorGeoJSON(vectorData)
 
     if (existingSource) {
       // MapLibre 的 GeoJSONSource 实例把原始 options 存在 _options 上
@@ -698,17 +819,25 @@ export class MapEngine {
         this.managedSourceIds.delete(sourceId)
         this.map.addSource(sourceId, {
           type: 'geojson',
-          data: vectorData.geojson as any,
+          data: sourceData as any,
           generateId: true,
         })
         this.managedSourceIds.add(sourceId)
         return
       }
-      existingSource.setData(vectorData.geojson as any)
+      if (vectorData.runtimeDiff && vectorData.runtimeDiffUpdateable && typeof existingSource.updateData === 'function') {
+        try {
+          existingSource.updateData(vectorData.runtimeDiff)
+          return
+        } catch (err) {
+          console.warn('[MapEngine] GeoJSONSource.updateData failed, falling back to setData:', err)
+        }
+      }
+      existingSource.setData(sourceData as any)
     } else {
       this.map.addSource(sourceId, {
         type: 'geojson',
-        data: vectorData.geojson as any,
+        data: sourceData as any,
         generateId: true,
       })
       this.managedSourceIds.add(sourceId)
@@ -717,7 +846,7 @@ export class MapEngine {
 
   /**
    * 在渲染模式切换（如 fill → graduated，或 circle → cluster）时，
-   * MapView 需要能主动把旧 renderer 的子层清掉，但保留 source（由 syncLayer
+   * MapView 需要能主动清理 renderer 子层，但保留 source（由 syncLayer
    * 的 ensureGeoJSONSource 负责重用）。单独的 cluster/raster 走 removeMapLayer
    * 全清路径；vector 类之间切换只清子层即可
    *

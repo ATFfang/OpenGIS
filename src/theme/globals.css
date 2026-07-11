@@ -7,23 +7,24 @@
    ============================================ */
 
 :root {
-  /* Dark theme (default) — inspired by VS Code / GitHub Dark */
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #1c2128;
-  --bg-hover: #252c35;
+  /* Dark theme (default) — neutral graphite, with restrained accents. */
+  --bg-primary: #151515;
+  --bg-secondary: #1d1d1d;
+  --bg-sidebar: #1d1d1d;
+  --bg-tertiary: #262626;
+  --bg-hover: #303030;
 
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #5f6573;
+  --text-primary: #e7e7e7;
+  --text-secondary: #a3a3a3;
+  --text-muted: #717171;
 
-  --accent-primary: #3b82f6;
+  --accent-primary: #4f7db8;
   --accent-success: #22c55e;
   --accent-warning: #f59e0b;
   --accent-danger: #ef4444;
-  --accent-geo: #06b6d4;
+  --accent-geo: #2f9aa3;
 
-  --border-color: #2a2f3d;
+  --border-color: #383838;
 
   --sidebar-width: 52px;
   --sidebar-expanded-width: 240px;
@@ -31,22 +32,23 @@
   --titlebar-height: 32px;
 
   /* Orb animation colors */
-  --orb-color-1: rgba(59, 130, 246, 0.75);
-  --orb-color-2: rgba(99, 102, 241, 0.65);
-  --orb-color-3: rgba(6, 182, 212, 0.55);
+  --orb-color-1: rgba(79, 125, 184, 0.62);
+  --orb-color-2: rgba(118, 118, 128, 0.5);
+  --orb-color-3: rgba(47, 154, 163, 0.42);
   --orb-color-4: rgba(34, 197, 94, 0.45);
-  --orb-color-5: rgba(168, 85, 247, 0.6);
+  --orb-color-5: rgba(132, 112, 160, 0.42);
 }
 
 .light {
   --bg-primary: #f8f9fb;
   --bg-secondary: #ffffff;
+  --bg-sidebar: #eff6ff;
   --bg-tertiary: #f0f2f5;
   --bg-hover: #e8eaed;
 
-  --text-primary: #1a1d27;
-  --text-secondary: #5f6573;
-  --text-muted: #9aa0ad;
+  --text-primary: #111827;
+  --text-secondary: #374151;
+  --text-muted: #6b7280;
 
   --accent-primary: #2563eb;
   --accent-success: #16a34a;
@@ -62,6 +64,57 @@
   --orb-color-3: rgba(6, 182, 212, 0.4);
   --orb-color-4: rgba(34, 197, 94, 0.3);
   --orb-color-5: rgba(168, 85, 247, 0.4);
+}
+
+/* Chat status cards: slightly separated from the chat surface. */
+:root {
+  --chat-plan-bg: #242424;
+  --chat-plan-border: #3b3b3b;
+  --chat-subagent-bg: #222525;
+  --chat-subagent-border: #373d3d;
+  --chat-bg: #1b1b1b;
+  --chat-header-bg: rgba(26, 26, 26, 0.88);
+  --chat-footer-bg: #1b1b1b;
+
+  --approval-bg: #292929;
+  --approval-bg-strong: #303030;
+  --approval-bg-muted: #232323;
+  --approval-border: #444444;
+  --approval-shadow: rgba(0, 0, 0, 0.36);
+
+  --worker-surface: #242424;
+  --worker-surface-soft: #2c2c2c;
+  --worker-surface-muted: #1f1f1f;
+
+  --operation-card-bg: #2a2a2a;
+  --operation-card-soft: #303030;
+  --operation-card-muted: #222222;
+  --operation-card-border: #323232;
+}
+
+.light {
+  --chat-plan-bg: #eef1f5;
+  --chat-plan-border: #d9dee7;
+  --chat-subagent-bg: #eaf4f6;
+  --chat-subagent-border: #cfe2e7;
+  --chat-bg: #f8f9fb;
+  --chat-header-bg: rgba(248, 249, 251, 0.86);
+  --chat-footer-bg: #f8f9fb;
+
+  --approval-bg: #e5e7ec;
+  --approval-bg-strong: #dce0e7;
+  --approval-bg-muted: #eef0f4;
+  --approval-border: #c8ced8;
+  --approval-shadow: rgba(31, 41, 55, 0.18);
+
+  --worker-surface: #e9edf3;
+  --worker-surface-soft: #f3f5f8;
+  --worker-surface-muted: #dde3eb;
+
+  --operation-card-bg: #eef1f5;
+  --operation-card-soft: #f6f7fa;
+  --operation-card-muted: #ffffff;
+  --operation-card-border: #d9dee7;
 }
 
 /* ============================================
@@ -88,6 +141,25 @@ body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+[role='button'],
+[contenteditable='true'] {
+  -webkit-app-region: no-drag;
+}
+
+input,
+textarea,
+pre,
+code,
+.select-text,
+[contenteditable='true'] {
+  user-select: text;
 }
 
 /* ============================================
@@ -133,6 +205,30 @@ body {
   -webkit-app-region: no-drag;
 }
 
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-none *::-webkit-scrollbar {
+  display: none;
+}
+
+.operation-workbench {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--operation-card-bg) 35%, transparent), transparent 220px),
+    var(--bg-primary);
+}
+
 /* ============================================
    MapLibre GL Overrides
    ============================================ */
@@ -158,7 +254,7 @@ body {
 
 /* Scale bar */
 .maplibregl-ctrl-scale {
-  background: rgba(18, 21, 28, 0.75) !important;
+  background: rgba(24, 24, 24, 0.75) !important;
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-color) !important;
   border-top: none !important;
@@ -178,6 +274,34 @@ body {
 /* ============================================
    Utility Classes
    ============================================ */
+
+.chat-plan-card {
+  background: var(--chat-plan-bg);
+  border-color: var(--chat-plan-border);
+}
+
+.chat-subagent-card {
+  background: var(--chat-subagent-bg);
+  border-color: var(--chat-subagent-border);
+}
+
+.approval-card {
+  background: var(--approval-bg);
+  border-color: var(--approval-border);
+  box-shadow: 0 20px 60px var(--approval-shadow);
+}
+
+.approval-muted {
+  background: var(--approval-bg-muted);
+}
+
+.approval-strong {
+  background: var(--approval-bg-strong);
+}
+
+.approval-border {
+  border-color: var(--approval-border);
+}
 
 /* ============================================
    Cline-style Chat Animations
@@ -211,6 +335,37 @@ body {
 @keyframes scaleIn {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes board-orb-halo {
+  0%, 100% { transform: rotate(0deg) scale(0.96); opacity: 0.55; }
+  50% { transform: rotate(180deg) scale(1.08); opacity: 0.85; }
+}
+
+@keyframes board-orb-glow {
+  0%, 100% { transform: scale(0.9); opacity: 0.34; }
+  45% { transform: scale(1.18); opacity: 0.62; }
+}
+
+@keyframes board-shell-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes board-shell-conceal {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes board-stage-enter {
+  0% { transform: scale(0.92) translate3d(0, 18px, 0); opacity: 0.62; }
+  72% { transform: scale(1.006) translate3d(0, 0, 0); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes board-stage-exit {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.94) translate3d(0, 14px, 0); opacity: 0; }
 }
 
 /* ─── Siri-like orb keyframes ─── */
@@ -295,6 +450,35 @@ body {
   line-height: 1.6;
 }
 
+/* ── Table styles ── */
+.inline-markdown-block table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.inline-markdown-block th,
+.inline-markdown-block td {
+  border: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.inline-markdown-block th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inline-markdown-block tr:nth-child(even) {
+  background: var(--bg-secondary);
+}
+
+.inline-markdown-block tr:nth-child(odd) {
+  background: var(--bg-primary);
+}
+
 /* Inline cursor container — blinking cursor after last child */
 .inline-cursor-container > :last-child::after {
   content: "";
@@ -373,7 +557,7 @@ body {
 
   .glass {
     backdrop-filter: blur(12px);
-    background: rgba(18, 21, 28, 0.8);
+    background: rgba(24, 24, 24, 0.82);
     border: 1px solid var(--border-color);
   }
 
@@ -391,6 +575,33 @@ body {
     animation: shimmer 5s infinite linear;
   }
 
+  .chat-thinking-text {
+    background-image: linear-gradient(
+      90deg,
+      #2563eb 0%,
+      #0891b2 24%,
+      #0f172a 48%,
+      #0891b2 72%,
+      #2563eb 100%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: shimmer 3.2s infinite linear;
+  }
+
+  .dark .chat-thinking-text {
+    background-image: linear-gradient(
+      90deg,
+      #9ca3af 0%,
+      #c4c4c4 24%,
+      #f5f5f5 48%,
+      #a7b0b2 72%,
+      #9ca3af 100%
+    );
+  }
+
   .animate-fade-in {
     animation: fadeIn 0.4s ease-out forwards;
   }
@@ -405,5 +616,69 @@ body {
 
   .animate-scale-in {
     animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .board-mode-shell {
+    animation: board-shell-reveal 180ms ease-out both;
+  }
+
+  .board-mode-shell--exit {
+    animation: board-shell-conceal 220ms ease-in both;
+  }
+
+  .board-mode-shell__stage {
+    animation: board-stage-enter 420ms cubic-bezier(0.2, 0.86, 0.22, 1) both;
+    transform-origin: calc(100% - 58px) calc(100% - 58px);
+    will-change: transform, opacity;
+  }
+
+  .board-mode-shell--exit .board-mode-shell__stage {
+    animation: board-stage-exit 220ms cubic-bezier(0.32, 0, 0.67, 0) both;
+  }
+
+  .board-mode-shell__map {
+    contain: layout paint;
+  }
+
+  .board-agent-orb__halo {
+    position: absolute;
+    inset: -12px;
+    border-radius: 30px;
+    background:
+      conic-gradient(
+        from 120deg,
+        rgba(79, 125, 184, 0.0),
+        rgba(79, 125, 184, 0.42),
+        rgba(120, 120, 128, 0.34),
+        rgba(132, 112, 160, 0.32),
+        rgba(79, 125, 184, 0.0)
+      );
+    filter: blur(10px);
+    animation: board-orb-halo 7.5s linear infinite;
+  }
+
+  .board-agent-orb__glow {
+    position: absolute;
+    inset: -18px;
+    border-radius: 34px;
+    background: radial-gradient(circle, rgba(120, 120, 128, 0.32), transparent 64%);
+    filter: blur(14px);
+    animation: board-orb-glow 3.8s ease-in-out infinite;
+  }
+
+  .light .board-agent-orb__halo {
+    background:
+      conic-gradient(
+        from 120deg,
+        rgba(37, 99, 235, 0.0),
+        rgba(37, 99, 235, 0.42),
+        rgba(8, 145, 178, 0.3),
+        rgba(124, 58, 237, 0.32),
+        rgba(37, 99, 235, 0.0)
+      );
+  }
+
+  .light .board-agent-orb__glow {
+    background: radial-gradient(circle, rgba(37, 99, 235, 0.24), transparent 66%);
   }
 }

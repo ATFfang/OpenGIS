@@ -12,7 +12,20 @@ import { platform, homedir } from 'node:os'
 const backendDir = import.meta.dirname
 const isWin = platform() === 'win32'
 const isMac = platform() === 'darwin'
-const pythonCmd = isWin ? 'python' : 'python3'
+const pythonCmd = pickPythonCommand()
+
+function pickPythonCommand() {
+  const candidates = isWin ? ['python', 'py'] : ['python3']
+  for (const cmd of candidates) {
+    try {
+      const out = execSync(`${cmd} --version`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+      if (/Python 3\.(1[1-9]|[2-9]\d)/.test(out)) return cmd
+    } catch {
+      // try next
+    }
+  }
+  return isWin ? 'python' : 'python3'
+}
 
 // ── Venv lives in user data dir (shared between dev and packaged app) ──
 function getVenvDir() {

@@ -26,6 +26,7 @@ import {
   sourceIdFor,
 } from './types'
 import type { MapLayerDefinition, ParsedVectorData } from '@/services/geo'
+import { resolveVectorGeoJSON } from '@/services/geo'
 
 export const clusterRenderer: LayerRenderer = {
   renderType: 'cluster',
@@ -180,7 +181,7 @@ export const clusterRenderer: LayerRenderer = {
 /**
  * 确保数据源已配置为聚合源。
  *
- * 如果现有 source 不是 cluster 类型，则删除旧 source 并创建新的 cluster source。
+ * 如果现有 source 不是 cluster 类型，则重建 source 并创建 cluster source。
  * @param def - 图层定义
  * @param ctx - 渲染器上下文
  * @param radius - 聚合半径
@@ -199,7 +200,7 @@ function ensureClusterSource(
 
   if (isAlreadyCluster) return
 
-  // 删掉旧 source（如果有，说明是 GeoJSON 源而非 cluster 源）
+  // 重建 source（如果有，说明是 GeoJSON 源而非 cluster 源）
   if (existing) {
     // 必须先删依赖它的 render layer
     const style = ctx.map.getStyle()
@@ -217,7 +218,7 @@ function ensureClusterSource(
   const vec = def.data as ParsedVectorData
   ctx.map.addSource(sourceId, {
     type: 'geojson',
-    data: vec.geojson as any,
+    data: resolveVectorGeoJSON(vec) as any,
     cluster: true,
     clusterRadius: radius,
     clusterMaxZoom: maxZoom,

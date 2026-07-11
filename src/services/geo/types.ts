@@ -31,6 +31,23 @@ export interface GeoJSONFeatureCollection {
   features: GeoJSONFeature[]
 }
 
+export type GeoJSONFeatureId = string | number
+
+export interface GeoJSONFeatureDiff {
+  id: GeoJSONFeatureId
+  newGeometry?: GeoJSONFeature['geometry']
+  removeAllProperties?: boolean
+  removeProperties?: string[]
+  addOrUpdateProperties?: Array<{ key: string; value: any }>
+}
+
+export interface GeoJSONSourceDiff {
+  removeAll?: boolean
+  remove?: GeoJSONFeatureId[]
+  add?: GeoJSONFeature[]
+  update?: GeoJSONFeatureDiff[]
+}
+
 // ─── Data Source Descriptor ───────────────────────────────────────
 
 export type DataSourceType = 'geojson' | 'csv' | 'shapefile' | 'geopackage' | 'kml' | 'geotiff'
@@ -53,6 +70,19 @@ export interface DataSourceMeta {
    * ambiguous across directories).
    */
   filePath?: string
+  /** Runtime-only dynamic layer metadata, usually driven by a resident worker. */
+  dynamic?: {
+    workerId?: string
+    workerName?: string
+    workerStartedAt?: number
+    sequence?: number
+    updatedAt?: number
+    schemaChanged?: boolean
+    mode?: 'full' | 'diff'
+    updateable?: boolean
+    sourceLayerId?: string
+    highlight?: boolean
+  }
 }
 
 // ─── Parsed Layer Data ────────────────────────────────────────────
@@ -67,6 +97,21 @@ export interface ParsedVectorData {
   crs: string
   /** Attribute field names */
   fields: FieldDescriptor[]
+  /**
+   * Large file-backed layers keep only a lightweight sample in `geojson` and
+   * store the full FeatureCollection in the renderer-session registry.
+   */
+  dataHandle?: string
+  /** True when `geojson` is a bounded sample rather than the full dataset. */
+  sampled?: boolean
+  /** Number of features retained in the sample `geojson`. */
+  sampleFeatureCount?: number
+  /** Original full-data byte size used when the handle was created. */
+  handleSizeBytes?: number
+  /** Runtime-only MapLibre GeoJSONSource.updateData diff hint. */
+  runtimeDiff?: GeoJSONSourceDiff
+  /** True when runtimeDiff can safely be passed to MapLibre updateData. */
+  runtimeDiffUpdateable?: boolean
 }
 
 export interface ParsedRasterData {
@@ -105,6 +150,16 @@ export interface ParsedRasterData {
     [number, number],
     [number, number],
   ]
+  /** Source raster path when this image can be re-rendered with a new color ramp. */
+  sourcePath?: string
+  /** Session-local buffer handle for File API loaded rasters without a stable disk path. */
+  sourceBufferId?: string
+  /** Backend raster registry id when this layer is served as local XYZ tiles. */
+  rasterId?: string
+  /** Rendering style used to produce `imageUrl`. */
+  rasterStyle?: RasterStyleSettings
+  /** True when frontend can re-read `sourcePath` and re-render this layer. */
+  rerenderable?: boolean
 }
 
 export type ParsedData = ParsedVectorData | ParsedRasterData
@@ -187,6 +242,46 @@ export interface CategorizedClassification {
   maxCategories?: number
   /** "其它" 档的颜色，默认 #9ca3af。 */
   otherColor?: string
+  /** Optional fixed category order / whitelist. */
+  categories?: string[]
+}
+
+/**
+ * Numeric visual variable layered on top of the primary renderer.
+ * It lets a layer keep its categorized/graduated color semantics while mapping
+ * another numeric field to size or opacity.
+ */
+export interface NumericVisualVariable {
+  field: string
+  method?: ClassificationMethod
+  classes?: number
+  breaks?: number[]
+  /**
+   * Output values per class. For size this is pixels; for opacity this is 0-1.
+   * If omitted, renderers interpolate from range.
+   */
+  values?: number[]
+  /** Inclusive output range used when values are omitted. */
+  range?: [number, number]
+}
+
+export type LayerFilterOperator = '=' | '!=' | '>' | '<' | '>=' | '<=' | 'contains' | 'in'
+
+export interface LayerAttributeFilter {
+  field: string
+  op: LayerFilterOperator
+  value?: unknown
+}
+
+export interface LayerFilterSpec {
+  attribute?: LayerAttributeFilter[]
+}
+
+export interface LegendSpec {
+  visible?: boolean
+  title?: string
+  labels?: Record<string, string>
+  order?: string[]
 }
 
 export interface HeatmapSettings {
@@ -218,15 +313,64 @@ export interface ExtrusionSettings {
   baseField?: string
 }
 
+export type RasterColorRampName =
+  | 'viridis'
+  | 'magma'
+  | 'plasma'
+  | 'inferno'
+  | 'turbo'
+  | 'gray'
+  | 'terrain'
+  | 'spectral'
+  | 'custom'
+
+export interface RasterColorStop {
+  /** Normalized stop position in [0, 1]. */
+  value: number
+  /** CSS hex color. */
+  color: string
+  /** Per-stop alpha in [0, 1]. */
+  opacity?: number
+}
+
+export interface RasterStyleSettings {
+  /** Single-band display band, 1-based. RGB rasters ignore this unless mode='singleband'. */
+  band?: number
+  /** Palette name, or 'custom' when `stops` is provided. */
+  ramp?: RasterColorRampName
+  /** Custom color/alpha stops in normalized value space. */
+  stops?: RasterColorStop[]
+  /** Stretch min/max in source pixel values. Defaults to robust P2/P98 stats. */
+  min?: number
+  max?: number
+  /** Overall alpha applied after per-stop alpha. */
+  opacity?: number
+  /** Reverse the ramp direction. */
+  reverse?: boolean
+  /** Force RGB or single-band rendering. Defaults to RGB for 3+ band rasters. */
+  mode?: 'auto' | 'singleband' | 'rgb'
+}
+
 export interface LayerStyle {
   renderType: LayerRenderType
   color: string
   opacity: number
   strokeColor: string
   strokeWidth: number
+  strokeOpacity?: number
+  /** Line dash pattern, e.g. [2, 2] for dashed lines. */
+  lineDasharray?: number[]
   radius?: number
   /** For fill layers */
   fillOpacity?: number
+  /** Optional display filter applied at render time. */
+  filter?: LayerFilterSpec
+  /** Field-driven point radius / line width / polygon boundary width. */
+  sizeVariable?: NumericVisualVariable
+  /** Field-driven fill / line / circle opacity. */
+  opacityVariable?: NumericVisualVariable
+  /** Stable legend metadata shared by map UI, layout composer, and agent tools. */
+  legend?: LegendSpec
 
   // ── 下列字段仅在对应 renderType 启用时被消费。都是可选字段，
   //    老图层加载不受影响。
@@ -240,6 +384,19 @@ export interface LayerStyle {
   cluster?: ClusterSettings
   /** `renderType='extrusion'` 时必填 heightField */
   extrusion?: ExtrusionSettings
+  /** `renderType='raster'` 时可选 — color ramp / stretch settings. */
+  raster?: RasterStyleSettings
+  /** `renderType='symbol'` 时可选 — 图标配置 */
+  icon?: string  // 'circle' | 'emoji:📍' | 'svg:pin' | 'path:/abs/icon.svg'
+  /** `renderType='symbol'` 时可选 — 文字标注配置 */
+  label?: {
+    field: string
+    fontSize?: number
+    color?: string
+    offset?: [number, number]
+    haloColor?: string
+    haloWidth?: number
+  }
 }
 
 export interface MapLayerDefinition {

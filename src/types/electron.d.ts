@@ -35,11 +35,13 @@ interface Window {
     readFile: (path: string) => Promise<{ success: boolean; content?: string; error?: string }>
     readFileAsBuffer: (path: string) => Promise<{ success: boolean; buffer?: ArrayBuffer; error?: string }>
     writeFile: (path: string, content: string) => Promise<{ success: boolean; error?: string }>
+    writeFileBinary: (path: string, buffer: ArrayBuffer) => Promise<{ success: boolean; error?: string }>
     getFileInfo: (path: string) => Promise<{ success: boolean; info?: any; error?: string }>
     readDirectory: (path: string) => Promise<{ success: boolean; entries?: any[]; error?: string }>
     openFolderDialog: () => Promise<string | null>
     deleteFile: (path: string) => Promise<{ success: boolean; error?: string }>
     renameFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>
+    showItemInFolder: (path: string) => Promise<{ success: boolean; error?: string }>
     ensureDirectory: (path: string) => Promise<{ success: boolean; error?: string }>
     // Python
     getPythonStatus: () => Promise<{ status: 'stopped' | 'starting' | 'ready' | 'error'; port?: number; error?: string; pythonPath?: string }>

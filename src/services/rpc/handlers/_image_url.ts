@@ -13,7 +13,13 @@
  * to the map doesn't allocate more memory.
  */
 
-const _urlCache = new Map<string, string>();
+interface CachedImageUrl {
+  url: string;
+  refs: number;
+  lastUsed: number;
+}
+
+const _urlCache = new Map<string, CachedImageUrl>();
 
 const EXT_MIME: Record<string, string> = {
   '.png': 'image/png',
@@ -32,47 +38,96 @@ function mimeFromPath(path: string): string {
   return EXT_MIME[ext] ?? 'application/octet-stream';
 }
 
+function normalizeLocalImagePath(path: string): string {
+  let value = path.trim();
+  if (/^file:\/\//i.test(value)) {
+    try {
+      value = new URL(value).pathname;
+    } catch {
+      value = value.replace(/^file:\/\//i, '');
+    }
+  }
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Keep the original path if it is not percent-encoded.
+  }
+  return value;
+}
+
+function toArrayBuffer(buffer: unknown): ArrayBuffer | null {
+  if (buffer instanceof ArrayBuffer) return buffer;
+  if (ArrayBuffer.isView(buffer)) {
+    const view = buffer as ArrayBufferView;
+    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    return new Uint8Array(bytes).buffer;
+  }
+  if (
+    buffer
+    && typeof buffer === 'object'
+    && Array.isArray((buffer as { data?: unknown }).data)
+  ) {
+    return new Uint8Array((buffer as { data: number[] }).data).buffer;
+  }
+  return null;
+}
+
 /**
  * Resolve a local absolute path to a URL usable as `<img src>` /
- * MapLibre ImageSource `url`. Falls back to `file://` if the Electron
- * IPC bridge is unavailable (e.g. running unit tests in jsdom).
+ * MapLibre ImageSource `url`.
  */
 export async function pathToImageUrl(path: string): Promise<string> {
-  const cached = _urlCache.get(path);
-  if (cached) return cached;
+  const normalizedPath = normalizeLocalImagePath(path);
+  const cached = _urlCache.get(normalizedPath);
+  if (cached) {
+    cached.refs += 1;
+    cached.lastUsed = Date.now();
+    return cached.url;
+  }
 
   const api = (globalThis as any).window?.electronAPI;
   if (api?.readFileAsBuffer) {
-    try {
-      const result = await api.readFileAsBuffer(path);
-      const ok = result?.ok ?? result?.success ?? false;
-      if (ok && result.buffer) {
-        const buf =
-          result.buffer instanceof ArrayBuffer
-            ? result.buffer
-            : new Uint8Array(result.buffer).buffer;
-        const blob = new Blob([buf], { type: mimeFromPath(path) });
-        const url = URL.createObjectURL(blob);
-        _urlCache.set(path, url);
-        return url;
-      }
-    } catch (err) {
-      console.warn('[pathToImageUrl] readFileAsBuffer failed for', path, err);
+    const result = await api.readFileAsBuffer(normalizedPath);
+    const ok = result?.ok ?? result?.success ?? false;
+    const buf = ok ? toArrayBuffer(result.buffer) : null;
+    if (ok && buf) {
+      const blob = new Blob([buf], { type: mimeFromPath(normalizedPath) });
+      const url = URL.createObjectURL(blob);
+      _urlCache.set(normalizedPath, { url, refs: 1, lastUsed: Date.now() });
+      return url;
     }
+    throw new Error(result?.error || `Unable to read image: ${normalizedPath}`);
   }
 
-  // Last-ditch: file:// (works in dev with webSecurity loosened)
+  // Last-ditch for non-Electron tests / browser-only demos. In the real
+  // Electron renderer this branch is intentionally skipped because Chromium
+  // blocks file:// images from the localhost app origin.
   const fallback =
-    'file:///' + path.replace(/\\/g, '/').replace(/^\/+/, '');
-  _urlCache.set(path, fallback);
+    'file:///' + normalizedPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  _urlCache.set(normalizedPath, { url: fallback, refs: 1, lastUsed: Date.now() });
   return fallback;
 }
 
 /** Drop a cached URL (and revoke it) — call when the image is no longer needed. */
 export function releaseImageUrl(path: string): void {
-  const url = _urlCache.get(path);
-  if (url && url.startsWith('blob:')) {
-    URL.revokeObjectURL(url);
+  const normalizedPath = normalizeLocalImagePath(path);
+  const cached = _urlCache.get(normalizedPath);
+  if (!cached) return;
+  cached.refs -= 1;
+  cached.lastUsed = Date.now();
+  if (cached.refs > 0) return;
+  if (cached.url.startsWith('blob:')) {
+    URL.revokeObjectURL(cached.url);
   }
-  _urlCache.delete(path);
+  _urlCache.delete(normalizedPath);
+}
+
+/** Release every cached local image URL. Use only when tearing down a workspace/session. */
+export function releaseAllImageUrls(): void {
+  for (const cached of _urlCache.values()) {
+    if (cached.url.startsWith('blob:')) {
+      URL.revokeObjectURL(cached.url);
+    }
+  }
+  _urlCache.clear();
 }

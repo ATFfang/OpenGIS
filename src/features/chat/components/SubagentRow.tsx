@@ -47,11 +47,11 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
   const title = parallel ? t.chat.subagents : t.chat.subagent
 
   return (
-    <div className="rounded-xl border border-border/60 bg-bg-tertiary/30 overflow-hidden">
+    <div className="rounded-lg border chat-subagent-card overflow-hidden shadow-sm">
       {/* Header */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-bg-hover/40 transition-colors"
+        className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-bg-hover/35 transition-colors"
       >
         <div
           className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
@@ -68,7 +68,7 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
         <span className="text-[13px] font-semibold text-text-primary">{title}</span>
 
         {running ? (
-          <span className="flex items-center gap-1.5 text-[11px] text-accent-primary">
+          <span className="flex items-center gap-1.5 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[11px] text-accent-primary">
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>Running{parallel && total > 1 ? ` ${total} tasks` : ''}…</span>
           </span>
@@ -83,7 +83,7 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
         )}
 
         {elapsed && (
-          <span className="text-[10px] text-text-muted/60 font-mono">{elapsed}</span>
+          <span className="text-[10px] text-text-secondary font-mono">{elapsed}</span>
         )}
 
         <span className="flex-1" />
@@ -96,7 +96,7 @@ export const SubagentRow = memo(({ data }: SubagentRowProps) => {
 
       {/* Task list */}
       {expanded && tasks.length > 0 && (
-        <div className="border-t border-border/40 px-3 py-2 space-y-1.5">
+        <div className="border-t border-border/20 px-3 py-2 space-y-1.5">
           {tasks.map((task, i) => (
             <TaskRow key={i} task={task} />
           ))}

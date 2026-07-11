@@ -6,12 +6,13 @@
  * Each step has:
  *   - A title (what this step does)
  *   - A description (detailed instructions for the LLM)
+ *   - Input/output contracts (what this step receives and hands off)
  *   - Optional hooks (Python assertions to validate the step)
  *   - Optional params (key/value config passed to the step)
  *
  * The workflow is executed by the WorkflowLoop in the backend:
  * the LLM receives each step's description as a constrained prompt
- * and must produce code to accomplish it.
+ * and must call tools, using execute_code only when Python is needed.
  *
  * Design: Guided / wizard-style UI that makes it easy for non-
  * programmers to define repeatable GIS pipelines.
@@ -188,6 +189,8 @@ function GuidedWorkflowEditor({ path }: { path: string }) {
       id: `step_${Date.now().toString(36)}`,
       title: `Step ${stepNum}`,
       description: '',
+      inputContract: '',
+      outputContract: '',
       scriptPath: '',
       inputs: [],
       outputs: [],
@@ -560,6 +563,7 @@ function StepCard({
 }: StepCardProps) {
   const t = useT()
   const hasDescription = !!step.description?.trim()
+  const hasContract = !!step.inputContract?.trim() || !!step.outputContract?.trim()
   const hasHooks = (step.hooks?.length ?? 0) > 0
   const hasParams = Object.keys(step.params || {}).length > 0
 
@@ -612,6 +616,11 @@ function StepCard({
               {hasParams && (
                 <span className="w-4 h-4 rounded flex items-center justify-center bg-blue-500/10" title="Has parameters">
                   <Settings2 className="w-2.5 h-2.5 text-blue-500" />
+                </span>
+              )}
+              {hasContract && (
+                <span className="w-4 h-4 rounded flex items-center justify-center bg-accent-geo/10" title="Has node handoff contract">
+                  <GitBranch className="w-2.5 h-2.5 text-accent-geo" />
                 </span>
               )}
             </div>
@@ -725,6 +734,33 @@ function StepInspector({ step, stepIndex, totalSteps, onUpdate, onRemove }: Step
             onChange={(e) => onUpdate({ description: e.target.value })}
             placeholder={t.workflow.inspector.descriptionPlaceholder}
             rows={5}
+            className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent-primary transition-colors resize-y leading-relaxed"
+          />
+        </Field>
+
+        {/* Node communication contracts */}
+        <Field
+          label={t.workflow.inspector.inputContract}
+          hint={t.workflow.inspector.inputContractHint}
+        >
+          <textarea
+            value={step.inputContract ?? ''}
+            onChange={(e) => onUpdate({ inputContract: e.target.value })}
+            placeholder={t.workflow.inspector.inputContractPlaceholder}
+            rows={3}
+            className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent-primary transition-colors resize-y leading-relaxed"
+          />
+        </Field>
+
+        <Field
+          label={t.workflow.inspector.outputContract}
+          hint={t.workflow.inspector.outputContractHint}
+        >
+          <textarea
+            value={step.outputContract ?? ''}
+            onChange={(e) => onUpdate({ outputContract: e.target.value })}
+            placeholder={t.workflow.inspector.outputContractPlaceholder}
+            rows={3}
             className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent-primary transition-colors resize-y leading-relaxed"
           />
         </Field>
