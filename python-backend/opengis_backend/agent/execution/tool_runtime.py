@@ -24,6 +24,7 @@ from opengis_backend.agent.execution.tool_helpers import (
     stringify_tool_value,
     tool_title,
 )
+from opengis_backend.agent.execution.tool_arguments import ToolArgumentContract
 from opengis_backend.agent.execution.tool_output import ToolOutputRuntime
 from opengis_backend.agent.execution.tool_result import ToolExecutionResult
 from opengis_backend.agent.execution.tool_schemas import (
@@ -58,6 +59,7 @@ class ToolRuntime:
     ) -> None:
         self.tool_schemas = tool_schemas
         self.tool_callables = tool_callables
+        self.argument_contract = ToolArgumentContract(tool_schemas)
         self.executor_call = executor_call
         self.permission_runtime = permission_runtime
         self.output_runtime = output_runtime
@@ -103,6 +105,30 @@ class ToolRuntime:
                     title="Execute Python rejected",
                     metadata={"validation": "code_only"},
                 )
+        elif tool_name not in {"run_script_file"} and tool_name not in CODE_ONLY_TOOLS:
+            prepared = self.argument_contract.prepare(tool_name, args)
+            if not prepared.ok:
+                content = json.dumps(
+                    ToolArgumentContract.error_payload(
+                        tool_name,
+                        prepared,
+                        accepted=self.argument_contract.accepted_arguments(tool_name),
+                    ),
+                    ensure_ascii=False,
+                )
+                return ToolExecutionResult(
+                    name=tool_name,
+                    arguments=args,
+                    content=content,
+                    error="invalid_tool_arguments",
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    title=f"{tool_name} invalid arguments",
+                    metadata={
+                        "validation": "tool_arguments",
+                        "normalized_from": prepared.normalized_from,
+                    },
+                )
+            args = prepared.arguments
         decision = (
             self.permission_runtime.evaluate(tool_name, args)
             if self.permission_runtime is not None

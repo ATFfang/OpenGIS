@@ -45,6 +45,11 @@ You are currently executing a structured workflow. Follow these rules:
     hidden reasoning, strategy narration, tool-planning prose, Markdown fences,
     `<think>` tags, or long comment monologues in code. If another tool is
     needed, call that function tool directly in the next action.
+11. Completion must stay data-grounded. For real places, regions, addresses,
+    POIs, organizations, events, or statistics, use only loaded datasets,
+    upstream step outputs, tool results, or cited sources. If evidence is
+    missing, say it is missing; do not invent details to make a report or
+    workflow step look complete.
 """
 
 

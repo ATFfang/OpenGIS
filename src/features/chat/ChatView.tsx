@@ -673,6 +673,8 @@ function progressLabelForStage(
     case 'calling_llm':
     case 'thinking_next_step':
       return t.chat.thinking
+    case 'tool_intent':
+      return t.chat.progressProcessing
     case 'installing_packages':
       return t.chat.progressInstalling
     case 'loading_geodata':

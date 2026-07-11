@@ -1,0 +1,175 @@
+{
+  "schema_version": "1.0",
+  "id": "kernel_density",
+  "name": "核密度估计",
+  "version": "0.1.0",
+  "revision": 3,
+  "status": "validated",
+  "description": "对点/线/面要素生成核密度估计热力图。支持 GeoJSON/SHP/CSV/Excel/GPKG/KML 等多源数据输入，输出 GeoTIFF 栅格和可选的等值线/等值面。支持多种核函数、自动带宽选择、权重字段、多种分级方法。",
+  "entry": "main.py",
+  "runtime": {
+    "language": "python",
+    "python": ">=3.12",
+    "dependencies": [
+      "geopandas",
+      "scipy",
+      "numpy",
+      "pandas",
+      "shapely",
+      "rasterio",
+      "matplotlib"
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "input_path"
+    ],
+    "properties": {
+      "input_path": {
+        "type": "string",
+        "description": "输入文件路径（支持 GeoJSON/Shapefile/CSV/Excel/GPKG/KML/FlatGeobuf）"
+      },
+      "output_dir": {
+        "type": "string",
+        "description": "输出目录，默认为 kde_output/"
+      },
+      "bandwidth": {
+        "type": "number",
+        "description": "核函数带宽（单位与数据坐标系一致，米或度）。不指定则自动计算"
+      },
+      "bandwidth_meters": {
+        "type": "number",
+        "description": "带宽（米），自动处理坐标投影转换"
+      },
+      "cell_size": {
+        "type": "number",
+        "description": "网格单元大小。不指定则自动设为带宽的 1/4"
+      },
+      "cell_size_meters": {
+        "type": "number",
+        "description": "网格大小（米），自动处理坐标投影转换"
+      },
+      "kernel": {
+        "type": "string",
+        "enum": [
+          "gaussian",
+          "epanechnikov",
+          "uniform",
+          "triangular",
+          "quartic",
+          "cosine"
+        ],
+        "default": "gaussian",
+        "description": "核函数类型"
+      },
+      "output_raster": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否输出 GeoTIFF 栅格"
+      },
+      "output_contours": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否输出等值线 GeoJSON"
+      },
+      "output_polygons": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否输出等值面 GeoJSON"
+      },
+      "n_contours": {
+        "type": "integer",
+        "default": 10,
+        "description": "等值线/等值面数量"
+      },
+      "classify_method": {
+        "type": "string",
+        "enum": [
+          "quantile",
+          "equal_interval",
+          "jenks",
+          "std"
+        ],
+        "default": "quantile",
+        "description": "分级方法"
+      },
+      "weight_field": {
+        "type": "string",
+        "description": "权重字段名（可选）"
+      },
+      "crs": {
+        "type": "string",
+        "description": "目标坐标系（如 EPSG:4326），不指定则保留原始 CRS"
+      },
+      "auto_bandwidth": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否自动计算带宽（Scott's rule）"
+      },
+      "normalize": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否将密度值归一化到 0-1"
+      },
+      "max_grid_cells": {
+        "type": "integer",
+        "default": 1000000,
+        "description": "最大网格单元数限制，防止内存溢出"
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean"
+      },
+      "n_features": {
+        "type": "integer"
+      },
+      "bandwidth": {
+        "type": "number"
+      },
+      "cell_size": {
+        "type": "number"
+      },
+      "kernel": {
+        "type": "string"
+      },
+      "grid_size": {
+        "type": "array"
+      },
+      "density_range": {
+        "type": "array"
+      },
+      "raster_path": {
+        "type": "string"
+      },
+      "polygons_path": {
+        "type": "string"
+      },
+      "contours_path": {
+        "type": "string"
+      },
+      "statistics": {
+        "type": "object"
+      },
+      "output_files": {
+        "type": "array"
+      }
+    }
+  },
+  "tunable_parameters": {},
+  "validation": {
+    "input_checks": [],
+    "output_checks": []
+  },
+  "provenance": {
+    "created_by": "opengis",
+    "source": "builtin",
+    "created_at": "2026-07-11T10:38:09"
+  },
+  "created_at": "2026-07-11T10:38:09",
+  "updated_at": "2026-07-11T11:44:51"
+}

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_manager import ContextManager
+from opengis_backend.agent.context.pending_intent import PendingIntentResolver
 from opengis_backend.agent.loop.loop_kernel import LoopKernel, LoopKernelHooks, LoopTurnRequest
 from opengis_backend.agent.loop.retry_policy import (
     LLM_BASE_DELAY,
@@ -28,6 +29,7 @@ from opengis_backend.agent.execution.tool_materializer import ToolMaterializer, 
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime
 from opengis_backend.agent.loop.types import AgentStep, CodeExecResult
 from opengis_backend.agent.loop.policy import LoopPolicy, final_turn_instruction
+from opengis_backend.agent.loop.runtime_control import RuntimeControl
 from opengis_backend.agent.governance.profile import AgentProfile
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,19 @@ class AgentLoop:
         Called from a worker thread (via asyncio.to_thread) so it's safe
         to block on LLM calls and subprocess execution.
         """
-        self.context.add_user_message(user_message)
+        workspace_path = getattr(self.tool_runtime, "workspace_path", None)
+        pending_intent = PendingIntentResolver(workspace_path).resolve(
+            self.context.messages,
+            user_message,
+        )
+        user_meta = None
+        if pending_intent is not None:
+            user_meta = {
+                "kind": "resolved_followup",
+                "pending_intent_kind": pending_intent.kind,
+                "resolved_objective": pending_intent.resolved_objective,
+            }
+        self.context.add_user_message(user_message, meta=user_meta)
         if self.tool_materializer is None and self.tool_schemas:
             self.tool_materializer = ToolMaterializer(self.tool_schemas)
 
@@ -116,6 +130,11 @@ class AgentLoop:
         force_final_reason: str | None = None
         profile = self.agent_profile or AgentProfile.gis_build()
         policy = LoopPolicy.from_profile(profile)
+        runtime_control = RuntimeControl.from_user_message(
+            user_message,
+            workspace_path=workspace_path,
+            pending_intent=pending_intent,
+        )
         kernel = LoopKernel(
             llm_call=self.llm_call,
             context=self.context,
@@ -168,6 +187,8 @@ class AgentLoop:
                 if policy_decision.force_final
                 else None
             )
+            system_inserts = list(extra_system_messages or [])
+            system_inserts.append(runtime_control.system_prompt())
             outcome = kernel.run_turn(
                 LoopTurnRequest(
                     iteration=current_iteration,
@@ -186,7 +207,8 @@ class AgentLoop:
                     disable_tools=policy_decision.force_final,
                     disabled_tools_reason=policy_decision.reason,
                     materialization_options=policy.materialization_options(),
-                    extra_system_messages=extra_system_messages,
+                    extra_system_messages=system_inserts,
+                    tool_call_guard=runtime_control.guard_tool_calls,
                 )
             )
             force_all_tools_once = False
@@ -208,12 +230,28 @@ class AgentLoop:
                 telemetry.code_steps = code_steps
                 telemetry.tool_steps = tool_steps
                 telemetry.continuation = "tool_results"
-                telemetry.log()
                 settle_decision = policy.after_settlements(
                     outcome.settlements,
                     code_steps=code_steps,
                     tool_steps=tool_steps,
                 )
+                control_decision = runtime_control.observe_settlements(outcome.settlements)
+                if control_decision.has_correction:
+                    self.context.add_system_message(
+                        control_decision.corrective_message,
+                        meta={"kind": "runner_control", "mode": runtime_control.objective.mode.value},
+                    )
+                    telemetry.continuation = "runner_control_correction"
+                    telemetry.log()
+                    if control_decision.force_final_reason:
+                        force_final_reason = control_decision.force_final_reason
+                    continue
+                if control_decision.force_final_reason:
+                    force_final_reason = control_decision.force_final_reason
+                    telemetry.continuation = "runner_control_force_final"
+                    telemetry.log()
+                    continue
+                telemetry.log()
                 if settle_decision.force_final:
                     force_final_reason = settle_decision.reason
                 # Keep nudge state scoped to the whole user turn. Resetting it

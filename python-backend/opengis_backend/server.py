@@ -6,7 +6,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from opengis_backend.runtime.config import settings
@@ -117,6 +117,54 @@ async def get_logs_dir():
     from opengis_backend.runtime.logging import get_log_dir
     log_dir = get_log_dir()
     return {"log_dir": str(log_dir) if log_dir else None}
+
+
+@app.get("/api/rasters/{raster_id}/metadata")
+async def get_raster_metadata(raster_id: str):
+    """Return backend tile-raster metadata and current render style."""
+    from opengis_backend.integrations.gis.raster_service import get_registered_raster
+
+    try:
+        return get_registered_raster(raster_id).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/rasters/{raster_id}/style")
+async def update_raster_style(raster_id: str, body: dict):
+    """Update a backend tile-raster style.
+
+    The tile URL carries a style revision query param. Updating the revision
+    lets the frontend invalidate MapLibre's tile cache without recreating the
+    whole layer.
+    """
+    from opengis_backend.integrations.gis.raster_service import update_registered_raster_style
+
+    try:
+        return update_registered_raster_style(raster_id, dict(body or {})).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/rasters/{raster_id}/tiles/{z}/{x}/{y}.png")
+async def get_raster_tile(raster_id: str, z: int, x: int, y: int):
+    """Render a local raster as an XYZ PNG tile."""
+    from opengis_backend.integrations.gis.raster_service import render_registered_raster_tile
+
+    try:
+        tile = render_registered_raster_tile(raster_id, z, x, y)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.debug("Raster tile render failed", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return Response(
+        content=tile,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.post("/api/rpc")

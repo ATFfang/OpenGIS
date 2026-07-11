@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_manager import ContextManager
+from opengis_backend.agent.context.request_budget import RequestBudgetManager, RequestBudgetReport
 from opengis_backend.agent.execution.tool_materializer import (
     ToolMaterialization,
     ToolMaterializer,
@@ -66,6 +67,7 @@ class LoopTurnRequest:
     disabled_tools_reason: str = ""
     materialization_options: dict[str, Any] | None = None
     extra_system_messages: list[str] | None = None
+    tool_call_guard: Callable[[list[dict[str, Any]]], Any] | None = None
 
 
 @dataclass
@@ -125,11 +127,18 @@ class LoopKernel:
                 logger.info("Compression triggered (pre-call): %s", reason)
                 self.context.compress(self.llm_call)
 
+        budget_manager = RequestBudgetManager(
+            input_token_budget=getattr(self.context, "token_budget", 100_000),
+        )
+        budget_limits = budget_manager.suggest_limits(
+            live_tokens=self.context.estimate_live_tokens(),
+        )
         context_t0 = time.monotonic()
         messages = self.context.build_messages(
             request.system_prompt,
             user_instructions=request.user_instructions,
             exclude_workflow_context=request.exclude_workflow_context,
+            projection_limits=budget_limits,
         )
         context_build_ms = (time.monotonic() - context_t0) * 1000
 
@@ -144,7 +153,6 @@ class LoopKernel:
         else:
             materialization = (
                 self.tool_materializer.materialize(
-                    messages,
                     force_all=request.force_all_tools,
                     **materialization_options,
                 )
@@ -167,15 +175,45 @@ class LoopKernel:
                 *messages[1:],
             ]
 
+        budget_report = self._analyze_request_budget(messages, active_tool_schemas)
+        if (
+            request.compress_context
+            and budget_report.pressure in {"hot", "overflow"}
+            and self.context.prune_tool_results() > 0
+        ):
+            budget_limits = budget_manager.suggest_limits(
+                pressure=budget_report.pressure,
+                live_tokens=self.context.estimate_live_tokens(),
+            )
+            logger.info(
+                "Request budget pressure=%s total=%d; pruned tool results and rebuilding provider messages.",
+                budget_report.pressure,
+                budget_report.total_tokens,
+            )
+            messages = self.context.build_messages(
+                request.system_prompt,
+                user_instructions=request.user_instructions,
+                exclude_workflow_context=request.exclude_workflow_context,
+                projection_limits=budget_limits,
+            )
+            if system_inserts:
+                messages = [
+                    messages[0],
+                    *({"role": "system", "content": content} for content in system_inserts if content),
+                    *messages[1:],
+                ]
+            budget_report = self._analyze_request_budget(messages, active_tool_schemas)
+
         telemetry = LoopTurnTelemetry(
             iteration=request.iteration,
             code_steps=request.code_steps,
             tool_steps=request.tool_steps,
             message_count=len(messages),
-            context_tokens=self.context.estimate_request_tokens(messages, active_tool_schemas),
+            context_tokens=budget_report.total_tokens,
             tool_schema_count=len(active_tool_schemas or []),
             tool_schema_total=materialization.total_count if materialization else len(active_tool_schemas or []),
             tool_schema_reason=materialization.reason if materialization else "static",
+            request_pressure=budget_report.pressure,
             context_build_ms=context_build_ms,
         )
 
@@ -226,6 +264,20 @@ class LoopKernel:
 
         settlements: list[ToolSettlement] = []
         if provider_result.tool_calls:
+            blocked_call_ids: dict[str, str] = {}
+            if request.tool_call_guard is not None:
+                try:
+                    guard_result = request.tool_call_guard(provider_result.tool_calls)
+                    raw_blocked = getattr(guard_result, "blocked_call_ids", None)
+                    if isinstance(raw_blocked, dict):
+                        blocked_call_ids = {
+                            str(call_id): str(reason)
+                            for call_id, reason in raw_blocked.items()
+                            if str(call_id)
+                        }
+                except Exception:
+                    logger.exception("tool_call_guard failed; continuing without guard blocks")
+
             self.context.add_assistant_with_tool_calls(
                 provider_result.response_text,
                 provider_result.tool_calls,
@@ -241,7 +293,9 @@ class LoopKernel:
             progress_callback = self.progress_callback
             if request.tool_progress_label and self.progress_callback:
                 def _scoped_progress(stage: str, detail: str = "") -> None:
-                    if stage == "tool_call" and detail.startswith("Calling ") and detail.endswith("..."):
+                    if stage in {"tool_intent", "executing_code", "loading_geodata", "loading_raster", "loading_data", "saving_results", "generating_visualization"}:
+                        detail = f"{request.tool_progress_label} — {detail}"
+                    elif stage == "tool_call" and detail.startswith("Calling ") and detail.endswith("..."):
                         tool_name = detail[len("Calling "):-3]
                         detail = f"{request.tool_progress_label} — calling {tool_name}..."
                     try:
@@ -256,9 +310,14 @@ class LoopKernel:
                 progress_callback=progress_callback,
                 on_tool_start=self.hooks.on_tool_start,
                 on_tool_result=self.hooks.on_tool_result,
+                settlement_identity={
+                    "provider_turn_id": f"{request.logger_prefix.lower()}:{request.iteration}",
+                    "assistant_message_id": f"{request.logger_prefix.lower()}:{request.iteration}:assistant",
+                },
             ).settle_all(
                 provider_result.tool_calls,
                 streamed_tool_code=provider_result.streamed_tool_code,
+                blocked_call_ids=blocked_call_ids,
             )
             telemetry.tool_ms = (time.monotonic() - tool_t0) * 1000
             if request.scope and settlements:
@@ -274,6 +333,15 @@ class LoopKernel:
             telemetry=telemetry,
             materialization=materialization,
         )
+
+    def _analyze_request_budget(
+        self,
+        messages: list[dict[str, Any]],
+        active_tool_schemas: list[dict[str, Any]] | None,
+    ) -> RequestBudgetReport:
+        return RequestBudgetManager(
+            input_token_budget=getattr(self.context, "token_budget", 100_000),
+        ).analyze(messages=messages, tools=active_tool_schemas or [])
 
 
 __all__ = [

@@ -5,7 +5,7 @@ import { bboxToTuple } from '../_map_util';
 import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
 import { mapEngine } from '@/features/map/engine/MapEngine';
 import { BUILTIN_BASEMAPS } from '@/services/geo';
-import { FlyToSchema, GetMapStateSchema, SetBasemapSchema, SetBasemapVisibilitySchema, ZoomToBBoxSchema, ZoomToLayerSchema } from '../schemas';
+import { FlyToSchema, GetMapStateSchema, SetBasemapSchema, SetBasemapVisibilitySchema, SetMapCameraSchema, ZoomToBBoxSchema, ZoomToLayerSchema } from '../schemas';
 
 // ─────────────────────────────────────────────────────────────────────
 // Basemap 别名表
@@ -83,8 +83,42 @@ export const viewHandlers: Record<string, RpcHandler> = {
   'rpc.ui.map.fly_to': (params) => {
     const parsed = parseParams(FlyToSchema, params, 'rpc.ui.map.fly_to');
     const center: [number, number] = [parsed.center[0], parsed.center[1]];
-    mapEngine.flyTo(center, parsed.zoom);
-    return { center, zoom: parsed.zoom ?? null };
+    const store = useMapStore.getState();
+    const nextView = {
+      center,
+      zoom: parsed.zoom ?? store.viewState.zoom,
+      bearing: parsed.bearing ?? store.viewState.bearing,
+      pitch: parsed.pitch ?? store.viewState.pitch,
+    };
+    mapEngine.flyTo(center, nextView.zoom, {
+      bearing: nextView.bearing,
+      pitch: nextView.pitch,
+      duration: parsed.duration,
+    });
+    store.setViewState(nextView);
+    return {
+      center,
+      zoom: nextView.zoom,
+      pitch: nextView.pitch,
+      bearing: nextView.bearing,
+    };
+  },
+
+  'rpc.ui.map.set_camera': (params) => {
+    const parsed = parseParams(SetMapCameraSchema, params, 'rpc.ui.map.set_camera');
+    const store = useMapStore.getState();
+    const nextView = {
+      center: parsed.center ?? store.viewState.center,
+      zoom: parsed.zoom ?? store.viewState.zoom,
+      bearing: parsed.bearing ?? store.viewState.bearing,
+      pitch: parsed.pitch ?? store.viewState.pitch,
+    };
+    mapEngine.setCamera({
+      ...nextView,
+      duration: parsed.duration,
+    });
+    store.setViewState(nextView);
+    return nextView;
   },
 
   'rpc.ui.map.set_basemap': (params) => {

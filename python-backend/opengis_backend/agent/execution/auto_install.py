@@ -90,6 +90,35 @@ _IMPORT_TO_PIP: dict[str, str] = {
     "Bio": "biopython",
 }
 
+_RESERVED_PLATFORM_IMPORTS: Set[str] = {
+    "opengis",
+    "opengis_backend",
+    "opengis_worker",
+}
+
+
+def reserved_platform_imports(packages: Set[str]) -> list[str]:
+    """Return imports that belong to OpenGIS platform namespaces.
+
+    These are not third-party dependencies. Installing them from PyPI is
+    almost always wrong and can mask the real issue: the agent should call
+    registered OpenGIS function tools, or use the generated opengis_worker
+    helper only inside resident worker code.
+    """
+    return sorted(pkg for pkg in packages if pkg in _RESERVED_PLATFORM_IMPORTS)
+
+
+def platform_import_error(packages: Set[str]) -> str:
+    reserved = reserved_platform_imports(packages)
+    if not reserved:
+        return ""
+    names = ", ".join(reserved)
+    return (
+        f"OpenGIS platform import(s) are not Python packages to install: {names}. "
+        "Use registered function tools for map/file/workflow/worker operations. "
+        "Only resident worker main.py code may import the generated opengis_worker helper."
+    )
+
 
 def extract_imports(code: str) -> Set[str]:
     """Extract top-level package names from import statements in code.
@@ -191,8 +220,17 @@ def auto_install_missing(
     packages = extract_imports(code)
     if not packages:
         return None
+    reserved_error = platform_import_error(packages)
+    if reserved_error:
+        logger.info("Skipping auto-install for reserved OpenGIS import: %s", reserved_error)
+        if output_callback:
+            try:
+                output_callback(f"[auto-install skipped] {reserved_error}\n")
+            except Exception:
+                pass
 
     missing = find_missing_packages(packages, python_executable)
+    missing = [pkg for pkg in missing if pkg not in _RESERVED_PLATFORM_IMPORTS]
     if not missing:
         return None
 

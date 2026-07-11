@@ -41,6 +41,14 @@ full = [
     "pysal>=24.1",
 ]
 
+[tool.setuptools.package-data]
+"opengis_backend.operations" = [
+    "builtin/*/operation.json",
+    "builtin/*/README.md",
+    "builtin/*/main.py",
+    "builtin/*/requirements.txt",
+]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

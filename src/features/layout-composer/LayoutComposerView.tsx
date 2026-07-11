@@ -149,7 +149,7 @@ export function LayoutComposerView() {
             const next = PAGE_PRESETS.find((preset) => preset.id === event.target.value)
             if (next) setPage(next)
           }}
-          className="h-7 rounded-md bg-bg-primary border border-border px-2 text-xs outline-none focus:border-accent-primary"
+          className="h-7 shrink-0 rounded-md bg-bg-primary border border-border px-2 text-xs outline-none focus:border-accent-primary"
         >
           {PAGE_PRESETS.map((preset) => (
             <option key={preset.id} value={preset.id}>
@@ -158,7 +158,7 @@ export function LayoutComposerView() {
           ))}
         </select>
 
-        <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-secondary">
           <span>1:</span>
           <input
             value={mapScaleDenominator}
@@ -172,14 +172,14 @@ export function LayoutComposerView() {
 
         <div className="h-5 w-px bg-border mx-1" />
 
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             onClick={() => setElementMenuOpen((open) => !open)}
-            className="h-7 px-2 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center gap-1.5 text-xs"
+            className="h-7 px-2 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center gap-1.5 text-xs whitespace-nowrap"
             title="添加制图元素"
           >
             <Map className="w-3.5 h-3.5" />
-            <span>添加元素</span>
+            <span className="hidden 2xl:inline">添加元素</span>
             <ChevronDown className="w-3.5 h-3.5" />
           </button>
           {elementMenuOpen && (
@@ -205,15 +205,15 @@ export function LayoutComposerView() {
 
         <button
           onClick={() => setZoom(zoom - 0.1)}
-          className="h-7 w-7 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
+          className="h-7 w-7 shrink-0 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
           title="缩小"
         >
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
-        <span className="w-11 text-center text-xs text-text-muted">{Math.round(zoom * 100)}%</span>
+        <span className="w-11 shrink-0 text-center text-xs text-text-muted">{Math.round(zoom * 100)}%</span>
         <button
           onClick={() => setZoom(zoom + 0.1)}
-          className="h-7 w-7 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
+          className="h-7 w-7 shrink-0 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
           title="放大"
         >
           <ZoomIn className="w-3.5 h-3.5" />
@@ -221,15 +221,15 @@ export function LayoutComposerView() {
 
         <button
           onClick={refreshSnapshot}
-          className="h-7 px-2 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center gap-1.5 text-xs"
+          className="h-7 shrink-0 px-2 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center gap-1.5 text-xs whitespace-nowrap"
           title="从当前地图更新地图框"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span>更新地图</span>
+          <span className="hidden 2xl:inline">更新地图</span>
         </button>
         <button
           onClick={resetLayout}
-          className="h-7 w-7 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
+          className="h-7 w-7 shrink-0 rounded-md border border-border bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover flex items-center justify-center"
           title="重置画布"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -237,11 +237,11 @@ export function LayoutComposerView() {
         <button
           onClick={handleExport}
           disabled={exporting}
-          className="h-7 px-3 rounded-md bg-accent-primary text-white hover:brightness-110 disabled:opacity-60 flex items-center gap-1.5 text-xs"
+          className="h-7 shrink-0 px-2 2xl:px-3 rounded-md bg-accent-primary text-white hover:brightness-110 disabled:opacity-60 flex items-center gap-1.5 text-xs whitespace-nowrap"
           title="导出 PNG"
         >
           <Download className="w-3.5 h-3.5" />
-          <span>{exporting ? '导出中' : '导出'}</span>
+          <span className="hidden 2xl:inline">{exporting ? '导出中' : '导出'}</span>
         </button>
       </div>
 

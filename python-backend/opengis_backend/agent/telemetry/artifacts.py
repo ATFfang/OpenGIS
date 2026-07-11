@@ -54,6 +54,68 @@ class ArtifactRef:
         }
 
 
+@dataclass(frozen=True)
+class ArtifactPointer:
+    """Compact provider-facing pointer to a retained artifact."""
+
+    kind: str
+    path: str | None = None
+    layer_id: str | None = None
+    artifact_id: str | None = None
+    title: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_ref(cls, ref: ArtifactRef) -> "ArtifactPointer":
+        return cls(
+            kind=ref.kind,
+            path=ref.path,
+            layer_id=ref.layer_id,
+            artifact_id=ref.id,
+            title=ref.title,
+            metadata=dict(ref.metadata),
+        )
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any] | None, *, default_kind: str = "artifact") -> "ArtifactPointer | None":
+        metadata = metadata or {}
+        path = _first_str(metadata, "retained_output_path", "artifact_path", "script_abs_path", "script_path")
+        layer_id = _first_str(metadata, "artifact_layer_id")
+        artifact_id = _first_str(metadata, "artifact_id")
+        title = _first_str(metadata, "artifact_title", "artifact_layer_name") or ""
+        if not path and not layer_id and not artifact_id:
+            return None
+        kind = str(metadata.get("artifact_kind") or ("layer" if layer_id and not path else default_kind))
+        return cls(
+            kind=kind,
+            path=path,
+            layer_id=layer_id,
+            artifact_id=artifact_id,
+            title=title,
+            metadata={
+                key: value
+                for key, value in metadata.items()
+                if key in {"run_id", "session_id", "tool_name", "call_id", "script_path", "retained_output_path"}
+            },
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "kind": self.kind,
+        }
+        if self.artifact_id:
+            out["artifact_id"] = self.artifact_id
+        if self.path:
+            out["path"] = self.path
+        if self.layer_id:
+            out["layer_id"] = self.layer_id
+        if self.title:
+            out["title"] = self.title
+        if self.metadata:
+            out["metadata"] = dict(self.metadata)
+        return out
+
+
 class ArtifactIndex:
     """Append-only artifact index under ``.opengis/artifacts.jsonl``."""
 
@@ -162,4 +224,23 @@ def artifacts_from_tool_result(tool_name: str, content: str, metadata: dict[str,
     return out
 
 
-__all__ = ["ArtifactRef", "ArtifactIndex", "artifacts_from_tool_result"]
+def artifact_pointer_from_metadata(metadata: dict[str, Any] | None, *, default_kind: str = "artifact") -> dict[str, Any]:
+    pointer = ArtifactPointer.from_metadata(metadata, default_kind=default_kind)
+    return pointer.to_dict() if pointer else {}
+
+
+def _first_str(mapping: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+__all__ = [
+    "ArtifactIndex",
+    "ArtifactPointer",
+    "ArtifactRef",
+    "artifact_pointer_from_metadata",
+    "artifacts_from_tool_result",
+]

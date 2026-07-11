@@ -180,7 +180,7 @@ def build_step_prompt(
     if predecessor_outputs:
         parts.append("**Results from previous steps**:")
         for pred_id, output in predecessor_outputs.items():
-            display = output[:2000] + "..." if len(output) > 2000 else output
+            display = output[:1200] + "... [upstream output compacted]" if len(output) > 1200 else output
             parts.append(f"- Step `{pred_id}`: {display}")
         parts.append("")
 

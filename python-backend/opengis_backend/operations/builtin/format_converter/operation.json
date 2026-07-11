@@ -1,0 +1,150 @@
+{
+  "schema_version": "1.0",
+  "id": "format_converter",
+  "name": "要素数据格式转换",
+  "version": "0.1.0",
+  "revision": 2,
+  "status": "validated",
+  "description": "多格式要素数据转换工具 - 支持点、线、面要素，支持 GeoJSON、Shapefile、CSV、Excel、GeoPackage、KML、GeoJSONSeq、FlatGeobuf 等格式互转",
+  "entry": "main.py",
+  "runtime": {
+    "language": "python",
+    "python": ">=3.12",
+    "dependencies": [
+      "geopandas",
+      "pandas",
+      "shapely",
+      "fiona",
+      "openpyxl",
+      "chardet"
+    ]
+  },
+  "input_schema": {
+    "properties": {
+      "batch": {
+        "description": "是否批量转换目录下所有匹配文件",
+        "type": "boolean"
+      },
+      "coord_crs": {
+        "default": "EPSG:4326",
+        "description": "输入坐标系（默认 EPSG:4326）",
+        "type": "string"
+      },
+      "coord_x": {
+        "description": "CSV/Excel X 坐标列名（可选，自动识别）",
+        "type": "string"
+      },
+      "coord_y": {
+        "description": "CSV/Excel Y 坐标列名（可选，自动识别）",
+        "type": "string"
+      },
+      "encoding": {
+        "description": "指定文件编码（可选，自动检测）",
+        "type": "string"
+      },
+      "file_pattern": {
+        "default": "*",
+        "description": "批量转换时的文件模式（如 *.csv）",
+        "type": "string"
+      },
+      "include_geometry": {
+        "default": false,
+        "description": "CSV/Excel 是否包含几何列（WKT）",
+        "type": "boolean"
+      },
+      "input_path": {
+        "description": "输入文件路径或目录（批量模式）",
+        "type": "string"
+      },
+      "layer_name": {
+        "description": "GeoPackage 图层名",
+        "type": "string"
+      },
+      "output_format": {
+        "description": "输出格式（geojson/shapefile/csv/excel/geopackage/kml/geojsonseq/flatgeobuf）",
+        "enum": [
+          "geojson",
+          "shapefile",
+          "csv",
+          "excel",
+          "geopackage",
+          "kml",
+          "geojsonseq",
+          "flatgeobuf"
+        ],
+        "type": "string"
+      },
+      "output_path": {
+        "description": "输出文件路径（可选，自动生成）",
+        "type": "string"
+      },
+      "rename_columns": {
+        "description": "列重命名映射",
+        "type": "object"
+      },
+      "select_columns": {
+        "description": "选择输出的列",
+        "type": "array"
+      },
+      "sheet_name": {
+        "description": "Excel 工作表名",
+        "type": "string"
+      },
+      "target_crs": {
+        "description": "目标坐标系",
+        "type": "string"
+      }
+    },
+    "required": [
+      "input_path"
+    ],
+    "type": "object"
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "type": "boolean"
+      },
+      "input_path": {
+        "type": "string"
+      },
+      "output_path": {
+        "type": "string"
+      },
+      "input_format": {
+        "type": "string"
+      },
+      "output_format": {
+        "type": "string"
+      },
+      "feature_count": {
+        "type": "integer"
+      },
+      "geometry_types": {
+        "type": "array"
+      },
+      "input_crs": {
+        "type": "string"
+      },
+      "output_crs": {
+        "type": "string"
+      },
+      "elapsed_seconds": {
+        "type": "number"
+      }
+    }
+  },
+  "tunable_parameters": {},
+  "validation": {
+    "input_checks": [],
+    "output_checks": []
+  },
+  "provenance": {
+    "created_by": "opengis",
+    "source": "builtin",
+    "created_at": "2026-07-11T01:04:21"
+  },
+  "created_at": "2026-07-11T01:04:21",
+  "updated_at": "2026-07-11T10:00:59"
+}

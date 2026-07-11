@@ -4,12 +4,13 @@ import { type MessagePart, type ChatMessage } from '@/types/chat'
 import MarkdownBlock from './MarkdownBlock'
 import { ThinkingRow } from './ThinkingRow'
 import { ToolCallRow } from './ToolCallRow'
+import { OperationToolOutputRow, OperationToolRow, isOperationTool } from './OperationToolRow'
 import { CodeStepRow } from './CodeStepRow'
 import { ImageRow } from './ImageRow'
 import PlanRow from './PlanRow'
 import { SubagentRow } from './SubagentRow'
 import { ScreenshotRow } from './ScreenshotRow'
-import { ErrorRow, UserMessageRow, markdownBaseDirFor } from './MessagePartRows'
+import { ErrorRow, ProgressRow, UserMessageRow, markdownBaseDirFor } from './MessagePartRows'
 
 interface MessagePartRowProps {
   message: ChatMessage
@@ -71,18 +72,41 @@ export function MessagePartRow({
   }
 
   if (part.type === 'tool') {
+    const toolName = part.tool || message.toolName
+    const toolArgs = (data.args as Record<string, unknown> | undefined)
+      ?? (data.input as Record<string, unknown> | undefined)
+      ?? message.toolArgs
+    const toolStatus = part.status === 'failed'
+      ? 'failed'
+      : part.status === 'running' || part.status === 'streaming'
+        ? 'running'
+        : 'completed'
+    const durationMs = typeof data.durationMs === 'number'
+      ? data.durationMs
+      : typeof data.duration_ms === 'number'
+        ? data.duration_ms
+        : message.durationMs
+
+    if (isOperationTool(toolName)) {
+      return (
+        <OperationToolRow
+          toolName={toolName}
+          toolArgs={toolArgs}
+          output={part.text || valueToString(data.output)}
+          status={toolStatus}
+          durationMs={durationMs}
+        />
+      )
+    }
+
     return (
       <ToolCallRow
-        toolName={part.tool || message.toolName}
+        toolName={toolName}
         toolCallId={part.callId || part.call_id || message.toolCallId}
-        toolArgs={(data.args as Record<string, unknown> | undefined) ?? (data.input as Record<string, unknown> | undefined) ?? message.toolArgs}
+        toolArgs={toolArgs}
         output={part.text || valueToString(data.output)}
-        status={part.status === 'failed'
-          ? 'failed'
-          : part.status === 'running' || part.status === 'streaming'
-            ? 'running'
-            : 'completed'}
-        durationMs={typeof data.durationMs === 'number' ? data.durationMs : message.durationMs}
+        status={toolStatus}
+        durationMs={durationMs}
         isExpanded={isExpanded}
         onToggleExpand={onToggleExpand}
       />
@@ -94,6 +118,14 @@ export function MessagePartRow({
       return <div className="h-px" aria-hidden />
     }
     if (!partText.trim()) return <div className="h-px" aria-hidden />
+    if (isOperationTool(part.tool || message.toolName)) {
+      return (
+        <OperationToolOutputRow
+          text={partText}
+          failed={part.status === 'failed' || message.toolStatus === 'failed'}
+        />
+      )
+    }
     return (
       <div className="ml-[30px] -mt-1">
         <div className="py-2 px-1 text-[13px] leading-[1.7] text-text-primary/85">
@@ -138,6 +170,15 @@ export function MessagePartRow({
   if (part.type === 'progress') {
     if (data.kind === 'subagent') {
       return <SubagentRow data={data.subagentData as ChatMessage['subagentData']} />
+    }
+    if (shouldRenderProgressPart(data)) {
+      return (
+        <ProgressRow
+          stage={typeof data.stage === 'string' ? data.stage : 'processing'}
+          detail={partText || (typeof data.message === 'string' ? data.message : undefined)}
+          status={part.status}
+        />
+      )
     }
     return <div className="h-px" aria-hidden />
   }
@@ -190,4 +231,14 @@ function isCodeExecutionOutput(part: MessagePart): boolean {
     || data.stepNumber != null
     || data.step != null
   )
+}
+
+function shouldRenderProgressPart(
+  data: Record<string, unknown>,
+): boolean {
+  const stage = typeof data.stage === 'string' ? data.stage : ''
+  const kind = typeof data.kind === 'string' ? data.kind : ''
+  if (kind === 'runner_control') return true
+  if (stage === 'retrying' || stage === 'installing_packages') return true
+  return false
 }

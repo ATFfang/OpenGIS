@@ -48,6 +48,14 @@ export interface MapEngineOptions {
   onMoveEnd?: (center: [number, number], zoom: number, bearing: number, pitch: number) => void
 }
 
+export interface CameraUpdate {
+  center?: [number, number]
+  zoom?: number
+  bearing?: number
+  pitch?: number
+  duration?: number
+}
+
 // ─── MapEngine 类 ──────────────────────────────────────
 
 export class MapEngine {
@@ -692,9 +700,32 @@ export class MapEngine {
   /**
    * 飞行到指定位置
    */
-  flyTo(center: [number, number], zoom?: number): void {
+  flyTo(center: [number, number], zoom?: number, options?: Omit<CameraUpdate, 'center' | 'zoom'>): void {
     if (!this.map) return
-    this.map.flyTo({ center, zoom: zoom ?? this.map.getZoom() })
+    this.map.flyTo({
+      center,
+      zoom: zoom ?? this.map.getZoom(),
+      bearing: options?.bearing ?? this.map.getBearing(),
+      pitch: options?.pitch ?? this.map.getPitch(),
+      duration: options?.duration,
+      essential: true,
+    })
+  }
+
+  /**
+   * Animate camera fields independently. Useful for switching between
+   * orthographic 2D and oblique 3D views without changing the current center.
+   */
+  setCamera(update: CameraUpdate): void {
+    if (!this.map) return
+    this.map.easeTo({
+      center: update.center ?? this.map.getCenter(),
+      zoom: update.zoom ?? this.map.getZoom(),
+      bearing: update.bearing ?? this.map.getBearing(),
+      pitch: update.pitch ?? this.map.getPitch(),
+      duration: update.duration,
+      essential: true,
+    })
   }
 
   /**

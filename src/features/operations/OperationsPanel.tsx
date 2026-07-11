@@ -18,6 +18,8 @@ interface OperationSummary {
   name?: string
   version?: string
   status?: string
+  scope?: string
+  read_only?: boolean
   description?: string
   entry?: string
   dependencies?: string[]
@@ -54,6 +56,7 @@ export function OperationsPanel() {
     try {
       const result = await pythonClient.send<{
         operation_root?: string
+        operation_roots?: Record<string, string>
         operations?: OperationSummary[]
       }>('rpc.operations.list', {
         workspace_path: workspacePath,
@@ -88,7 +91,7 @@ export function OperationsPanel() {
       type: 'code',
       filePath,
       language: 'operation',
-      content: JSON.stringify({ operationId: operation.id }),
+      content: JSON.stringify({ operationId: operation.id, operationScope: operation.scope || 'workspace' }),
     })
   }, [operationRoot])
 
@@ -176,6 +179,7 @@ function OperationRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-xs font-medium">{operation.name || operation.id}</span>
+          <ScopeBadge scope={operation.scope} readOnly={operation.read_only} />
           <StatusBadge status={operation.status} />
         </div>
         <div className="mt-0.5 truncate text-2xs text-text-muted">
@@ -184,6 +188,22 @@ function OperationRow({
       </div>
       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-60 group-hover:opacity-100" />
     </button>
+  )
+}
+
+function ScopeBadge({ scope, readOnly }: { scope?: string; readOnly?: boolean }) {
+  const normalized = (scope || 'workspace').toLowerCase()
+  const label = normalized === 'builtin' ? '内置' : '项目'
+  const tone = normalized === 'builtin'
+    ? 'bg-accent-geo/10 text-accent-geo'
+    : 'bg-bg-secondary text-text-muted'
+  return (
+    <span
+      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none ${tone}`}
+      title={readOnly ? 'OpenGIS built-in operation' : 'Workspace operation'}
+    >
+      {label}
+    </span>
   )
 }
 

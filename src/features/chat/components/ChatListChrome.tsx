@@ -3,14 +3,14 @@ import appIconImg from '../../../../resources/icons/app-icon.png'
 export type ActiveWorkState = { label: string; tone: 'thinking' | 'code' | 'working' } | null
 
 export function ListSpacer() {
-  return <div className="h-3" aria-hidden />
+  return <div className="h-2" aria-hidden />
 }
 
 export function TypingFooter({ context }: { context?: ActiveWorkState }) {
-  if (!context) return <div className="h-3" aria-hidden />
+  if (!context) return <div className="h-1.5" aria-hidden />
   return (
-    <div className="px-5 py-3">
-      <div className="flex items-start gap-3">
+    <div className="px-5 pb-2 pt-1">
+      <div className="flex items-center gap-2.5">
         <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0">
           <img src={appIconImg} alt="OpenGIS" className="w-full h-full object-contain" />
         </div>
@@ -28,7 +28,7 @@ function ActiveWorkIndicator({ label, tone }: { label: string; tone: 'thinking' 
         ? 'bg-accent-geo'
         : 'bg-accent-primary'
   return (
-    <div className="flex items-center gap-2 pt-1 min-w-0">
+    <div className="flex items-center gap-2 min-w-0">
       <span className="relative flex w-2 h-2 shrink-0" aria-hidden>
         <span className={`absolute inline-flex h-full w-full rounded-full ${dotClass} opacity-35 animate-ping`} />
         <span className={`relative inline-flex rounded-full w-2 h-2 ${dotClass}`} />

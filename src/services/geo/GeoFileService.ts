@@ -25,6 +25,7 @@ import {
 } from './parsers'
 import { getDefaultStyle } from './defaultStyles'
 import { makeHandledVectorData, shouldHandleLayer } from './layerDataRegistry'
+import { registerRasterBuffer } from './rasterSourceRegistry'
 
 /** Supported file extensions and their source types */
 const EXTENSION_MAP: Record<string, DataSourceType> = {
@@ -99,7 +100,11 @@ export async function loadGeoFile(file: File): Promise<MapLayerDefinition> {
     }
     case 'geotiff': {
       const buffer = await file.arrayBuffer()
-      parsedData = await parseGeoTIFF(buffer, file.name)
+      const sourcePath = typeof (file as File & { path?: unknown }).path === 'string'
+        ? (file as File & { path: string }).path
+        : undefined
+      const sourceBufferId = sourcePath ? undefined : registerRasterBuffer(buffer)
+      parsedData = await parseGeoTIFF(buffer, file.name, { sourcePath, sourceBufferId })
       break
     }
     default:
@@ -194,6 +199,7 @@ function buildLayerDefinition(
         opacity: 1,
         strokeColor: '#ffffff',
         strokeWidth: 0,
+        raster: data.kind === 'raster' ? data.rasterStyle : undefined,
       }
 
   const id = uuidv4()

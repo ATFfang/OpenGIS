@@ -2,7 +2,7 @@ import type { RpcHandler } from '../../registry';
 import { RpcError } from '../../errors';
 import { parseParams } from '../_util';
 import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
-import { getDefaultStyle, resolveVectorGeoJSON, type CategorizedClassification, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData } from '@/services/geo';
+import { getDefaultStyle, resolveVectorGeoJSON, type CategorizedClassification, type ExtrusionSettings, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData } from '@/services/geo';
 import { bboxToTuple, computeBBox, detectGeometryType } from '../_map_util';
 import { GetLegendSpecSchema, HighlightFeaturesSchema, SetLayerFilterSchema, SetLayerLabelSchema, SetLayerOrderSchema, SetLayerRendererSchema, SetLayerStyleSchema, SetLayerVisibilitySchema, UpdateLegendSpecSchema, UpdateVisualVariablesSchema } from '../schemas';
 import { applyPaintToLayerStyle, ensureFullVectorLayer, estimateGeoJSONBytes, matchesAttributes } from './shared';
@@ -68,7 +68,7 @@ export const styleHandlers: Record<string, RpcHandler> = {
             { method: 'rpc.ui.map.set_layer_renderer' },
           );
         }
-        nextStyle.extrusion = parsed.extrusion;
+        nextStyle.extrusion = normalizeExtrusionConfig(layer, parsed.extrusion);
         break;
       // fill/line/circle/raster: no extra config
       default:
@@ -94,6 +94,7 @@ export const styleHandlers: Record<string, RpcHandler> = {
       categorized: nextStyle.categorized ?? null,
       size_variable: nextStyle.sizeVariable ?? null,
       opacity_variable: nextStyle.opacityVariable ?? null,
+      extrusion: nextStyle.extrusion ?? null,
     };
   },
 
@@ -458,6 +459,21 @@ function normalizeCategorizedConfig(
     ...config,
     colors,
     otherColor: normalizeColor(config.otherColor ?? '#9ca3af', 'categorized.otherColor'),
+  };
+}
+
+function normalizeExtrusionConfig(
+  layer: MapLayerDefinition,
+  config: ExtrusionSettings,
+): ExtrusionSettings {
+  ensureVectorLayer(layer, 'set_layer_renderer: extrusion renderer requires a vector layer');
+  ensureNumericField(layer, config.heightField, 'extrusion.heightField');
+  if (config.baseField) {
+    ensureNumericField(layer, config.baseField, 'extrusion.baseField');
+  }
+  return {
+    ...config,
+    heightMultiplier: config.heightMultiplier ?? 1,
   };
 }
 

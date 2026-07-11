@@ -76,6 +76,7 @@ _MAX_SUBAGENT_MAX_STEPS = 20
 # Each branch summary is truncated so a chatty child can't blow up the
 # parent's context — defeating the whole purpose of delegation.
 _RESULT_TRUNCATE = 4000
+_RESULT_CONTRACT_CHARS = 1400
 
 
 # ── Frontend "sub-agent running" affordance ──────────────────────────────
@@ -376,6 +377,41 @@ def _truncate(text: str) -> str:
     return text
 
 
+def _result_contract(index: int, result: dict | None) -> dict:
+    if not result:
+        return {
+            "subagent_result_contract": True,
+            "task_index": index,
+            "ok": False,
+            "summary": "no result",
+        }
+    ok = bool(result.get("ok"))
+    body = str(result.get("result") if ok else result.get("error") or "")
+    return {
+        "subagent_result_contract": True,
+        "task_index": index,
+        "ok": ok,
+        "task": _task_title(str(result.get("task") or "")),
+        "summary": _truncate(body)[:_RESULT_CONTRACT_CHARS],
+        "artifacts": _extract_artifact_paths(body),
+    }
+
+
+def _extract_artifact_paths(text: str) -> list[dict]:
+    import re
+    from pathlib import Path
+
+    pattern = re.compile(r"(/[\w\u4e00-\u9fff ./\-]+?\.(?:geojson|shp|gpkg|csv|json|tif|tiff|png|jpg|jpeg|pdf|md|py))")
+    out = []
+    seen: set[str] = set()
+    for path in pattern.findall(text or "")[:10]:
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append({"path": path, "title": Path(path).name})
+    return out
+
+
 def _format_results(results: list[Optional[dict]]) -> str:
     n = len(results)
     ok = sum(1 for r in results if r and r.get("ok"))
@@ -386,6 +422,10 @@ def _format_results(results: list[Optional[dict]]) -> str:
     )
     lines = [header]
     for i, r in enumerate(results, 1):
+        lines.append(
+            "Contract: "
+            + json.dumps(_result_contract(i, r), ensure_ascii=False, default=str)
+        )
         if not r:
             lines.append(f"### Task {i} — (no result)\n")
             continue

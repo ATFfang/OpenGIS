@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from opengis_backend.agent.context.failure_memory import FailureMemoryExtractor
 from opengis_backend.runs.archive import RunArchive
 from opengis_backend.workspace.memory_store import MemoryRecord, MemoryStore
 
@@ -45,6 +46,15 @@ class KnowledgeExtractor:
         records.extend(self._fact_records(user_message, final_answer, run_id))
         records.extend(self._dataset_cards(user_message, final_answer, run_archive))
         records.extend(self._recipe_records(user_message, final_answer, run_archive, workflow))
+        records.extend(self._operation_records(user_message, run_archive))
+        records.extend(self._artifact_records(run_archive))
+        records.extend(
+            FailureMemoryExtractor().extract_run(
+                user_message=user_message,
+                final_answer=final_answer,
+                run_archive=run_archive,
+            )
+        )
         self.store.add_many(records)
         logger.info("KnowledgeExtractor stored %d record(s) for run=%s", len(records), run_id)
         return records
@@ -142,6 +152,40 @@ class KnowledgeExtractor:
             )
         return records[:12]
 
+    def _artifact_records(self, run_archive: RunArchive) -> list[MemoryRecord]:
+        records: list[MemoryRecord] = []
+        for artifact in run_archive.read_artifacts()[:20]:
+            path = artifact.get("path")
+            layer_id = artifact.get("layer_id")
+            title = str(artifact.get("title") or path or layer_id or artifact.get("id") or "artifact")
+            if not path and not layer_id:
+                continue
+            content = f"Artifact: {title}"
+            if path:
+                content += f"\nPath: {path}"
+            if layer_id:
+                content += f"\nLayer id: {layer_id}"
+            kind = str(artifact.get("kind") or "artifact")
+            records.append(
+                MemoryRecord.create(
+                    kind="artifact",
+                    scope="artifact",
+                    title=title,
+                    content=content,
+                    tags=["artifact", kind],
+                    source_run_id=run_archive.run_id,
+                    source_artifact=str(path or layer_id),
+                    confidence=0.74,
+                    metadata={
+                        "artifact_id": artifact.get("id"),
+                        "kind": kind,
+                        "path": path,
+                        "layer_id": layer_id,
+                    },
+                )
+            )
+        return records[:12]
+
     def _recipe_records(
         self,
         user_message: str,
@@ -175,6 +219,73 @@ class KnowledgeExtractor:
                 source_run_id=run_archive.run_id,
                 confidence=0.68,
                 metadata={"tool_count": len(tool_calls), "script_count": len(steps)},
+            )
+        ]
+
+    def _operation_records(self, user_message: str, run_archive: RunArchive) -> list[MemoryRecord]:
+        tool_calls = run_archive.read_tool_calls()
+        operation_calls = [
+            call for call in tool_calls
+            if str(call.get("name") or "") in {
+                "create_operation",
+                "edit_operation",
+                "promote_script_to_operation",
+                "validate_operation",
+                "run_operation",
+            }
+        ]
+        if not operation_calls:
+            return []
+
+        operation_ids: list[str] = []
+        success_count = 0
+        failures: list[str] = []
+        for call in operation_calls:
+            args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            output = str(call.get("output") or "")
+            parsed: dict[str, Any] = {}
+            try:
+                raw = json.loads(output)
+                if isinstance(raw, dict):
+                    parsed = raw
+            except Exception:
+                parsed = {}
+            op_id = args.get("operation_id") or args.get("id") or parsed.get("operation_id")
+            operation = parsed.get("operation")
+            if not op_id and isinstance(operation, dict):
+                op_id = operation.get("id") or operation.get("operation_id")
+            if op_id and str(op_id) not in operation_ids:
+                operation_ids.append(str(op_id))
+            if call.get("status") == "completed" or parsed.get("success") is True:
+                success_count += 1
+            if call.get("status") == "error" or parsed.get("success") is False:
+                error = str(parsed.get("error") or call.get("error") or output[:200])
+                if error:
+                    failures.append(" ".join(error.split())[:240])
+
+        if not operation_ids and not success_count:
+            return []
+        content = f"Operation procedure from task: {user_message.strip()[:240]}"
+        if operation_ids:
+            content += "\nOperations: " + ", ".join(operation_ids[:8])
+        content += "\nTool sequence: " + " -> ".join(str(call.get("name") or "") for call in operation_calls[:16])
+        content += f"\nSuccessful operation-related calls: {success_count}/{len(operation_calls)}"
+        if failures:
+            content += "\nObserved failures before repair: " + " | ".join(failures[:4])
+        return [
+            MemoryRecord.create(
+                kind="recipe",
+                scope="operation",
+                title="Reusable operation procedure",
+                content=content,
+                tags=["operation", "recipe", *operation_ids[:4]],
+                source_run_id=run_archive.run_id,
+                confidence=0.78 if success_count else 0.62,
+                metadata={
+                    "operation_ids": operation_ids,
+                    "operation_call_count": len(operation_calls),
+                    "success_count": success_count,
+                },
             )
         ]
 

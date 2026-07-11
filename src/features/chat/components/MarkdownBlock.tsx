@@ -147,7 +147,7 @@ const MarkdownBlock = memo(({ markdown, showCursor, baseDir, resolveImageSrc }: 
   // inline <span> 是无效 HTML，浏览器会自动"修复"，在实际 DOM 里提前关闭 span 再插 div，
   // 结果经常看到**双边距 / 边框错位 / 代码块"重影"**。改成 block-level <div> 就彻底没事。
   return (
-    <div className="inline-markdown-block w-full min-w-0 overflow-hidden break-words">
+    <div className="inline-markdown-block w-full min-w-0 overflow-hidden break-words select-text">
       <div className={`[&>p:first-child]:mt-0 ${showCursor ? 'inline-cursor-container' : ''}`}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}

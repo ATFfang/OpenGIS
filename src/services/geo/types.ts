@@ -150,6 +150,16 @@ export interface ParsedRasterData {
     [number, number],
     [number, number],
   ]
+  /** Source raster path when this image can be re-rendered with a new color ramp. */
+  sourcePath?: string
+  /** Session-local buffer handle for File API loaded rasters without a stable disk path. */
+  sourceBufferId?: string
+  /** Backend raster registry id when this layer is served as local XYZ tiles. */
+  rasterId?: string
+  /** Rendering style used to produce `imageUrl`. */
+  rasterStyle?: RasterStyleSettings
+  /** True when frontend can re-read `sourcePath` and re-render this layer. */
+  rerenderable?: boolean
 }
 
 export type ParsedData = ParsedVectorData | ParsedRasterData
@@ -303,6 +313,44 @@ export interface ExtrusionSettings {
   baseField?: string
 }
 
+export type RasterColorRampName =
+  | 'viridis'
+  | 'magma'
+  | 'plasma'
+  | 'inferno'
+  | 'turbo'
+  | 'gray'
+  | 'terrain'
+  | 'spectral'
+  | 'custom'
+
+export interface RasterColorStop {
+  /** Normalized stop position in [0, 1]. */
+  value: number
+  /** CSS hex color. */
+  color: string
+  /** Per-stop alpha in [0, 1]. */
+  opacity?: number
+}
+
+export interface RasterStyleSettings {
+  /** Single-band display band, 1-based. RGB rasters ignore this unless mode='singleband'. */
+  band?: number
+  /** Palette name, or 'custom' when `stops` is provided. */
+  ramp?: RasterColorRampName
+  /** Custom color/alpha stops in normalized value space. */
+  stops?: RasterColorStop[]
+  /** Stretch min/max in source pixel values. Defaults to robust P2/P98 stats. */
+  min?: number
+  max?: number
+  /** Overall alpha applied after per-stop alpha. */
+  opacity?: number
+  /** Reverse the ramp direction. */
+  reverse?: boolean
+  /** Force RGB or single-band rendering. Defaults to RGB for 3+ band rasters. */
+  mode?: 'auto' | 'singleband' | 'rgb'
+}
+
 export interface LayerStyle {
   renderType: LayerRenderType
   color: string
@@ -336,6 +384,8 @@ export interface LayerStyle {
   cluster?: ClusterSettings
   /** `renderType='extrusion'` 时必填 heightField */
   extrusion?: ExtrusionSettings
+  /** `renderType='raster'` 时可选 — color ramp / stretch settings. */
+  raster?: RasterStyleSettings
   /** `renderType='symbol'` 时可选 — 图标配置 */
   icon?: string  // 'circle' | 'emoji:📍' | 'svg:pin' | 'path:/abs/icon.svg'
   /** `renderType='symbol'` 时可选 — 文字标注配置 */

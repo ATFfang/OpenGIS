@@ -12,6 +12,7 @@ ordinary Python code, with no awareness of TS/Electron.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional, Union
 from uuid import uuid4
@@ -600,6 +601,10 @@ def query_features(
          "description": "Target latitude."},
         {"name": "zoom", "type": "number", "required": False,
          "description": "Target zoom level (0-22)."},
+        {"name": "pitch", "type": "number", "required": False,
+         "description": "Camera pitch in degrees (0=top-down, 45-70=oblique 3D)."},
+        {"name": "bearing", "type": "number", "required": False,
+         "description": "Camera bearing/rotation in degrees."},
         {"name": "bbox", "type": "array", "required": False,
          "description": "Bounding box as a list [minx, miny, maxx, maxy] OR a JSON-encoded string. Overrides lng/lat."},
         {"name": "duration", "type": "number", "required": False,
@@ -615,6 +620,8 @@ def fly_to(
     lng: Optional[float] = None,
     lat: Optional[float] = None,
     zoom: Optional[float] = None,
+    pitch: Optional[float] = None,
+    bearing: Optional[float] = None,
     bbox: Optional[Union[str, list, tuple]] = None,
     duration: Optional[float] = None,
 ) -> dict:
@@ -646,14 +653,169 @@ def fly_to(
 
     if duration is not None:
         payload["duration"] = float(duration)
+    if pitch is not None:
+        payload["pitch"] = float(pitch)
+    if bearing is not None:
+        payload["bearing"] = float(bearing)
 
     # Route to the right canonical method based on payload shape.
     if "bbox" in payload:
         _notify_map(ctx, "rpc.ui.map.zoom_to_bbox", payload)
+        if pitch is not None or bearing is not None:
+            camera_payload: dict = {}
+            if pitch is not None:
+                camera_payload["pitch"] = float(pitch)
+            if bearing is not None:
+                camera_payload["bearing"] = float(bearing)
+            if duration is not None:
+                camera_payload["duration"] = float(duration)
+            run_async_from_sync(ctx.request("rpc.ui.map.set_camera", camera_payload))
         return {"success": True, "target": f"bbox={payload['bbox']}"}
     else:
         _notify_map(ctx, "rpc.ui.map.fly_to", payload)
         return {"success": True, "target": f"center=[{lng}, {lat}]"}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# set_map_camera / 3D view shortcuts
+# ──────────────────────────────────────────────────────────────────────
+def _set_map_camera(
+    ctx: ToolContext,
+    lng: Optional[float] = None,
+    lat: Optional[float] = None,
+    zoom: Optional[float] = None,
+    pitch: Optional[float] = None,
+    bearing: Optional[float] = None,
+    duration: Optional[float] = None,
+) -> dict:
+    payload: dict = {}
+    if lng is not None or lat is not None:
+        if lng is None or lat is None:
+            raise ValueError("set_map_camera requires both lng and lat when setting center")
+        payload["center"] = [float(lng), float(lat)]
+    if zoom is not None:
+        payload["zoom"] = float(zoom)
+    if pitch is not None:
+        payload["pitch"] = float(pitch)
+    if bearing is not None:
+        payload["bearing"] = float(bearing)
+    if duration is not None:
+        payload["duration"] = float(duration)
+    if not payload:
+        raise ValueError("set_map_camera requires at least one camera field")
+    return run_async_from_sync(ctx.request("rpc.ui.map.set_camera", payload))
+
+
+@tool(
+    name="set_map_camera",
+    display_name="Set Map Camera",
+    description=(
+        "Set the map camera fields directly. Use this for view-only changes, "
+        "including 3D oblique view. Provide any subset of lng/lat, zoom, pitch, "
+        "bearing, duration. pitch=0 is top-down 2D; pitch around 45-70 shows 3D "
+        "extrusion layers clearly."
+    ),
+    category="visualization",
+    params=[
+        {"name": "lng", "type": "number", "required": False,
+         "description": "Target longitude. Must be paired with lat."},
+        {"name": "lat", "type": "number", "required": False,
+         "description": "Target latitude. Must be paired with lng."},
+        {"name": "zoom", "type": "number", "required": False,
+         "description": "Target zoom level."},
+        {"name": "pitch", "type": "number", "required": False,
+         "description": "Camera pitch in degrees, 0-85."},
+        {"name": "bearing", "type": "number", "required": False,
+         "description": "Camera bearing/rotation in degrees."},
+        {"name": "duration", "type": "number", "required": False,
+         "description": "Animation duration in ms."},
+    ],
+    returns="dict with keys: center, zoom, pitch, bearing",
+    examples=["Tilt the map into a 3D view", "Rotate the map 30 degrees"],
+    tags=["map", "camera", "3d", "view"],
+    needs_context=True,
+)
+def set_map_camera(
+    ctx: ToolContext,
+    lng: Optional[float] = None,
+    lat: Optional[float] = None,
+    zoom: Optional[float] = None,
+    pitch: Optional[float] = None,
+    bearing: Optional[float] = None,
+    duration: Optional[float] = None,
+) -> dict:
+    return _set_map_camera(
+        ctx,
+        lng=lng,
+        lat=lat,
+        zoom=zoom,
+        pitch=pitch,
+        bearing=bearing,
+        duration=duration,
+    )
+
+
+@tool(
+    name="enter_3d_view",
+    display_name="Enter 3D View",
+    description=(
+        "Switch the map into an oblique 3D viewing angle. This changes only the "
+        "camera pitch/bearing/optional zoom; it does not change basemap or layer "
+        "visibility. Use after extrusion rendering or when the user asks for 3D view."
+    ),
+    category="visualization",
+    params=[
+        {"name": "pitch", "type": "number", "required": False,
+         "description": "Pitch in degrees. Default 60."},
+        {"name": "bearing", "type": "number", "required": False,
+         "description": "Bearing in degrees. Default -25."},
+        {"name": "zoom", "type": "number", "required": False,
+         "description": "Optional zoom level."},
+        {"name": "duration", "type": "number", "required": False,
+         "description": "Animation duration in ms. Default 800."},
+    ],
+    returns="dict with keys: center, zoom, pitch, bearing",
+    examples=["Switch to 3D view", "Show this layer from an oblique angle"],
+    tags=["map", "camera", "3d", "view"],
+    needs_context=True,
+)
+def enter_3d_view(
+    ctx: ToolContext,
+    pitch: Optional[float] = None,
+    bearing: Optional[float] = None,
+    zoom: Optional[float] = None,
+    duration: Optional[float] = None,
+) -> dict:
+    return _set_map_camera(
+        ctx,
+        pitch=60.0 if pitch is None else pitch,
+        bearing=-25.0 if bearing is None else bearing,
+        zoom=zoom,
+        duration=800.0 if duration is None else duration,
+    )
+
+
+@tool(
+    name="exit_3d_view",
+    display_name="Exit 3D View",
+    description="Return the map camera to top-down 2D view by resetting pitch and bearing.",
+    category="visualization",
+    params=[
+        {"name": "duration", "type": "number", "required": False,
+         "description": "Animation duration in ms. Default 600."},
+    ],
+    returns="dict with keys: center, zoom, pitch, bearing",
+    examples=["Return to 2D view", "Reset the map rotation"],
+    tags=["map", "camera", "2d", "view"],
+    needs_context=True,
+)
+def exit_3d_view(ctx: ToolContext, duration: Optional[float] = None) -> dict:
+    return _set_map_camera(
+        ctx,
+        pitch=0.0,
+        bearing=0.0,
+        duration=600.0 if duration is None else duration,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1070,6 +1232,106 @@ def set_categorized_style(
 
 
 @tool(
+    name="set_extrusion_style",
+    display_name="Set 3D Extrusion Style",
+    description=(
+        "Extrude polygon features into 3D using a numeric height field. "
+        "Use this for buildings, 3D choropleths, or any user request involving "
+        "'3D', 'extrude', '拉伸', '拔起', or building height. This is the canonical "
+        "tool for layer extrusion; do not use set_layer_visual_variables for extrusion."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "Polygon layer id to extrude."},
+        {"name": "height_field", "type": "string", "required": True,
+         "description": "Numeric field containing extrusion height, e.g. height or floors_m."},
+        {"name": "height_multiplier", "type": "number", "required": False, "default": 1,
+         "description": "Multiplier applied to height_field. Use >1 when heights are too subtle."},
+        {"name": "base_field", "type": "string", "required": False,
+         "description": "Optional numeric base/elevation field."},
+        {"name": "color", "type": "string", "required": False,
+         "description": "Optional extrusion color, e.g. #f59e0b."},
+        {"name": "opacity", "type": "number", "required": False,
+         "description": "Optional extrusion opacity 0-1."},
+        {"name": "enter_3d", "type": "boolean", "required": False, "default": False,
+         "description": "Also tilt the map camera. Use true only when the user asks for 3D/oblique view or wants an angled preview."},
+        {"name": "pitch", "type": "number", "required": False, "default": 60,
+         "description": "Camera pitch when enter_3d is true."},
+        {"name": "bearing", "type": "number", "required": False, "default": -25,
+         "description": "Camera bearing when enter_3d is true."},
+        {"name": "zoom", "type": "number", "required": False,
+         "description": "Optional zoom when entering 3D view."},
+    ],
+    returns="dict with keys: success, layer_id, height_field, extrusion, camera",
+    examples=[
+        "Extrude campus buildings by height and switch to 3D view",
+        "拉伸建筑图层，height 字段作为高度，并进入三维视角",
+    ],
+    tags=["map", "style", "3d", "extrusion", "building", "拉伸"],
+    needs_context=True,
+)
+def set_extrusion_style(
+    ctx: ToolContext,
+    layer_id: str,
+    height_field: str,
+    height_multiplier: float = 1,
+    base_field: Optional[str] = None,
+    color: Optional[str] = None,
+    opacity: Optional[float] = None,
+    enter_3d: bool = False,
+    pitch: Optional[float] = None,
+    bearing: Optional[float] = None,
+    zoom: Optional[float] = None,
+) -> dict:
+    payload: dict[str, Any] = {
+        "layer_id": layer_id,
+        "renderer": "extrusion",
+        "extrusion": {
+            "heightField": height_field,
+            "heightMultiplier": float(height_multiplier),
+        },
+    }
+    if base_field:
+        payload["extrusion"]["baseField"] = base_field
+
+    renderer_result = run_async_from_sync(ctx.request("rpc.ui.map.set_layer_renderer", payload))
+
+    style_result: dict[str, Any] | None = None
+    paint: dict[str, Any] = {}
+    if color is not None:
+        paint["fill-color"] = color
+    if opacity is not None:
+        paint["fill-opacity"] = float(opacity)
+    if paint:
+        style_result = run_async_from_sync(ctx.request(
+            "rpc.ui.map.set_layer_style",
+            {"layer_id": layer_id, "style": {"type": "fill", "paint": paint}},
+        ))
+
+    camera_result: dict[str, Any] | None = None
+    if enter_3d:
+        camera_result = _set_map_camera(
+            ctx,
+            pitch=60.0 if pitch is None else pitch,
+            bearing=-25.0 if bearing is None else bearing,
+            zoom=zoom,
+            duration=800.0,
+        )
+
+    return {
+        "success": True,
+        "layer_id": layer_id,
+        "height_field": height_field,
+        "height_multiplier": float(height_multiplier),
+        "extrusion": payload["extrusion"],
+        "renderer": renderer_result,
+        "style": style_result,
+        "camera": camera_result,
+    }
+
+
+@tool(
     name="set_layer_visual_variables",
     display_name="Set Layer Visual Variables",
     description=(
@@ -1344,18 +1606,37 @@ def update_legend_spec(
     name="add_raster",
     display_name="Add Raster Layer",
     description=(
-        "Add a raster layer (GeoTIFF) to the map. The frontend parses the "
-        "TIFF file directly using geotiff.js. Returns a dict with layer_id. "
-        "After calling this, use zoom_to_layer(layer_id) to fit the camera."
+        "Add a raster layer to the map. Use render_mode='tiles' for large "
+        "rasters or non-trivial CRS because the backend reads windowed XYZ "
+        "tiles with rasterio. Use frontend for small GeoTIFFs when direct "
+        "browser rendering is enough. Returns a dict with layer_id."
     ),
     category="visualization",
     params=[
-        {"name": "path", "type": "string", "required": True,
-         "description": "Path to a GeoTIFF (.tif/.tiff) file on disk."},
+        {"name": "path", "type": "string", "required": False,
+         "description": "Path to a GeoTIFF (.tif/.tiff) file on disk. Preferred parameter."},
+        {"name": "raster_path", "type": "string", "required": False,
+         "description": "Alias for path. Use only if you naturally refer to the file as raster_path."},
+        {"name": "file_path", "type": "string", "required": False,
+         "description": "Alias for path."},
         {"name": "name", "type": "string", "required": False,
          "description": "Display name shown in the layer panel. Defaults to file stem."},
         {"name": "opacity", "type": "number", "required": False,
          "description": "Layer opacity 0.0-1.0. Default 1.0."},
+        {"name": "render_mode", "type": "string", "required": False,
+         "description": "auto (default), frontend, backend, or tiles. tiles is best for large/multi-format rasters; frontend uses geotiff.js for small GeoTIFFs; backend renders one preview PNG."},
+        {"name": "ramp", "type": "string", "required": False,
+         "description": "Color ramp for single-band raster display, e.g. viridis, magma, plasma, inferno, turbo, gray, terrain, spectral."},
+        {"name": "band", "type": "number", "required": False,
+         "description": "1-based band index for single-band rendering."},
+        {"name": "stops", "type": "array", "required": False,
+         "description": "Custom color/alpha stops. Example: [{value:0,color:'#0000ff',opacity:0.2},{value:1,color:'#ff0000',opacity:1}]."},
+        {"name": "min", "type": "number", "required": False,
+         "description": "Stretch minimum in source values."},
+        {"name": "max", "type": "number", "required": False,
+         "description": "Stretch maximum in source values."},
+        {"name": "reverse", "type": "boolean", "required": False,
+         "description": "Reverse the selected color ramp."},
     ],
     returns=(
         "dict with keys: layer_id (str), path (str), name (str). "
@@ -1371,16 +1652,65 @@ def update_legend_spec(
 )
 def add_raster(
     ctx: ToolContext,
-    path: str,
+    path: Optional[str] = None,
+    raster_path: Optional[str] = None,
+    file_path: Optional[str] = None,
     name: Optional[str] = None,
     opacity: Optional[float] = None,
+    render_mode: Optional[str] = None,
+    ramp: Optional[str] = None,
+    band: Optional[int] = None,
+    stops: Any = None,
+    min: Optional[float] = None,  # noqa: A002 - tool parameter name
+    max: Optional[float] = None,  # noqa: A002 - tool parameter name
+    reverse: Optional[bool] = None,
 ) -> dict:
+    path = path or raster_path or file_path
+    if not path:
+        raise ValueError("add_raster requires path, raster_path, or file_path")
     path = _resolve_workspace_path(ctx, path)
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Raster file not found: {path}")
     if not name:
         name = p.stem
+
+    mode = (render_mode or "auto").strip().lower()
+    if mode not in {"auto", "frontend", "backend", "tiles"}:
+        raise ValueError("add_raster render_mode must be one of: auto, frontend, backend, tiles")
+
+    ext = p.suffix.lower()
+    file_size = p.stat().st_size
+    use_tiles = mode == "tiles" or (mode == "auto" and (file_size > 40 * 1024 * 1024 or ext not in {".tif", ".tiff"}))
+    use_frontend = not use_tiles and (mode == "frontend" or (mode == "auto" and ext in {".tif", ".tiff"}))
+
+    if use_tiles:
+        return _add_raster_backend_tiles(
+            ctx,
+            path=str(p.resolve()),
+            name=name,
+            opacity=opacity,
+            ramp=ramp,
+            band=band,
+            stops=stops,
+            min=min,
+            max=max,
+            reverse=reverse,
+        )
+
+    if not use_frontend:
+        return _add_raster_backend_preview(
+            ctx,
+            path=str(p.resolve()),
+            name=name,
+            opacity=opacity,
+            ramp=ramp,
+            band=band,
+            stops=stops,
+            min=min,
+            max=max,
+            reverse=reverse,
+        )
 
     # 内容无关的唯一 id，避免同名栅格多次加载互相覆盖。
     layer_id = f"raster_{uuid4().hex}"
@@ -1392,14 +1722,293 @@ def add_raster(
     }
     if opacity is not None:
         payload["opacity"] = float(opacity)
+    if ramp or band is not None or stops is not None or min is not None or max is not None or reverse is not None:
+        payload["raster"] = {
+            **({"ramp": ramp} if ramp else {}),
+            **({"band": int(band)} if band is not None else {}),
+            **({"opacity": float(opacity)} if opacity is not None else {}),
+            **({"stops": _coerce_jsonish(stops)} if stops is not None else {}),
+            **({"min": float(min)} if min is not None else {}),
+            **({"max": float(max)} if max is not None else {}),
+            **({"reverse": bool(reverse)} if reverse is not None else {}),
+        }
 
-    _notify_map(ctx, "rpc.ui.map.add_raster_from_file", payload)
+    result = run_async_from_sync(ctx.request("rpc.ui.map.add_raster_from_file", payload))
+    if not isinstance(result, dict):
+        result = {}
 
     return {
-        "layer_id": layer_id,
+        "layer_id": result.get("layer_id", layer_id),
         "path": str(p.resolve()),
-        "name": name,
+        "name": result.get("name", name),
+        "bbox": result.get("bbox"),
+        "width": result.get("width"),
+        "height": result.get("height"),
+        "band_count": result.get("band_count"),
+        "crs": result.get("crs"),
+        "nodata": result.get("nodata"),
+        "band_stats": result.get("band_stats"),
+        "render_mode": "frontend",
+        "raster_style": result.get("raster_style"),
+        "rerenderable": result.get("rerenderable"),
     }
+
+
+def _raster_cache_dir(ctx: ToolContext) -> str:
+    workspace = ctx.meta.get("workspace_path") if isinstance(ctx.meta, dict) else None
+    base = Path(str(workspace)).expanduser() if workspace else Path.cwd()
+    out = base / ".opengis" / "raster-cache"
+    out.mkdir(parents=True, exist_ok=True)
+    return str(out)
+
+
+def _backend_http_base() -> str:
+    port = os.environ.get("OPENGIS_PORT") or "8765"
+    return f"http://127.0.0.1:{port}"
+
+
+def _raster_style_payload(
+    *,
+    opacity: Optional[float] = None,
+    ramp: Optional[str] = None,
+    band: Optional[int] = None,
+    stops: Any = None,
+    min: Optional[float] = None,
+    max: Optional[float] = None,
+    reverse: Optional[bool] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "band": int(band or 1),
+        "ramp": ramp or "viridis",
+        "opacity": 1.0 if opacity is None else float(opacity),
+        "mode": "singleband",
+    }
+    if stops is not None:
+        payload["stops"] = _coerce_jsonish(stops)
+        payload["ramp"] = "custom"
+    if min is not None:
+        payload["min"] = float(min)
+    if max is not None:
+        payload["max"] = float(max)
+    if reverse is not None:
+        payload["reverse"] = bool(reverse)
+    return payload
+
+
+def _add_raster_backend_tiles(
+    ctx: ToolContext,
+    *,
+    path: str,
+    name: str,
+    opacity: Optional[float] = None,
+    ramp: Optional[str] = None,
+    band: Optional[int] = None,
+    stops: Any = None,
+    min: Optional[float] = None,
+    max: Optional[float] = None,
+    reverse: Optional[bool] = None,
+) -> dict:
+    from opengis_backend.integrations.gis.raster_service import register_raster
+
+    style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, min=min, max=max, reverse=reverse)
+    registration = register_raster(path, style=style)
+    tile_url = (
+        f"{_backend_http_base()}/api/rasters/{registration.raster_id}"
+        f"/tiles/{{z}}/{{x}}/{{y}}.png?rev={registration.style_revision}"
+    )
+    result = run_async_from_sync(ctx.request("rpc.ui.map.add_raster_from_url", {
+        "url": tile_url,
+        "name": name,
+        "tile_type": "xyz",
+        "bounds": list(registration.info.bbox) if registration.info.bbox else None,
+        "raster_id": registration.raster_id,
+        "raster_source_path": path,
+        "raster_info": registration.info.to_dict(),
+        "raster_style": registration.style,
+    }))
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "layer_id": result.get("layer_id"),
+        "path": path,
+        "name": result.get("name", name),
+        "bbox": list(registration.info.bbox) if registration.info.bbox else None,
+        "width": registration.info.width,
+        "height": registration.info.height,
+        "band_count": registration.info.band_count,
+        "crs": registration.info.crs,
+        "nodata": registration.info.nodata,
+        "band_stats": registration.info.band_stats,
+        "driver": registration.info.driver,
+        "render_mode": "tiles",
+        "raster_id": registration.raster_id,
+        "tile_url": tile_url,
+        "raster_style": registration.style,
+        "rerenderable": True,
+    }
+
+
+def _add_raster_backend_preview(
+    ctx: ToolContext,
+    *,
+    path: str,
+    name: str,
+    opacity: Optional[float] = None,
+    ramp: Optional[str] = None,
+    band: Optional[int] = None,
+    stops: Any = None,
+    min: Optional[float] = None,
+    max: Optional[float] = None,
+    reverse: Optional[bool] = None,
+) -> dict:
+    from opengis_backend.integrations.gis.raster_service import render_raster_preview
+
+    preview = render_raster_preview(
+        path,
+        output_dir=_raster_cache_dir(ctx),
+        band=int(band or 1),
+        ramp=ramp or "viridis",
+        stops=_coerce_jsonish(stops) if stops is not None else None,
+        min_value=min,
+        max_value=max,
+        opacity=1.0 if opacity is None else float(opacity),
+        reverse=bool(reverse) if reverse is not None else False,
+    )
+    raster_style = _raster_style_payload(opacity=opacity, ramp=ramp, band=band, stops=stops, min=min, max=max, reverse=reverse)
+    result = run_async_from_sync(ctx.request("rpc.ui.map.add_image_overlay", {
+        "path": preview.image_path,
+        "name": name,
+        "bbox": list(preview.bbox),
+        "opacity": 1.0 if opacity is None else float(opacity),
+        "raster_source_path": path,
+        "raster_info": preview.info.to_dict(),
+        "raster_style": raster_style,
+    }))
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "layer_id": result.get("layer_id"),
+        "path": path,
+        "preview_path": preview.image_path,
+        "name": result.get("name", name),
+        "bbox": list(preview.bbox),
+        "width": preview.info.width,
+        "height": preview.info.height,
+        "band_count": preview.info.band_count,
+        "crs": preview.info.crs,
+        "nodata": preview.info.nodata,
+        "band_stats": preview.info.band_stats,
+        "driver": preview.info.driver,
+        "render_mode": "backend",
+        "raster_style": raster_style,
+        "rerenderable": False,
+    }
+
+
+@tool(
+    name="get_raster_info",
+    display_name="Get Raster Info",
+    description=(
+        "Inspect a raster layer already on the map, or inspect a raster file path "
+        "with backend rasterio. Use this before choosing bands, color ramps, or "
+        "stretch ranges."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": False,
+         "description": "Existing raster layer id on the map."},
+        {"name": "path", "type": "string", "required": False,
+         "description": "Raster file path to inspect with backend rasterio."},
+    ],
+    returns="dict with bbox, crs, width, height, band_count, band_stats, raster_style.",
+    examples=["Inspect this TIFF's band statistics", "查看 raster 图层的数据特征"],
+    tags=["map", "raster", "metadata", "statistics"],
+    needs_context=True,
+)
+def get_raster_info(
+    ctx: ToolContext,
+    layer_id: Optional[str] = None,
+    path: Optional[str] = None,
+) -> dict:
+    if layer_id:
+        return run_async_from_sync(ctx.request("rpc.ui.map.get_raster_info", {"layer_id": layer_id}))
+    if not path:
+        raise ValueError("get_raster_info requires either layer_id or path")
+    resolved = _resolve_workspace_path(ctx, path)
+    from opengis_backend.integrations.gis.raster_service import inspect_raster
+
+    return inspect_raster(resolved).to_dict()
+
+
+@tool(
+    name="set_raster_style",
+    display_name="Set Raster Style",
+    description=(
+        "Update a raster layer's color ramp / stretch / opacity. For frontend "
+        "GeoTIFF layers this re-renders the raster in place. Supports named ramps "
+        "or custom stops with per-stop opacity."
+    ),
+    category="visualization",
+    params=[
+        {"name": "layer_id", "type": "string", "required": True,
+         "description": "Raster layer id."},
+        {"name": "ramp", "type": "string", "required": False,
+         "description": "Named ramp: viridis, magma, plasma, inferno, turbo, gray, terrain, spectral."},
+        {"name": "stops", "type": "array", "required": False,
+         "description": "Custom stops, e.g. [{value:0,color:'#0000ff',opacity:0.2},{value:1,color:'#ff0000',opacity:0.9}]. JSON string accepted."},
+        {"name": "band", "type": "number", "required": False,
+         "description": "1-based band index."},
+        {"name": "min", "type": "number", "required": False,
+         "description": "Stretch minimum in source values."},
+        {"name": "max", "type": "number", "required": False,
+         "description": "Stretch maximum in source values."},
+        {"name": "opacity", "type": "number", "required": False,
+         "description": "Overall opacity 0-1."},
+        {"name": "reverse", "type": "boolean", "required": False,
+         "description": "Reverse color ramp."},
+        {"name": "mode", "type": "string", "required": False,
+         "description": "auto, singleband, or rgb."},
+    ],
+    returns="dict with updated raster_style and raster metadata.",
+    examples=["Set DEM raster to terrain ramp with 70% opacity", "Use blue transparent to red opaque custom raster stops"],
+    tags=["map", "raster", "style", "color-ramp", "opacity"],
+    needs_context=True,
+)
+def set_raster_style(
+    ctx: ToolContext,
+    layer_id: str,
+    ramp: Optional[str] = None,
+    stops: Any = None,
+    band: Optional[int] = None,
+    min: Optional[float] = None,  # noqa: A002 - tool parameter name
+    max: Optional[float] = None,  # noqa: A002 - tool parameter name
+    opacity: Optional[float] = None,
+    reverse: Optional[bool] = None,
+    mode: Optional[str] = None,
+) -> dict:
+    raster: dict[str, Any] = {}
+    if ramp is not None:
+        raster["ramp"] = ramp
+    if stops is not None:
+        raster["stops"] = _coerce_jsonish(stops)
+    if band is not None:
+        raster["band"] = int(band)
+    if min is not None:
+        raster["min"] = float(min)
+    if max is not None:
+        raster["max"] = float(max)
+    if opacity is not None:
+        raster["opacity"] = float(opacity)
+    if reverse is not None:
+        raster["reverse"] = bool(reverse)
+    if mode is not None:
+        raster["mode"] = mode
+    if not raster:
+        raise ValueError("set_raster_style requires at least one style option")
+    return run_async_from_sync(ctx.request("rpc.ui.map.set_raster_style", {
+        "layer_id": layer_id,
+        "raster": raster,
+    }))
 
 
 # ──────────────────────────────────────────────────────────────────────

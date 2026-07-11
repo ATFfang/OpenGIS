@@ -38,6 +38,12 @@ function resetStore(): void {
     activeLayerId: null,
     basemap: BUILTIN_BASEMAPS.find((b) => b.id === 'osm-streets')!,
     basemapVisible: true,
+    viewState: {
+      center: [116.4, 39.9],
+      zoom: 4,
+      bearing: 0,
+      pitch: 0,
+    },
   });
 }
 
@@ -545,14 +551,60 @@ describe('rpc.ui.map.zoom_to_bbox', () => {
 describe('rpc.ui.map.fly_to', () => {
   beforeEach(resetStore);
 
-  it('delegates to mapEngine.flyTo with center + zoom', async () => {
+  it('delegates to mapEngine.flyTo with center, zoom, pitch and bearing', async () => {
     const spy = vi.spyOn(mapEngine, 'flyTo').mockImplementation(() => {});
     const d = makeDispatcher();
     await d.handleRequest(
-      req('rpc.ui.map.fly_to', { center: [116.4, 39.9], zoom: 12 }),
+      req('rpc.ui.map.fly_to', {
+        center: [116.4, 39.9],
+        zoom: 12,
+        pitch: 55,
+        bearing: -20,
+        duration: 700,
+      }),
     );
 
-    expect(spy).toHaveBeenCalledWith([116.4, 39.9], 12);
+    expect(spy).toHaveBeenCalledWith([116.4, 39.9], 12, {
+      pitch: 55,
+      bearing: -20,
+      duration: 700,
+    });
+    expect(useMapStore.getState().viewState).toMatchObject({
+      center: [116.4, 39.9],
+      zoom: 12,
+      pitch: 55,
+      bearing: -20,
+    });
+    spy.mockRestore();
+  });
+});
+
+describe('rpc.ui.map.set_camera', () => {
+  beforeEach(resetStore);
+
+  it('updates partial camera fields without requiring a center', async () => {
+    const spy = vi.spyOn(mapEngine, 'setCamera').mockImplementation(() => {});
+    const d = makeDispatcher();
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_camera', { pitch: 60, bearing: -25, duration: 800 }),
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      center: [116.4, 39.9],
+      zoom: 4,
+      pitch: 60,
+      bearing: -25,
+      duration: 800,
+    });
+    expect(resp).toMatchObject({
+      result: {
+        center: [116.4, 39.9],
+        zoom: 4,
+        pitch: 60,
+        bearing: -25,
+      },
+    });
+    expect(useMapStore.getState().viewState.pitch).toBe(60);
     spy.mockRestore();
   });
 });
@@ -762,6 +814,40 @@ describe('rpc.ui.map semantic layer styling', () => {
       classes: 4,
       breaks: [1, 2, 3],
       palette: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'],
+    });
+  });
+
+  it('stores extrusion renderer and returns extrusion config', async () => {
+    const d = makeDispatcher();
+    await seedLayer(d, 'buildings');
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'buildings',
+        renderer: 'extrusion',
+        extrusion: {
+          heightField: 'score',
+          heightMultiplier: 2,
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        layer_id: 'buildings',
+        renderer: 'extrusion',
+        extrusion: {
+          heightField: 'score',
+          heightMultiplier: 2,
+        },
+      },
+    });
+    expect(useMapStore.getState().getLayerById('buildings')!.style).toMatchObject({
+      renderType: 'extrusion',
+      extrusion: {
+        heightField: 'score',
+        heightMultiplier: 2,
+      },
     });
   });
 

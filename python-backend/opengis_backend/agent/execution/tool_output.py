@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from opengis_backend.agent.context.observation import compress_observation
 from opengis_backend.agent.telemetry.script_archive import _app_data_base
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,14 @@ class ToolOutputRuntime:
             return BoundedToolOutput(content=text, metadata=base_metadata)
 
         retained_path = self._write_full_output(tool_name, text)
-        preview = self._preview(text)
+        preview = compress_observation(
+            tool_name=tool_name,
+            content=text,
+            metadata={"retained_output_path": str(retained_path)} if retained_path is not None else {},
+            max_chars=self.max_bytes,
+        )
+        if len(preview.encode("utf-8")) > self.max_bytes:
+            preview = self._preview(preview)
         preview_bytes = len(preview.encode("utf-8"))
         preview_lines = self._line_count(preview)
         retained_hint = str(retained_path) if retained_path is not None else "unavailable"

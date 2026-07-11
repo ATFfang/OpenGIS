@@ -49,6 +49,17 @@ class PythonExecutionRuntime:
                 },
                 ensure_ascii=False,
             )
+        platform_import_error = self.platform_import_error(code)
+        if platform_import_error:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "reserved_platform_import",
+                    "message": platform_import_error,
+                    "retry": "Call the registered OpenGIS function tool directly instead of importing a Python SDK.",
+                },
+                ensure_ascii=False,
+            )
 
         install_notes: list[str] = []
         installed = self.auto_install_for_code(code)
@@ -169,6 +180,18 @@ class PythonExecutionRuntime:
                 "auto_install check failed (non-fatal), code execution may fail if packages are missing",
                 exc_info=True,
             )
+            return None
+
+    @staticmethod
+    def platform_import_error(code: str) -> str | None:
+        try:
+            from opengis_backend.agent.execution.auto_install import (
+                extract_imports,
+                platform_import_error,
+            )
+
+            return platform_import_error(extract_imports(code)) or None
+        except Exception:
             return None
 
     @staticmethod

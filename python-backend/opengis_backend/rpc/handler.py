@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 
 import numpy as np
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 from opengis_backend.agent.telemetry.artifacts import ArtifactIndex
 from opengis_backend.agent.engine import GISAgent
@@ -55,6 +55,17 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
+
+
+def _looks_like_websocket_closed(exc: BaseException) -> bool:
+    text = f"{exc.__class__.__module__}.{exc.__class__.__name__}: {exc}"
+    return (
+        "ClientDisconnected" in text
+        or "ConnectionClosed" in text
+        or "WebSocketDisconnect" in text
+        or "Cannot call \"send\"" in text
+        or "Unexpected ASGI message" in text
+    )
 
 
 def _normalise_workspace(path: str | None) -> str:
@@ -588,6 +599,7 @@ class RpcHandler:
             self._script_runner = ScriptRunner(
                 tool_registry=self.tool_registry,
                 notify_fn=self._safe_notify,
+                request_fn=self._safe_request,
             )
         return self._script_runner
 
@@ -1323,6 +1335,7 @@ class RpcHandler:
         return {
             "status": "ok",
             "operation_root": str(store.root),
+            "operation_roots": store.roots,
             "operations": store.list(query=query, limit=limit),
         }
 
@@ -2044,7 +2057,7 @@ class RpcHandler:
         async with self._ws_write_lock:
             if self._closed:
                 return
-            await self.ws.send_text(
+            await self._send_text_safe(
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -2061,7 +2074,7 @@ class RpcHandler:
         async with self._ws_write_lock:
             if self._closed:
                 return
-            await self.ws.send_text(
+            await self._send_text_safe(
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -2078,7 +2091,7 @@ class RpcHandler:
         async with self._ws_write_lock:
             if self._closed:
                 return
-            await self.ws.send_text(
+            await self._send_text_safe(
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -2088,6 +2101,20 @@ class RpcHandler:
                     cls=NumpyEncoder,
                 )
             )
+
+    async def _send_text_safe(self, payload: str) -> bool:
+        """Send one websocket payload, treating client disconnect as normal."""
+        try:
+            await self.ws.send_text(payload)
+            return True
+        except WebSocketDisconnect:
+            self._closed = True
+            return False
+        except RuntimeError as exc:
+            if _looks_like_websocket_closed(exc):
+                self._closed = True
+                return False
+            raise
 
     async def _request_client(
         self,
@@ -2105,7 +2132,7 @@ class RpcHandler:
         self._pending_client_requests[request_id] = fut
         try:
             async with self._ws_write_lock:
-                await self.ws.send_text(
+                sent = await self._send_text_safe(
                     json.dumps(
                         {
                             "jsonrpc": "2.0",
@@ -2116,6 +2143,8 @@ class RpcHandler:
                         cls=NumpyEncoder,
                     )
                 )
+                if not sent:
+                    raise RuntimeError("Frontend request channel is closed.")
             return await asyncio.wait_for(fut, timeout=timeout)
         finally:
             self._pending_client_requests.pop(request_id, None)

@@ -225,7 +225,7 @@ function messageFromNativePart(part: MessagePart): ChatMessage {
         ? data.duration_ms
         : undefined,
     progressStage: typeof data.stage === 'string' ? data.stage : undefined,
-    progressDetail: part.text || (typeof data.detail === 'string' ? data.detail : undefined),
+    progressDetail: part.text || progressDetailFromData(data),
     parts: [part],
   }
 }
@@ -389,7 +389,7 @@ function applyNativePartToMessage(message: ChatMessage, part: MessagePart): Chat
   } else if (mergedPart.type === 'progress') {
     updates.say = 'progress'
     updates.progressStage = typeof data.stage === 'string' ? data.stage : message.progressStage
-    updates.progressDetail = mergedPart.text || (typeof data.detail === 'string' ? data.detail : message.progressDetail)
+    updates.progressDetail = mergedPart.text || progressDetailFromData(data) || message.progressDetail
   } else if (mergedPart.type === 'artifact') {
     updates.say = 'image'
     updates.text = mergedPart.text || message.text
@@ -400,6 +400,12 @@ function applyNativePartToMessage(message: ChatMessage, part: MessagePart): Chat
     updates.text = mergedPart.text || message.text
   }
   return { ...message, ...updates }
+}
+
+function progressDetailFromData(data: Record<string, unknown>): string | undefined {
+  if (typeof data.detail === 'string') return data.detail
+  if (typeof data.message === 'string') return data.message
+  return undefined
 }
 
 async function configureBackendAgent(): Promise<void> {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
+from opengis_backend.agent.context.failure_memory import FailureMemoryProjector
 from opengis_backend.workspace.memory_store import MemoryRecord, MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,15 @@ class ContextProjector:
         if not self.workspace_path:
             return ""
         if is_short_scoped_map_request(user_message):
+            failure_lessons = FailureMemoryProjector(self.workspace_path).project(user_message, limit=3)
+            if failure_lessons:
+                return (
+                    "Project memory is intentionally hidden for this short scoped map/UI request, "
+                    "except directly relevant learned failure lessons.\n"
+                    f"{failure_lessons}\n"
+                    "Use only the current user request, current map/layer state, and the matching failure lessons. "
+                    "Do not start workflows, subagents, reports, or broad analysis unless explicitly asked."
+                )
             return (
                 "Project memory is intentionally hidden for this short scoped map/UI request. "
                 "Use only the current user request and current map/layer state. "
@@ -63,7 +73,7 @@ class ContextProjector:
             "Use these retrieved project memories only when relevant. "
             "Each item includes its scope and source; prefer current tool state over stale memory.",
         ]
-        order = ["dataset", "dataset_card", "recipe", "fact"]
+        order = ["failure_lesson", "dataset", "dataset_card", "recipe", "fact"]
         keys = sorted(grouped.keys(), key=lambda k: (order.index(k) if k in order else 99, k))
         for kind in keys:
             lines.append(f"\n### {kind}")

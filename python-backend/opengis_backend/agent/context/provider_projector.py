@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from opengis_backend.agent.context.observation import compress_observation
 
 ToolResultPredicate = Callable[[dict], bool]
 PlaceholderBuilder = Callable[[dict], str]
@@ -136,10 +137,7 @@ class ProviderContextProjector:
         out: dict[str, Any] = {
             k: v for k, v in msg.items() if not k.startswith("_")
         }
-        if not project:
-            return out
-
-        if self.is_tool_result(msg):
+        if project and self.is_tool_result(msg):
             content = str(out.get("content") or "")
             if len(content) > self.config.max_tool_result_chars:
                 out["content"] = self.project_tool_result_content(msg, content)
@@ -147,9 +145,15 @@ class ProviderContextProjector:
         tool_calls = out.get("tool_calls")
         if isinstance(tool_calls, list):
             out["tool_calls"] = [
-                self.project_tool_call(tool_call)
+                self.project_tool_call(tool_call, project=project)
                 for tool_call in tool_calls
             ]
+            if out.get("role") == "assistant":
+                # OpenAI-compatible providers can be strict about assistant
+                # messages that mix structured tool_calls with textual
+                # pseudo-tool markup. Keep the structured calls as the source
+                # of truth and drop any draft XML/markdown content.
+                out["content"] = ""
         return out
 
     def build_digest(self, messages: list[dict]) -> str:
@@ -210,14 +214,13 @@ class ProviderContextProjector:
     def project_tool_result_content(self, msg: dict, content: str) -> str:
         meta = msg.get("_meta") if isinstance(msg.get("_meta"), dict) else {}
         placeholder = self.make_pruned_placeholder(msg)
-        head_chars = max(400, min(1200, self.config.max_tool_result_chars // 3))
-        tail_chars = max(300, min(900, self.config.max_tool_result_chars // 4))
-        excerpt = content[:head_chars]
-        if len(content) > head_chars + tail_chars:
-            excerpt += (
-                "\n... [projected: middle omitted from model context; full result remains in run/context archive] ...\n"
-                + content[-tail_chars:]
-            )
+        tool_name = str(msg.get("name") or meta.get("tool_name") or "tool")
+        excerpt = compress_observation(
+            tool_name=tool_name,
+            content=content,
+            metadata=meta if isinstance(meta, dict) else {},
+            max_chars=self.config.max_tool_result_chars,
+        )
         return (
             f"{placeholder}\n"
             f"[projected_tool_result] original_chars={len(content)}"
@@ -225,7 +228,7 @@ class ProviderContextProjector:
             f"{excerpt}"
         )
 
-    def project_tool_call(self, tool_call: Any) -> Any:
+    def project_tool_call(self, tool_call: Any, *, project: bool) -> Any:
         if not isinstance(tool_call, dict):
             return tool_call
         projected = dict(tool_call)
@@ -236,25 +239,29 @@ class ProviderContextProjector:
         name = str(next_fn.get("name") or "")
         arguments = next_fn.get("arguments")
         if isinstance(arguments, str):
-            next_fn["arguments"] = self.project_tool_arguments(name, arguments)
+            next_fn["arguments"] = self.project_tool_arguments(name, arguments, project=project)
+        else:
+            next_fn["arguments"] = "{}"
         projected["function"] = next_fn
         return projected
 
-    def project_tool_arguments(self, tool_name: str, arguments: str) -> str:
-        if len(arguments) <= self.config.max_tool_call_arg_chars:
-            return arguments
+    def project_tool_arguments(self, tool_name: str, arguments: str, *, project: bool) -> str:
         try:
             parsed = json.loads(arguments)
         except Exception:
             return json.dumps(
                 {
-                    "_opengis_projected_arguments": True,
+                    "_opengis_invalid_arguments": True,
                     "tool": tool_name,
                     "original_chars": len(arguments),
-                    "note": "Historical tool arguments omitted from model context; see adjacent tool result for outcome.",
+                    "note": "Historical tool arguments were malformed and were omitted from provider context.",
                 },
                 ensure_ascii=False,
             )
+        if not project:
+            return arguments
+        if len(arguments) <= self.config.max_tool_call_arg_chars:
+            return arguments
         if not isinstance(parsed, dict):
             return json.dumps(
                 {

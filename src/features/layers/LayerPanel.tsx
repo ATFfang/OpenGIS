@@ -30,9 +30,11 @@ import {
 import { useT } from '@/i18n'
 import { useMapStore } from '@/stores/mapStore'
 import { loadGeoFiles } from '@/services/geo'
+import { parseGeoTIFF } from '@/services/geo/parsers'
+import { getRasterBuffer } from '@/services/geo/rasterSourceRegistry'
 import { mapEngine } from '@/features/map/engine/MapEngine'
 import { getCategorizedCache } from '@/features/map/renderers/categorizedRenderer'
-import type { MapLayerDefinition, LayerStyle } from '@/services/geo'
+import type { MapLayerDefinition, LayerStyle, RasterColorRampName, RasterColorStop, RasterStyleSettings } from '@/services/geo'
 import { usePivotStore } from '@/stores/pivotStore'
 import { targetFromLayer } from '@/features/pivot/types'
 import { LayerIcon } from './LayerIcon'
@@ -303,6 +305,7 @@ function LayerItem({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const setLayerOpacity = useMapStore((s) => s.setLayerOpacity)
   const updateLayerStyle = useMapStore((s) => s.updateLayerStyle)
+  const addLayer = useMapStore((s) => s.addLayer)
   const renameLayer = useMapStore((s) => s.renameLayer)
   const openPivot = usePivotStore((s) => s.open)
   const [isRenaming, setIsRenaming] = useState(false)
@@ -553,6 +556,7 @@ function LayerItem({
                 isFillLayer={isFillLayer}
                 onStyleChange={(updates) => updateLayerStyle(layer.id, updates)}
                 onOpacityChange={(v) => setLayerOpacity(layer.id, v)}
+                onRasterStyleChange={(raster) => rerenderRasterLayer(layer, raster, addLayer)}
               />
 
               {/* Classification button — only for vector layers */}
@@ -834,6 +838,89 @@ function ClassifiedStyleSummary({
   )
 }
 
+async function rerenderRasterLayer(
+  layer: MapLayerDefinition,
+  rasterStyle: RasterStyleSettings,
+  addLayer: (layer: MapLayerDefinition) => void,
+): Promise<void> {
+  if (layer.data.kind !== 'raster') return
+  if (layer.data.rasterId && layer.data.tileUrl) {
+    await updateBackendTileRasterLayer(layer, rasterStyle, addLayer)
+    return
+  }
+  const sourcePath = layer.data.sourcePath ?? layer.meta.filePath
+  if (!layer.data.rerenderable) return
+  const api = window.electronAPI
+  let buffer: ArrayBuffer | undefined
+  try {
+    if (sourcePath && api?.readFileAsBuffer) {
+      const result = await api.readFileAsBuffer(sourcePath) as { success?: boolean; ok?: boolean; buffer?: ArrayBuffer; error?: string }
+      const ok = result?.ok ?? result?.success ?? false
+      if (!ok || !result.buffer) throw new Error(result?.error || 'readFileAsBuffer returned no buffer')
+      buffer = result.buffer instanceof ArrayBuffer
+        ? result.buffer
+        : new Uint8Array(result.buffer).buffer
+    } else {
+      buffer = getRasterBuffer(layer.data.sourceBufferId)
+    }
+    if (!buffer) throw new Error('No original TIFF source is available for re-rendering')
+    const fileName = sourcePath?.split(/[\\/]/).pop() ?? layer.meta.fileName ?? 'raster.tif'
+    const raster = await parseGeoTIFF(buffer, fileName, {
+      sourcePath,
+      sourceBufferId: layer.data.sourceBufferId,
+      rasterStyle,
+    })
+    addLayer({
+      ...layer,
+      data: raster,
+      style: {
+        ...layer.style,
+        opacity: rasterStyle.opacity ?? layer.style.opacity,
+        raster: raster.rasterStyle,
+      },
+    })
+  } catch (err) {
+    console.error('[LayerPanel] failed to re-render raster layer:', err)
+  }
+}
+
+async function updateBackendTileRasterLayer(
+  layer: MapLayerDefinition,
+  rasterStyle: RasterStyleSettings,
+  addLayer: (layer: MapLayerDefinition) => void,
+): Promise<void> {
+  if (layer.data.kind !== 'raster' || !layer.data.rasterId || !layer.data.tileUrl) return
+  try {
+    const url = new URL(layer.data.tileUrl)
+    const styleUrl = `${url.origin}/api/rasters/${encodeURIComponent(layer.data.rasterId)}/style`
+    const response = await fetch(styleUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rasterStyle),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const payload = await response.json()
+    const revision = typeof payload?.style_revision === 'number' ? payload.style_revision : Date.now()
+    url.searchParams.set('rev', String(revision))
+    addLayer({
+      ...layer,
+      data: {
+        ...layer.data,
+        tileUrl: url.toString(),
+        rasterStyle: payload?.style ?? rasterStyle,
+        rerenderable: true,
+      },
+      style: {
+        ...layer.style,
+        opacity: rasterStyle.opacity ?? layer.style.opacity,
+        raster: payload?.style ?? rasterStyle,
+      },
+    })
+  } catch (err) {
+    console.error('[LayerPanel] failed to update backend raster style:', err)
+  }
+}
+
 // ─── Style Panel ────────────────────────────────────────────────
 
 interface StylePanelProps {
@@ -842,6 +929,7 @@ interface StylePanelProps {
   isFillLayer: boolean
   onStyleChange: (updates: Partial<LayerStyle>) => void
   onOpacityChange: (v: number) => void
+  onRasterStyleChange: (raster: RasterStyleSettings) => void
 }
 
 /**
@@ -863,10 +951,13 @@ function StylePanel({
   isFillLayer,
   onStyleChange,
   onOpacityChange,
+  onRasterStyleChange,
 }: StylePanelProps) {
   const t = useT()
   const { style } = layer
   const isRaster = style.renderType === 'raster'
+  const rasterStyle = style.raster ?? (layer.data.kind === 'raster' ? layer.data.rasterStyle : undefined) ?? {}
+  const canRerenderRaster = layer.data.kind === 'raster' && !!layer.data.rerenderable
 
   // Fill-opacity distinct-from-opacity handling: for fills MapLibre reads
   // `fill-opacity`, for everything else `opacity`. We expose a single
@@ -883,6 +974,15 @@ function StylePanel({
       </div>
 
       {/* Main color (fill for polygons/points, line for polylines) */}
+      {isRaster && (
+        <RasterStyleEditor
+          layer={layer}
+          rasterStyle={rasterStyle}
+          disabled={!canRerenderRaster}
+          onApply={onRasterStyleChange}
+        />
+      )}
+
       {!isRaster && (
         <StyleRow label={isFillLayer || isPointLayer ? t.layers.fill : t.layers.color}>
           <ColorSwatch
@@ -993,6 +1093,296 @@ function StylePanel({
       </StyleRow>
     </div>
   )
+}
+
+const RASTER_RAMPS: RasterColorRampName[] = [
+  'viridis',
+  'magma',
+  'plasma',
+  'inferno',
+  'turbo',
+  'gray',
+  'terrain',
+  'spectral',
+  'custom',
+]
+
+const DEFAULT_CUSTOM_STOPS: RasterColorStop[] = [
+  { value: 0, color: '#2b83ba', opacity: 0.15 },
+  { value: 0.5, color: '#ffffbf', opacity: 0.75 },
+  { value: 1, color: '#d7191c', opacity: 1 },
+]
+
+const RAMP_PREVIEWS: Record<Exclude<RasterColorRampName, 'custom'>, string[]> = {
+  viridis: ['#440154', '#31688e', '#35b779', '#fde725'],
+  magma: ['#000004', '#711f81', '#f0605d', '#fcfdbf'],
+  plasma: ['#0d0887', '#9c179e', '#ed7953', '#f0f921'],
+  inferno: ['#000004', '#781c6d', '#ed6925', '#fcffa4'],
+  turbo: ['#30123b', '#1ae4b6', '#faba39', '#7a0403'],
+  gray: ['#111827', '#6b7280', '#f9fafb'],
+  terrain: ['#286f4e', '#c8b568', '#f2f2e8', '#6b7280'],
+  spectral: ['#9e0142', '#fdae61', '#ffffbf', '#66c2a5', '#5e4fa2'],
+}
+
+function RasterStyleEditor({
+  layer,
+  rasterStyle,
+  disabled,
+  onApply,
+}: {
+  layer: MapLayerDefinition
+  rasterStyle: RasterStyleSettings
+  disabled: boolean
+  onApply: (raster: RasterStyleSettings) => void
+}) {
+  const [draft, setDraft] = useState<RasterStyleSettings>(() => normalizeRasterDraft(rasterStyle))
+
+  useEffect(() => {
+    setDraft(normalizeRasterDraft(rasterStyle))
+  }, [rasterStyle])
+
+  const bandCount = layer.data.kind === 'raster' ? layer.data.bandCount : 1
+  const isCustom = draft.ramp === 'custom'
+  const stops = normalizeStops(draft.stops)
+  const previewStops = isCustom ? stops : undefined
+  const bandIndex = Math.max(0, Math.min((draft.band ?? 1) - 1, (layer.data.kind === 'raster' ? layer.data.bandStats?.length : 0) ?? 0))
+  const stats = layer.data.kind === 'raster' ? layer.data.bandStats?.[bandIndex] : undefined
+
+  const commit = (patch: RasterStyleSettings) => {
+    const next = normalizeRasterDraft({ ...draft, ...patch })
+    setDraft(next)
+    onApply(next)
+  }
+
+  const setStop = (index: number, patch: Partial<RasterColorStop>) => {
+    const nextStops = stops.map((stop, i) => i === index ? { ...stop, ...patch } : stop)
+    setDraft({ ...draft, ramp: 'custom', stops: sortStops(nextStops) })
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <StyleRow label="色带">
+        <select
+          value={draft.ramp ?? 'viridis'}
+          disabled={disabled}
+          onChange={(e) => {
+            const ramp = e.target.value as RasterColorRampName
+            const next = normalizeRasterDraft({
+              ...draft,
+              ramp,
+              stops: ramp === 'custom' ? stops : undefined,
+            })
+            setDraft(next)
+            onApply(next)
+          }}
+          className="flex-1 min-w-0 bg-bg-secondary border border-border rounded px-2 py-1 text-2xs text-text-primary disabled:opacity-50"
+        >
+          {RASTER_RAMPS.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      </StyleRow>
+
+      <div
+        className="h-4 rounded border border-border/70 overflow-hidden"
+        style={{ background: rasterRampGradient(draft.ramp ?? 'viridis', previewStops) }}
+      />
+
+      {disabled && (
+        <div className="rounded bg-bg-secondary/70 px-2 py-1 text-2xs text-text-muted">
+          当前栅格缺少可重渲染来源。请重新从文件加载 TIFF，或用 agent 以 tiles/frontend 模式加载。
+        </div>
+      )}
+
+      <StyleRow label="波段">
+        <input
+          type="number"
+          min={1}
+          max={bandCount}
+          value={draft.band ?? 1}
+          disabled={disabled}
+          onChange={(e) => commit({ band: parseInt(e.target.value || '1', 10), mode: 'singleband' })}
+          className="w-16 bg-bg-secondary border border-border rounded px-2 py-1 text-2xs text-text-primary disabled:opacity-50"
+        />
+        <span className="text-2xs text-text-muted">/ {bandCount}</span>
+        <label className="ml-auto flex items-center gap-1 text-2xs text-text-muted">
+          <input
+            type="checkbox"
+            checked={!!draft.reverse}
+            disabled={disabled}
+            onChange={(e) => commit({ reverse: e.target.checked })}
+            className="accent-accent-primary"
+          />
+          反转
+        </label>
+      </StyleRow>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        <NumberField
+          label="Min"
+          value={draft.min}
+          placeholder={stats?.min?.toPrecision(4) ?? 'auto'}
+          disabled={disabled}
+          onCommit={(min) => commit({ min })}
+        />
+        <NumberField
+          label="Max"
+          value={draft.max}
+          placeholder={stats?.max?.toPrecision(4) ?? 'auto'}
+          disabled={disabled}
+          onCommit={(max) => commit({ max })}
+        />
+      </div>
+
+      {isCustom && (
+        <div className="rounded-md bg-bg-secondary/70 p-1.5 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-2xs text-text-muted">自定义 stop</span>
+            <button
+              disabled={disabled || stops.length >= 12}
+              onClick={() => {
+                const nextStops = sortStops([
+                  ...stops,
+                  { value: 0.5, color: '#ffffff', opacity: 1 },
+                ])
+                setDraft({ ...draft, ramp: 'custom', stops: nextStops })
+              }}
+              className="px-1.5 py-0.5 rounded text-2xs text-accent-primary hover:bg-accent-primary/10 disabled:opacity-40"
+            >
+              添加
+            </button>
+          </div>
+          {stops.map((stop, index) => (
+            <div key={index} className="grid grid-cols-[44px_24px_1fr_22px] items-center gap-1">
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={Number(stop.value.toFixed(2))}
+                disabled={disabled}
+                onChange={(e) => setStop(index, { value: clamp01(parseFloat(e.target.value || '0')) })}
+                className="bg-bg-tertiary border border-border rounded px-1 py-0.5 text-2xs text-text-primary"
+              />
+              <ColorSwatch
+                color={stop.color}
+                onChange={(color) => setStop(index, { color })}
+              />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={stop.opacity ?? 1}
+                disabled={disabled}
+                onChange={(e) => setStop(index, { opacity: clamp01(parseFloat(e.target.value)) })}
+                className="h-1 accent-accent-primary"
+              />
+              <button
+                disabled={disabled || stops.length <= 2}
+                onClick={() => setDraft({ ...draft, ramp: 'custom', stops: stops.filter((_, i) => i !== index) })}
+                className="w-5 h-5 rounded text-text-muted hover:text-accent-danger hover:bg-accent-danger/10 disabled:opacity-30"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            disabled={disabled}
+            onClick={() => onApply(normalizeRasterDraft({ ...draft, ramp: 'custom', stops }))}
+            className="w-full rounded bg-accent-primary/10 hover:bg-accent-primary/20 text-accent-primary text-2xs font-medium py-1 disabled:opacity-40"
+          >
+            应用自定义色带
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  placeholder,
+  disabled,
+  onCommit,
+}: {
+  label: string
+  value?: number
+  placeholder?: string
+  disabled?: boolean
+  onCommit: (value: number | undefined) => void
+}) {
+  const [local, setLocal] = useState(value === undefined ? '' : String(value))
+  useEffect(() => {
+    setLocal(value === undefined ? '' : String(value))
+  }, [value])
+  return (
+    <label className="flex items-center gap-1 text-2xs text-text-muted">
+      <span className="w-7">{label}</span>
+      <input
+        value={local}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={() => {
+          const trimmed = local.trim()
+          if (!trimmed) onCommit(undefined)
+          else {
+            const parsed = Number(trimmed)
+            if (Number.isFinite(parsed)) onCommit(parsed)
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+        className="min-w-0 flex-1 bg-bg-secondary border border-border rounded px-1.5 py-0.5 text-2xs text-text-primary disabled:opacity-50"
+      />
+    </label>
+  )
+}
+
+function normalizeRasterDraft(style: RasterStyleSettings): RasterStyleSettings {
+  const ramp = style.ramp ?? (style.stops?.length ? 'custom' : 'viridis')
+  return {
+    ...style,
+    ramp,
+    band: Math.max(1, Math.round(style.band ?? 1)),
+    stops: ramp === 'custom' ? normalizeStops(style.stops) : style.stops,
+  }
+}
+
+function normalizeStops(stops?: RasterColorStop[]): RasterColorStop[] {
+  const source = stops && stops.length >= 2 ? stops : DEFAULT_CUSTOM_STOPS
+  return sortStops(source.map((stop) => ({
+    value: clamp01(Number(stop.value)),
+    color: normaliseHex(stop.color),
+    opacity: clamp01(stop.opacity ?? 1),
+  })))
+}
+
+function sortStops(stops: RasterColorStop[]): RasterColorStop[] {
+  return [...stops].sort((a, b) => a.value - b.value)
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+function rasterRampGradient(ramp: RasterColorRampName, stops?: RasterColorStop[]): string {
+  const colors = ramp === 'custom'
+    ? normalizeStops(stops).map((stop) => `${hexToRgba(stop.color, stop.opacity ?? 1)} ${Math.round(stop.value * 100)}%`)
+    : (RAMP_PREVIEWS[ramp] ?? RAMP_PREVIEWS.viridis).map((color, index, arr) => `${color} ${Math.round(index / Math.max(1, arr.length - 1) * 100)}%`)
+  return `linear-gradient(90deg, ${colors.join(', ')})`
+}
+
+function hexToRgba(color: string, opacity: number): string {
+  const hex = normaliseHex(color).slice(1)
+  const r = parseInt(hex.slice(0, 2), 16)
+  const g = parseInt(hex.slice(2, 4), 16)
+  const b = parseInt(hex.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${clamp01(opacity)})`
 }
 
 function StyleRow({

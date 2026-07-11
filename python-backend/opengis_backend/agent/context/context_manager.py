@@ -35,6 +35,7 @@ from opengis_backend.agent.context.token_utils import (
     estimate_tokens,
     truncate_output,
 )
+from opengis_backend.agent.context.working_state import WorkingStateProjector
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,7 @@ class ContextManager:
         user_instructions: str | None = None,
         *,
         exclude_workflow_context: bool = False,
+        projection_limits: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Build the messages list for an LLM call.
 
@@ -338,17 +340,20 @@ class ContextManager:
                 ),
             })
 
+        runtime_anchor = self._build_runtime_anchor_message(exclude_workflow_context=exclude_workflow_context)
+        if runtime_anchor:
+            result.append({"role": "system", "content": runtime_anchor})
+
+        working_state = WorkingStateProjector().project(
+            self.messages,
+            summary_cutoff=self._summary_cutoff,
+            exclude_workflow_context=exclude_workflow_context,
+        ).to_prompt()
+        if working_state:
+            result.append({"role": "system", "content": working_state})
+
         projector = ProviderContextProjector(
-            config=ProviderProjectionConfig(
-                raw_recent=self.provider_raw_recent,
-                collapse_old_messages=self.collapse_old_provider_messages,
-                max_digest_chars=self.max_provider_digest_chars,
-                max_tool_result_chars=self.max_projected_tool_result_chars,
-                max_tool_call_arg_chars=self.max_projected_tool_call_arg_chars,
-                max_execute_code_chars=self.max_projected_execute_code_chars,
-                recent_user_turns=self.recent_user_turns_for_provider,
-                max_recent_user_chars=self.max_recent_user_chars_for_provider,
-            ),
+            config=self._provider_projection_config(projection_limits),
             is_tool_result=self._is_tool_result,
             make_pruned_placeholder=self._make_pruned_placeholder,
             is_workflow_context_message=self._is_workflow_context_message,
@@ -522,6 +527,30 @@ class ContextManager:
         meta = msg.get("_meta")
         return isinstance(meta, dict) and meta.get("kind") == "tool_result"
 
+    def _provider_projection_config(self, limits: Any | None = None) -> ProviderProjectionConfig:
+        """Build provider projection config, optionally narrowed by budget limits."""
+        if limits is None:
+            return ProviderProjectionConfig(
+                raw_recent=self.provider_raw_recent,
+                collapse_old_messages=self.collapse_old_provider_messages,
+                max_digest_chars=self.max_provider_digest_chars,
+                max_tool_result_chars=self.max_projected_tool_result_chars,
+                max_tool_call_arg_chars=self.max_projected_tool_call_arg_chars,
+                max_execute_code_chars=self.max_projected_execute_code_chars,
+                recent_user_turns=self.recent_user_turns_for_provider,
+                max_recent_user_chars=self.max_recent_user_chars_for_provider,
+            )
+        return ProviderProjectionConfig(
+            raw_recent=max(1, min(self.provider_raw_recent, int(getattr(limits, "provider_raw_recent", self.provider_raw_recent)))),
+            collapse_old_messages=self.collapse_old_provider_messages,
+            max_digest_chars=max(1200, min(self.max_provider_digest_chars, int(getattr(limits, "max_digest_chars", self.max_provider_digest_chars)))),
+            max_tool_result_chars=max(600, min(self.max_projected_tool_result_chars, int(getattr(limits, "max_tool_result_chars", self.max_projected_tool_result_chars)))),
+            max_tool_call_arg_chars=max(400, min(self.max_projected_tool_call_arg_chars, int(getattr(limits, "max_tool_call_arg_chars", self.max_projected_tool_call_arg_chars)))),
+            max_execute_code_chars=max(240, min(self.max_projected_execute_code_chars, int(getattr(limits, "max_execute_code_chars", self.max_projected_execute_code_chars)))),
+            recent_user_turns=max(1, min(self.recent_user_turns_for_provider, int(getattr(limits, "recent_user_turns", self.recent_user_turns_for_provider)))),
+            max_recent_user_chars=self.max_recent_user_chars_for_provider,
+        )
+
     def _is_workflow_context_message(self, msg: dict) -> bool:
         """Return True for workflow-only history that should not leak into chat."""
         meta = msg.get("_meta")
@@ -531,6 +560,59 @@ class ContextManager:
             if kind.startswith("workflow") or scope == "workflow":
                 return True
         return False
+
+    def _build_runtime_anchor_message(self, *, exclude_workflow_context: bool) -> str:
+        """Summarize active runtime objects and recent tool failures.
+
+        The raw transcript remains the source of truth, but the model should not
+        have to infer current failed operations/layers from dozens of old tool
+        payloads. Keep this short and factual.
+        """
+        active_operation = ""
+        active_layer = ""
+        failures: list[str] = []
+        for msg in reversed(self.messages[self._summary_cutoff:]):
+            if exclude_workflow_context and self._is_workflow_context_message(msg):
+                continue
+            meta = msg.get("_meta") if isinstance(msg.get("_meta"), dict) else {}
+            if not self._is_tool_result(msg):
+                continue
+            tool_name = str(msg.get("name") or meta.get("tool_name") or "")
+            content = str(msg.get("content") or "")
+            data: dict[str, Any] = {}
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                data = {}
+            if not active_operation and tool_name in {"get_operation", "run_operation", "edit_operation"}:
+                active_operation = _operation_label_from_tool_payload(tool_name, data)
+            if not active_layer and tool_name in {"add_layer", "get_layer", "zoom_to_layer", "set_categorized_style", "update_layer_style"}:
+                active_layer = _layer_label_from_tool_payload(tool_name, data, meta)
+            failed = data.get("success") is False or bool(meta.get("had_error")) or "runner_guard_blocked" in content[:200]
+            if failed and len(failures) < 4:
+                error = str(data.get("error") or data.get("reason") or meta.get("runner_guard_reason") or "unknown error")
+                failures.append(f"{tool_name}: {' '.join(error.split())[:260]}")
+            if active_operation and active_layer and len(failures) >= 4:
+                break
+
+        lines = []
+        if active_operation:
+            lines.append(f"- active_operation: {active_operation}")
+        if active_layer:
+            lines.append(f"- active_layer: {active_layer}")
+        if failures:
+            lines.append("- recent_tool_failures:")
+            lines.extend(f"  - {failure}" for failure in failures)
+        if not lines:
+            return ""
+        return (
+            "## Runtime State Anchors\n"
+            "Current active objects and recent failures inferred from settled tool results. "
+            "Use these as state hints, not as a replacement for explicit current-state tools.\n"
+            + "\n".join(lines)
+        )
 
     def _strip_workflow_summary(self, summary: str) -> str:
         """Remove stale workflow/report lines from a normal-chat summary."""
@@ -700,6 +782,35 @@ class ContextManager:
     def track_file_edit(self, file_path: str) -> None:
         """Record that a file was edited."""
         track_recent_file_edit(self._recently_edited_files, file_path)
+
+
+def _operation_label_from_tool_payload(tool_name: str, data: dict[str, Any]) -> str:
+    operation = data.get("operation")
+    if isinstance(operation, dict):
+        op_id = operation.get("id") or operation.get("operation_id")
+        status = operation.get("status")
+        if op_id:
+            return f"{op_id}" + (f" status={status}" if status else "")
+    op_id = data.get("operation_id")
+    if op_id:
+        status = data.get("status")
+        return f"{op_id}" + (f" status={status}" if status else "")
+    if tool_name:
+        return f"(last touched by {tool_name})"
+    return ""
+
+
+def _layer_label_from_tool_payload(tool_name: str, data: dict[str, Any], meta: dict[str, Any]) -> str:
+    layer_id = data.get("layer_id") or data.get("id") or meta.get("artifact_layer_id")
+    layer_name = data.get("layer_name") or data.get("name") or meta.get("artifact_layer_name")
+    if layer_id or layer_name:
+        label = str(layer_name or layer_id)
+        if layer_id and layer_name and str(layer_id) != str(layer_name):
+            label += f" ({layer_id})"
+        return label
+    if tool_name:
+        return f"(last touched by {tool_name})"
+    return ""
 
 
 __all__ = ["ContextManager"]

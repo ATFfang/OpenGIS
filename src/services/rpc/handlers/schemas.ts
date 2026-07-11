@@ -83,10 +83,14 @@ export const DynamicLayerUpdateSchema = z.object({
 });
 
 export const AddRasterFromUrlSchema = z.object({
-  url: z.string().url(),
+  url: z.string().min(1),
   name: z.string().min(1),
   tile_type: z.enum(['xyz', 'wmts', 'cog']),
   bounds: BBoxSchema.optional(),
+  raster_id: z.string().optional(),
+  raster_source_path: z.string().optional(),
+  raster_info: z.any().optional(),
+  raster_style: z.any().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ export const AddRasterFromFileSchema = z.object({
   name: z.string().optional(),
   visible: z.boolean().optional(),
   opacity: z.number().min(0).max(1).optional(),
+  raster: z.any().optional(),
 });
 
 /** 分级专题 / 分类专题 / 热力图 / 聚合 / 3D 拔起 的配置 —— 与 LayerStyle 对应字段一致 */
@@ -152,6 +157,23 @@ const ExtrusionSchema = z.object({
   baseField: z.string().optional(),
 });
 
+const RasterColorStopSchema = z.object({
+  value: z.number().min(0).max(1),
+  color: z.string().min(1),
+  opacity: z.number().min(0).max(1).optional(),
+});
+
+export const RasterStyleSettingsSchema = z.object({
+  band: z.number().int().min(1).optional(),
+  ramp: z.enum(['viridis', 'magma', 'plasma', 'inferno', 'turbo', 'gray', 'terrain', 'spectral', 'custom']).optional(),
+  stops: z.array(RasterColorStopSchema).min(2).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  reverse: z.boolean().optional(),
+  mode: z.enum(['auto', 'singleband', 'rgb']).optional(),
+});
+
 /**
  * 切换一个现有图层的 renderType（渲染模式）。若要把 renderType 从 fill 换
  * 到 graduated，必须同时提供对应的配置段（graduated/categorized/...）。
@@ -184,6 +206,15 @@ export const UpdateVisualVariablesSchema = z.object({
   opacity_variable: NumericVisualVariableSchema.nullable().optional(),
 });
 
+export const SetRasterStyleSchema = z.object({
+  layer_id: LayerIdSchema,
+  raster: RasterStyleSettingsSchema,
+});
+
+export const GetRasterInfoSchema = z.object({
+  layer_id: LayerIdSchema,
+});
+
 /**
  * 导出当前地图。返回 base64（默认）或写到 save_path。
  */
@@ -211,6 +242,9 @@ export const AddImageOverlaySchema = z.object({
   name: z.string().optional(),
   bbox: BBoxSchema.optional(),
   opacity: z.number().min(0).max(1).optional(),
+  raster_source_path: z.string().optional(),
+  raster_info: z.any().optional(),
+  raster_style: z.any().optional(),
 });
 
 
@@ -292,9 +326,18 @@ export const ZoomToBBoxSchema = z.object({
 
 export const FlyToSchema = z.object({
   center: z.tuple([z.number(), z.number()]),
-  zoom: z.number().optional(),
-  pitch: z.number().optional(),
+  zoom: z.number().min(0).max(24).optional(),
+  pitch: z.number().min(0).max(85).optional(),
   bearing: z.number().optional(),
+  duration: z.number().min(0).optional(),
+});
+
+export const SetMapCameraSchema = z.object({
+  center: z.tuple([z.number(), z.number()]).optional(),
+  zoom: z.number().min(0).max(24).optional(),
+  pitch: z.number().min(0).max(85).optional(),
+  bearing: z.number().optional(),
+  duration: z.number().min(0).optional(),
 });
 
 export const SetBasemapSchema = z.object({

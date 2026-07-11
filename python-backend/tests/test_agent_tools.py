@@ -14,9 +14,13 @@ import requests
 from opengis_backend.tools.context import ToolContext
 from opengis_backend.tools.builtin.bash_tool import _bash_sync
 from opengis_backend.tools.builtin.display import get_map_state as get_map_state_tool
+from opengis_backend.tools.builtin.display import get_raster_info as get_raster_info_tool
 from opengis_backend.tools.builtin.display import highlight_features as highlight_features_tool
+from opengis_backend.tools.builtin.display import add_raster as add_raster_tool
+from opengis_backend.tools.builtin.display import set_raster_style as set_raster_style_tool
 from opengis_backend.tools.builtin.display import set_basemap as set_basemap_tool
 from opengis_backend.tools.builtin.display import set_categorized_style as set_categorized_style_tool
+from opengis_backend.tools.builtin.display import set_extrusion_style as set_extrusion_style_tool
 from opengis_backend.tools.builtin.display import set_graduated_style as set_graduated_style_tool
 from opengis_backend.tools.builtin.display import set_layer_filter as set_layer_filter_tool
 from opengis_backend.tools.builtin.display import set_layer_label as set_layer_label_tool
@@ -25,17 +29,20 @@ from opengis_backend.tools.builtin.display import set_layer_visual_variables as 
 from opengis_backend.tools.builtin.display import update_legend_spec as update_legend_spec_tool
 from opengis_backend.tools.builtin.display import update_layer_style as update_layer_style_tool
 from opengis_backend.tools.builtin.csv_to_geojson import csv_to_geojson as csv_to_geojson_tool
+from opengis_backend.tools.builtin.agent_debug_tools import debug_agent_context as debug_agent_context_tool
 from opengis_backend.tools.builtin.edit_file_tool import edit_file as edit_file_tool
 from opengis_backend.tools.builtin.file_ops import file_exists as file_exists_tool
 from opengis_backend.tools.builtin.file_ops import list_directory as list_directory_tool
 from opengis_backend.tools.builtin.glob_tool import glob as glob_tool
 from opengis_backend.tools.builtin.grep_tool import grep as grep_tool
 from opengis_backend.tools.builtin.operation_tools import create_operation as create_operation_tool
+from opengis_backend.tools.builtin.operation_tools import copy_operation_to_workspace as copy_operation_to_workspace_tool
 from opengis_backend.tools.builtin.operation_tools import edit_operation as edit_operation_tool
 from opengis_backend.tools.builtin.operation_tools import get_operation as get_operation_tool
 from opengis_backend.tools.builtin.operation_tools import list_operations as list_operations_tool
 from opengis_backend.tools.builtin.operation_tools import promote_script_to_operation as promote_script_to_operation_tool
 from opengis_backend.tools.builtin.operation_tools import run_operation as run_operation_tool
+from opengis_backend.tools.builtin.operation_tools import validate_operation as validate_operation_tool
 from opengis_backend.tools.builtin.read_file_tool import read_file as read_file_tool
 from opengis_backend.tools.builtin.web_tools import webfetch as webfetch_tool
 from opengis_backend.tools.builtin.write_file_tool import write_file as write_file_tool
@@ -45,6 +52,8 @@ from opengis_backend.agent.factory_common import compose_system_prompt
 from opengis_backend.agent.tools import filter_agent_tools
 from opengis_backend.agent.governance.profile import AgentProfile
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas, validate_execute_code_payload
+from opengis_backend.agent.context.context_manager import ContextManager
+from opengis_backend.agent.context.context_persistence import save_context
 from opengis_backend.agent.session.session import SessionStore
 from opengis_backend.integrations.osm.overpass import _normalize_overpass_query
 from opengis_backend.integrations.osm.tools import osm_call as osm_call_tool
@@ -60,28 +69,35 @@ list_scripts = list_scripts_tool.__wrapped__
 read_script = read_script_tool.__wrapped__
 set_basemap = set_basemap_tool.__wrapped__
 get_map_state = get_map_state_tool.__wrapped__
+get_raster_info = get_raster_info_tool.__wrapped__
 update_layer_style = update_layer_style_tool.__wrapped__
+set_raster_style = set_raster_style_tool.__wrapped__
 set_graduated_style = set_graduated_style_tool.__wrapped__
 set_categorized_style = set_categorized_style_tool.__wrapped__
+set_extrusion_style = set_extrusion_style_tool.__wrapped__
 set_layer_filter = set_layer_filter_tool.__wrapped__
 set_layer_label = set_layer_label_tool.__wrapped__
 highlight_features = highlight_features_tool.__wrapped__
+add_raster = add_raster_tool.__wrapped__
 set_layer_order = set_layer_order_tool.__wrapped__
 set_layer_visual_variables = set_layer_visual_variables_tool.__wrapped__
 update_legend_spec = update_legend_spec_tool.__wrapped__
 osm_call = osm_call_tool.__wrapped__
 datasource_call = datasource_call_tool.__wrapped__
 csv_to_geojson = csv_to_geojson_tool.__wrapped__
+debug_agent_context = debug_agent_context_tool.__wrapped__
 file_exists = file_exists_tool.__wrapped__
 list_directory = list_directory_tool.__wrapped__
 glob = glob_tool.__wrapped__
 grep = grep_tool.__wrapped__
 create_operation = create_operation_tool.__wrapped__
+copy_operation_to_workspace = copy_operation_to_workspace_tool.__wrapped__
 edit_operation = edit_operation_tool.__wrapped__
 get_operation = get_operation_tool.__wrapped__
 list_operations = list_operations_tool.__wrapped__
 promote_script_to_operation = promote_script_to_operation_tool.__wrapped__
 run_operation = run_operation_tool.__wrapped__
+validate_operation = validate_operation_tool.__wrapped__
 
 
 class AgentToolUpgradeTests(unittest.TestCase):
@@ -128,9 +144,10 @@ Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="u
             self.assertTrue(created["success"], created)
             self.assertEqual(created["operation"]["id"], "sum_values")
 
-            listed = list_operations(ctx)
+            listed = list_operations(ctx, query="sum_values")
             self.assertEqual(len(listed["operations"]), 1)
             self.assertEqual(listed["operations"][0]["id"], "sum_values")
+            self.assertEqual(listed["operations"][0]["scope"], "workspace")
 
             loaded = get_operation(ctx, "sum_values", include_code=True)
             self.assertIn("--input", loaded["operation"]["code"])
@@ -177,6 +194,106 @@ Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="u
             )
             self.assertTrue(promoted["success"], promoted)
             self.assertEqual(promoted["operation"]["id"], "demo_operation")
+
+    def test_builtin_operations_are_shared_and_read_only(self) -> None:
+        with TemporaryDirectory() as tmp:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+
+            listed = list_operations(ctx, query="kernel_density")
+            self.assertTrue(listed["operations"], listed)
+            self.assertEqual(listed["operations"][0]["id"], "kernel_density")
+            self.assertEqual(listed["operations"][0]["scope"], "builtin")
+            self.assertTrue(listed["operations"][0]["read_only"])
+
+            loaded = get_operation(ctx, "kernel_density")
+            self.assertEqual(loaded["operation"]["scope"], "builtin")
+            self.assertTrue(loaded["operation"]["read_only"])
+            self.assertEqual(loaded["operation"]["path"], "builtin://kernel_density")
+
+            with self.assertRaises(Exception):
+                edit_operation(ctx, operation_id="kernel_density", description="Should not edit builtin.")
+
+            copied = copy_operation_to_workspace(ctx, "kernel_density")
+            self.assertTrue(copied["success"], copied)
+            self.assertEqual(copied["operation"]["scope"], "workspace")
+            self.assertFalse(copied["operation"]["read_only"])
+            self.assertEqual(copied["operation"]["status"], "draft")
+
+            edited = edit_operation(ctx, operation_id="kernel_density", description="Workspace override.")
+            self.assertTrue(edited["success"], edited)
+            self.assertEqual(edited["operation"]["description"], "Workspace override.")
+
+    def test_debug_agent_context_returns_projection_anchors(self) -> None:
+        with TemporaryDirectory() as tmp:
+            conversation_id = "conv-debug"
+            ctx_manager = ContextManager(provider_raw_recent=4, recent_user_turns_for_provider=4)
+            ctx_manager.add_user_message("能不能价格高的在上面")
+            ctx_manager.add_assistant_message("已调整价格顺序。")
+            ctx_manager.add_user_message("你要修正我的operation，而不是饶过他自己写脚本")
+            ctx_manager.add_tool_result(
+                "call-run",
+                "run_operation",
+                json.dumps(
+                    {
+                        "success": False,
+                        "operation_id": "dbscan_clustering",
+                        "status": "failed",
+                        "error": "KeyError: input_path",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            save_context(tmp, conversation_id, ctx_manager)
+            ctx = ToolContext(meta={"workspace_path": tmp}, conversation_id=conversation_id)
+
+            result = debug_agent_context(ctx)
+
+            self.assertTrue(result["success"], result)
+            self.assertIn("Recent User Requests", result["recent_user_anchor"])
+            self.assertIn("你要修正我的operation", result["recent_user_anchor"])
+            self.assertIn("Runtime State Anchors", result["runtime_anchor"])
+            self.assertIn("dbscan_clustering", result["runtime_anchor"])
+
+    def test_operation_contract_validation_catches_code_required_params_before_run(self) -> None:
+        operation_code = """\
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", required=True)
+parser.add_argument("--output", required=True)
+args = parser.parse_args()
+
+payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+params = payload["params"]
+input_path = params["input_path"]
+Path(args.output).write_text(json.dumps({"success": True, "input_path": input_path}), encoding="utf-8")
+"""
+        with TemporaryDirectory() as tmp:
+            ctx = ToolContext(meta={"workspace_path": tmp})
+            created = create_operation(
+                ctx,
+                operation_id="needs_input_path",
+                name="Needs Input Path",
+                description="Reads input_path from params.",
+                code=operation_code,
+                input_schema={"type": "object", "required": [], "properties": {}},
+            )
+            self.assertTrue(created["success"], created)
+
+            validation = validate_operation(ctx, "needs_input_path", {})
+
+            self.assertFalse(validation["ok"], validation)
+            self.assertEqual(validation["errors"][0]["code"], "missing_code_required_params")
+            self.assertIn("input_path", validation["errors"][0]["keys"])
+            self.assertIn("input_path", validation["warnings"][0]["keys"])
+
+            with self.assertRaisesRegex(Exception, "contract validation failed.*input_path"):
+                run_operation(ctx, "needs_input_path", {})
+
+            runs_dir = Path(tmp) / ".opengis" / "operations" / "needs_input_path" / "runs"
+            self.assertFalse(runs_dir.exists() and any(runs_dir.iterdir()))
 
     def test_system_prompt_renders_literal_edit_file_batch_example(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -232,6 +349,76 @@ Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="u
         ctx = ToolContext(request_fn=request)
 
         self.assertEqual(get_map_state(ctx), {"basemap_visible": True, "layer_count": 2})
+
+    def test_add_raster_accepts_raster_path_alias(self) -> None:
+        requests: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests.append((method, params))
+            return {
+                "layer_id": params["layer_id"],
+                "name": params["name"],
+                "bbox": [121.0, 31.0, 122.0, 32.0],
+                "width": 256,
+                "height": 128,
+                "band_count": 1,
+                "crs": "EPSG:4326",
+                "nodata": None,
+                "band_stats": [{"min": 0, "max": 1}],
+            }
+
+        with TemporaryDirectory() as tmp:
+            raster = Path(tmp) / "dem.tif"
+            raster.write_bytes(b"not-a-real-tiff")
+            ctx = ToolContext(meta={"workspace_path": tmp}, request_fn=request)
+
+            result = add_raster(ctx, raster_path="dem.tif", name="DEM", opacity=0.5)
+
+        self.assertEqual(result["name"], "DEM")
+        self.assertEqual(result["bbox"], [121.0, 31.0, 122.0, 32.0])
+        self.assertEqual(result["width"], 256)
+        self.assertEqual(result["height"], 128)
+        self.assertEqual(result["band_count"], 1)
+        self.assertEqual(result["crs"], "EPSG:4326")
+        self.assertEqual(len(requests), 1)
+        method, payload = requests[0]
+        self.assertEqual(method, "rpc.ui.map.add_raster_from_file")
+        self.assertEqual(payload["path"], str(raster.resolve()))
+        self.assertEqual(payload["opacity"], 0.5)
+
+    def test_get_raster_info_reads_frontend_layer_state(self) -> None:
+        async def request(method: str, params: dict):
+            self.assertEqual(method, "rpc.ui.map.get_raster_info")
+            self.assertEqual(params, {"layer_id": "raster-1"})
+            return {"layer_id": "raster-1", "band_count": 1}
+
+        ctx = ToolContext(request_fn=request)
+
+        self.assertEqual(get_raster_info(ctx, layer_id="raster-1")["band_count"], 1)
+
+    def test_set_raster_style_sends_color_ramp_contract(self) -> None:
+        requests: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests.append((method, params))
+            return {"layer_id": params["layer_id"], "raster_style": params["raster"]}
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_raster_style(
+            ctx,
+            layer_id="raster-1",
+            ramp="terrain",
+            stops='[{"value":0,"color":"#0000ff","opacity":0.2},{"value":1,"color":"#ff0000","opacity":0.9}]',
+            opacity=0.7,
+            band=2,
+        )
+
+        self.assertEqual(result["raster_style"]["ramp"], "terrain")
+        self.assertEqual(result["raster_style"]["band"], 2)
+        self.assertEqual(result["raster_style"]["opacity"], 0.7)
+        self.assertEqual(result["raster_style"]["stops"][0]["opacity"], 0.2)
+        self.assertEqual(requests[0][0], "rpc.ui.map.set_raster_style")
 
     def test_update_layer_style_uses_layer_geometry_for_point_paint(self) -> None:
         notifications: list[tuple[str, dict]] = []
@@ -323,6 +510,71 @@ Path(args.output).write_text(json.dumps(result, ensure_ascii=False), encoding="u
         self.assertTrue(all(color.startswith("#") for color in graduated["palette"]))
         self.assertEqual(graduated["palette"][0], "#f3e8ff")
         self.assertEqual(graduated["palette"][-1], "#581c87")
+
+    def test_set_extrusion_style_sets_renderer_without_camera_by_default(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            if method == "rpc.ui.map.set_layer_renderer":
+                return {"layer_id": params["layer_id"], "renderer": params["renderer"], "extrusion": params["extrusion"]}
+            raise AssertionError(f"Unexpected request: {method}")
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_extrusion_style(ctx, "buildings", "height")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual([method for method, _ in requests_seen], ["rpc.ui.map.set_layer_renderer"])
+        self.assertIsNone(result["camera"])
+
+    def test_set_extrusion_style_sets_renderer_style_and_camera_when_requested(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            if method == "rpc.ui.map.set_layer_renderer":
+                return {"layer_id": params["layer_id"], "renderer": params["renderer"], "extrusion": params["extrusion"]}
+            if method == "rpc.ui.map.set_layer_style":
+                return {"layer_id": params["layer_id"], "style": params["style"]}
+            if method == "rpc.ui.map.set_camera":
+                return {"pitch": params.get("pitch"), "bearing": params.get("bearing"), "zoom": params.get("zoom")}
+            raise AssertionError(f"Unexpected request: {method}")
+
+        ctx = ToolContext(request_fn=request)
+
+        result = set_extrusion_style(
+            ctx,
+            "buildings",
+            "height",
+            height_multiplier=1.5,
+            base_field="base_height",
+            color="#f59e0b",
+            opacity=0.75,
+            enter_3d=True,
+            zoom=16,
+        )
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(requests_seen[0][0], "rpc.ui.map.set_layer_renderer")
+        self.assertEqual(requests_seen[0][1], {
+            "layer_id": "buildings",
+            "renderer": "extrusion",
+            "extrusion": {
+                "heightField": "height",
+                "heightMultiplier": 1.5,
+                "baseField": "base_height",
+            },
+        })
+        self.assertEqual(requests_seen[1][0], "rpc.ui.map.set_layer_style")
+        self.assertEqual(requests_seen[1][1]["style"]["paint"], {
+            "fill-color": "#f59e0b",
+            "fill-opacity": 0.75,
+        })
+        self.assertEqual(requests_seen[2][0], "rpc.ui.map.set_camera")
+        self.assertEqual(requests_seen[2][1]["pitch"], 60.0)
+        self.assertEqual(requests_seen[2][1]["bearing"], -25.0)
+        self.assertEqual(requests_seen[2][1]["zoom"], 16)
 
     def test_layer_filter_label_order_and_legend_tools_emit_canonical_rpc(self) -> None:
         notifications: list[tuple[str, dict]] = []

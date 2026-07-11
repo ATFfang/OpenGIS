@@ -1,51 +1,24 @@
-"""Dynamic tool schema materialization for LLM turns.
+"""Tool schema materialization for LLM turns.
 
-The executor still knows every registered tool. This module only chooses
-which JSON schemas to expose to the provider for a given turn so long chats do
-not pay the full tool-schema token cost on every request.
+Tool availability is an agent/profile contract, not a per-turn heuristic.
+The executor and the provider should see the same stable tool surface after
+registry/group/permission filtering.  Token pressure is handled by context
+projection and observation compression, not by making tools disappear mid-run.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from opengis_backend.agent.execution.tool_capabilities import capability_for
 
 _TOOL_VISIBILITY_MISS_RE = re.compile(
     r"(没有|不存在|无法|不能).{0,12}(工具|tool|接口)|"
     r"(no|do not|don't|cannot|can't).{0,24}(tool|function|interface)",
     re.IGNORECASE,
 )
-
-
-ALWAYS_VISIBLE_TOOLS = {
-    "execute_code",
-    "run_script_file",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "bash",
-    "glob",
-    "grep",
-    "list_directory",
-    "file_exists",
-    "list_layers",
-    "get_layer",
-    "query_features",
-    "list_scripts",
-    "read_script",
-    "list_operations",
-    "get_operation",
-    "run_operation",
-    "create_operation",
-    "edit_operation",
-    "promote_script_to_operation",
-    "update_plan",
-    "load_skill",
-}
 
 @dataclass
 class ToolMaterialization:
@@ -56,20 +29,17 @@ class ToolMaterialization:
 
 
 class ToolMaterializer:
-    """Select a bounded tool-schema set for one provider turn."""
+    """Expose the stable profile tool-schema set for one provider turn."""
 
-    def __init__(self, schemas: list[dict] | None, *, max_tools: int = 44) -> None:
+    def __init__(self, schemas: list[dict] | None) -> None:
         self.schemas = list(schemas or [])
-        self.max_tools = max(8, int(max_tools))
 
     def materialize(
         self,
-        messages: list[dict],
-        *,
         force_all: bool = False,
-        max_tools: int | None = None,
     ) -> ToolMaterialization:
-        effective_max_tools = max(8, int(max_tools or self.max_tools))
+        # If a profile registered a tool, the model sees its schema until
+        # permission/profile filtering removes it upstream.
         if force_all:
             return ToolMaterialization(
                 schemas=self.schemas,
@@ -77,35 +47,13 @@ class ToolMaterializer:
                 total_count=len(self.schemas),
                 reason="all",
             )
-        if len(self.schemas) <= effective_max_tools:
-            return ToolMaterialization(
-                schemas=self.schemas,
-                selected_names=[self._name(schema) for schema in self.schemas],
-                total_count=len(self.schemas),
-                reason="all",
-            )
-
-        always_selected: list[dict] = []
-        default_selected: list[dict] = []
-        for schema in self.schemas:
-            name = self._name(schema)
-            if name in ALWAYS_VISIBLE_TOOLS:
-                always_selected.append(schema)
-                continue
-            default_selected.append(schema)
-
-        selected = always_selected + default_selected
-        if len(selected) > effective_max_tools:
-            always_names = {self._name(schema) for schema in always_selected}
-            remaining_slots = max(0, effective_max_tools - len(always_selected))
-            tail = [schema for schema in selected if self._name(schema) not in always_names]
-            selected = always_selected + tail[:remaining_slots]
+        selected = self._dedupe(self.schemas)
 
         return ToolMaterialization(
             schemas=selected,
             selected_names=[self._name(schema) for schema in selected],
             total_count=len(self.schemas),
-            reason="profile_bounded",
+            reason="profile",
         )
 
     @staticmethod
@@ -115,6 +63,18 @@ class ToolMaterializer:
             return str(fn.get("name") or "")
         return ""
 
+    @staticmethod
+    def _dedupe(schemas: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for schema in schemas:
+            name = ToolMaterializer._name(schema)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append(schema)
+        return out
+
 
 def format_active_tool_prompt(materialization: ToolMaterialization | None) -> str:
     """Build a concise per-turn system hint for active function tools."""
@@ -123,15 +83,28 @@ def format_active_tool_prompt(materialization: ToolMaterialization | None) -> st
     names = [name for name in materialization.selected_names if name]
     if not names:
         return ""
+    capability_lines = []
+    for name in names:
+        capability = capability_for(name)
+        if capability.domain != "general" or capability.side_effect != "none":
+            capability_lines.append(
+                f"- {name}: domain={capability.domain}, side_effect={capability.side_effect}, object={capability.object_type or '-'}"
+            )
+    capability_text = ""
+    if capability_lines:
+        capability_text = (
+            "\nTool capability metadata for runner/task alignment:\n"
+            + "\n".join(capability_lines[:40])
+        )
     return (
         "## Active Function Tools For This Agent Profile\n"
-        f"Materialization: {materialization.reason}; exposed "
-        f"{len(names)}/{materialization.total_count} tools.\n"
-        "Only these function tools are available to the selected agent profile:\n"
+        "The registered function schemas for this agent profile are available "
+        "to this provider turn. Treat them as the authoritative tool surface; "
+        "do not discuss internal provider-tool assembly or profile tool counts "
+        "with the user.\n"
+        "Function tool names:\n"
         + ", ".join(names)
-        + "\nIf a required capability is missing from this list, it may be outside "
-        "the current agent profile or not materialized for this turn. Explain the "
-        "missing capability briefly instead of inventing another route."
+        + capability_text
     )
 
 
@@ -141,7 +114,6 @@ def is_tool_visibility_miss(text: str) -> bool:
 
 
 __all__ = [
-    "ALWAYS_VISIBLE_TOOLS",
     "ToolMaterialization",
     "ToolMaterializer",
     "format_active_tool_prompt",

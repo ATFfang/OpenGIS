@@ -34,9 +34,13 @@ export type {
   ClassificationMethod,
   GraduatedClassification,
   CategorizedClassification,
+  ExtrusionSettings,
   NumericVisualVariable,
   LayerFilterSpec,
   LayerAttributeFilter,
   LegendSpec,
+  RasterColorRampName,
+  RasterColorStop,
+  RasterStyleSettings,
 } from './types'
 export { BUILTIN_BASEMAPS } from './types'

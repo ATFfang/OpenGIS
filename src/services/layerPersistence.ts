@@ -43,7 +43,19 @@ function serializableLayers(layers: MapLayerDefinition[]): MapLayerDefinition[] 
 }
 
 function serializeLayer(layer: MapLayerDefinition): MapLayerDefinition {
-  if (layer.data.kind !== 'vector') return layer
+  if (layer.data.kind !== 'vector') {
+    const data = layer.data.kind === 'raster'
+      ? {
+          ...layer.data,
+          sourceBufferId: undefined,
+          rerenderable: !!(layer.data.sourcePath || layer.data.rasterId),
+        }
+      : layer.data
+    return {
+      ...layer,
+      data,
+    }
+  }
   const size = layer.meta?.fileSize ?? layer.data.handleSizeBytes ?? 0
   if (!shouldHandleLayer(size) && !layer.data.dataHandle) return layer
   const data = layer.data.sampled

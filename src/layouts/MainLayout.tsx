@@ -138,14 +138,14 @@ export function MainLayout() {
   const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs' || activeSidebarTab === 'operations')
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
-    <div
-      className={`h-full w-full flex overflow-hidden transition-opacity duration-150 ${
-        boardMode ? 'opacity-0 pointer-events-none select-none' : 'opacity-100'
-      }`}
-      aria-hidden={boardMode}
-    >
-      {/* Icon Sidebar */}
+    <div className="relative h-screen w-screen overflow-hidden select-none">
+      <div
+        className={`h-full w-full flex overflow-hidden transition-opacity duration-150 ${
+          boardMode ? 'opacity-0 pointer-events-none select-none' : 'opacity-100'
+        }`}
+        aria-hidden={boardMode}
+      >
+        {/* Icon Sidebar */}
         <Sidebar
           activeTab={activeSidebarTab}
           isContentVisible={showSidebarContent || isSettingsView || isCanvasView}
@@ -512,15 +512,15 @@ function PrimaryPanel({
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
-      <div className="h-9 border-b border-border bg-bg-secondary flex items-center shrink-0">
+      <div className="h-10 border-b border-border bg-bg-secondary flex items-center shrink-0 app-region-drag">
         {/* Map tab */}
         <button
           onClick={() => setActiveTab('map')}
           className={`
-            flex items-center gap-1.5 px-3 h-full border-r border-border shrink-0 transition-colors
+            app-region-no-drag mx-1.5 flex h-7 items-center gap-1.5 rounded-md px-2.5 shrink-0 transition-colors
             ${activeTabId === 'map'
-              ? 'bg-bg-primary text-text-primary'
-              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              ? 'bg-bg-primary text-text-primary shadow-sm ring-1 ring-border/70'
+              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/80'
             }
           `}
         >

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_projector import ContextProjector
+from opengis_backend.agent.context.request_budget import RequestBudgetManager
 from opengis_backend.agent.execution.executor_factory import build_subprocess_executor
 from opengis_backend.agent.execution.tool_output import ToolOutputRuntime
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas
@@ -63,7 +64,11 @@ def compose_system_prompt(
         )
     try:
         current_user_message = str(((getattr(ctx, "meta", None) or {}).get("_current_user_message")) or "")
-        projected = ContextProjector(workspace).project(current_user_message)
+        memory_limit = RequestBudgetManager().suggest_limits().max_memory_records
+        projected = ContextProjector(workspace).project(
+            current_user_message,
+            max_records=memory_limit,
+        )
         if projected:
             prompt += f"\n## Retrieved Project Memory\n{projected}\n"
     except Exception:

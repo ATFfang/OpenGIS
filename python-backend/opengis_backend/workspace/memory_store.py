@@ -23,6 +23,7 @@ _MEMORY_DIR = ".opengis/memory"
 _FACTS_FILE = "facts.jsonl"
 _RECIPES_FILE = "recipes.jsonl"
 _DATASETS_FILE = "datasets.jsonl"
+_FAILURES_FILE = "failures.jsonl"
 _MAX_RECORDS_PER_KIND = 500
 
 
@@ -143,6 +144,7 @@ class MemoryStore:
             _FACTS_FILE,
             _RECIPES_FILE,
             _DATASETS_FILE,
+            _FAILURES_FILE,
         ]
         out: list[MemoryRecord] = []
         for filename in filenames:
@@ -230,8 +232,10 @@ class MemoryStore:
         normalized = (kind or "fact").lower()
         if normalized in {"recipe", "procedure"}:
             return _RECIPES_FILE
-        if normalized in {"dataset", "dataset_card", "layer"}:
+        if normalized in {"dataset", "dataset_card", "layer", "artifact"}:
             return _DATASETS_FILE
+        if normalized in {"failure", "failure_lesson", "bug_pattern", "error_lesson"}:
+            return _FAILURES_FILE
         return _FACTS_FILE
 
     @staticmethod
@@ -280,11 +284,26 @@ class MemoryStore:
 
 def _tokenize(text: str) -> list[str]:
     lowered = (text or "").lower()
-    tokens = re.findall(r"[\w\u4e00-\u9fff]{2,}", lowered)
-    return tokens[:80]
+    raw = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", lowered)
+    tokens: list[str] = []
+    for item in raw:
+        tokens.append(item)
+        if re.fullmatch(r"[\u4e00-\u9fff]{3,}", item):
+            tokens.extend(item[i : i + 2] for i in range(0, len(item) - 1))
+            tokens.extend(item[i : i + 3] for i in range(0, len(item) - 2))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped[:120]
 
 
 def _fingerprint(record: MemoryRecord) -> str:
+    if record.kind == "failure_lesson" and record.metadata.get("fingerprint"):
+        return f"{record.kind}:{record.scope}:{record.metadata['fingerprint']}"
     text = re.sub(r"\s+", " ", record.content.strip().lower())
     return f"{record.kind}:{record.scope}:{text[:300]}"
 

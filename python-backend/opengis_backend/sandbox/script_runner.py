@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 
 # Async notify callback, same shape as ToolContext.notify_fn.
 NotifyFn = Callable[[str, dict], Awaitable[None]]
+RequestFn = Callable[[str, dict], Awaitable[Any]]
 
 
 class ScriptRunner:
@@ -83,9 +84,11 @@ class ScriptRunner:
         self,
         tool_registry: ToolRegistry,
         notify_fn: Optional[NotifyFn] = None,
+        request_fn: Optional[RequestFn] = None,
     ) -> None:
         self._tools = tool_registry
         self._notify_fn = notify_fn
+        self._request_fn = request_fn
         self._current_executor: Optional[SubprocessPythonExecutor] = None
         self._current_run_id: Optional[str] = None
 
@@ -149,6 +152,7 @@ class ScriptRunner:
         # will call ctx.notify_fn(...) which hops back onto the ws loop.
         ctx = ToolContext(
             notify_fn=self._notify_fn,
+            request_fn=self._request_fn,
             conversation_id=None,
             meta={"workspace_path": workspace_path} if workspace_path else {},
         )

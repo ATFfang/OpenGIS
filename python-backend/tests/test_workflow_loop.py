@@ -36,7 +36,7 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
             context=context,
             tool_runtime=None,
             tool_schemas=schemas,
-            tool_materializer=ToolMaterializer(schemas, max_tools=8),
+            tool_materializer=ToolMaterializer(schemas),
             retryable_exceptions=(ConnectionError,),
             max_retries=0,
             base_delay=0,
@@ -60,7 +60,7 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         self.assertIn("execute_code", tool_names)
         self.assertIn("layout_export", tool_names)
 
-    def test_tool_materializer_is_profile_bounded_not_prompt_classified(self) -> None:
+    def test_tool_materializer_keeps_stable_profile_tool_surface(self) -> None:
         schemas = [
             {"type": "function", "function": {"name": "read_file", "description": "Read file", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "execute_code", "description": "Run Python", "parameters": {"type": "object", "properties": {}}}},
@@ -74,17 +74,17 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
             {"type": "function", "function": {"name": "tool_e", "description": "misc", "parameters": {"type": "object", "properties": {}}}},
         ]
 
-        materialized = ToolMaterializer(schemas, max_tools=4).materialize([
-            {"role": "user", "content": "创建一个worker持续推送动态轨迹"}
-        ])
+        materialized = ToolMaterializer(schemas).materialize()
 
+        self.assertEqual(materialized.selected_names, [item["function"]["name"] for item in schemas])
         self.assertIn("read_file", materialized.selected_names)
         self.assertIn("execute_code", materialized.selected_names)
         self.assertIn("start_worker", materialized.selected_names)
         self.assertIn("layout_export", materialized.selected_names)
-        self.assertEqual(materialized.reason, "profile_bounded")
+        self.assertIn("tool_e", materialized.selected_names)
+        self.assertEqual(materialized.reason, "profile")
 
-    def test_tool_materializer_never_truncates_core_tools_at_tail(self) -> None:
+    def test_tool_materializer_keeps_tail_tools_in_profile_surface(self) -> None:
         schemas = [
             {"type": "function", "function": {"name": f"layout_tool_{i}", "description": "layout canvas map export", "parameters": {"type": "object", "properties": {}}}}
             for i in range(12)
@@ -93,14 +93,13 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
             {"type": "function", "function": {"name": "run_script_file", "description": "Run saved script", "parameters": {"type": "object", "properties": {}}}},
         ]
 
-        materialized = ToolMaterializer(schemas, max_tools=8).materialize([
-            {"role": "user", "content": "导出制图画布并调整图例"}
-        ])
+        materialized = ToolMaterializer(schemas).materialize()
 
+        self.assertEqual(materialized.selected_names, [item["function"]["name"] for item in schemas])
         self.assertIn("execute_code", materialized.selected_names)
         self.assertIn("run_script_file", materialized.selected_names)
 
-    def test_tool_materializer_keeps_operation_tools_visible(self) -> None:
+    def test_tool_materializer_keeps_operation_tools_in_profile_surface(self) -> None:
         schemas = [
             {"type": "function", "function": {"name": f"misc_{i}", "description": "misc", "parameters": {"type": "object", "properties": {}}}}
             for i in range(30)
@@ -113,10 +112,9 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
             {"type": "function", "function": {"name": "promote_script_to_operation", "description": "Promote operation", "parameters": {"type": "object", "properties": {}}}},
         ]
 
-        materialized = ToolMaterializer(schemas, max_tools=8).materialize([
-            {"role": "user", "content": "把这个脚本沉淀成可复用操作"}
-        ])
+        materialized = ToolMaterializer(schemas).materialize()
 
+        self.assertEqual(materialized.selected_names, [item["function"]["name"] for item in schemas])
         self.assertIn("list_operations", materialized.selected_names)
         self.assertIn("get_operation", materialized.selected_names)
         self.assertIn("run_operation", materialized.selected_names)

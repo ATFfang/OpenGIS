@@ -13,6 +13,8 @@ import {
   sourceIdFor,
 } from './types'
 
+const rasterSourceUrls = new Map<string, string>()
+
 export const rasterRenderer: LayerRenderer = {
   renderType: 'raster',
 
@@ -31,14 +33,24 @@ export const rasterRenderer: LayerRenderer = {
     const { map } = ctx
 
     // ─── 添加数据源 ──────────────────────────────────────
-    if (!map.getSource(sourceId)) {
+    let existingSource = map.getSource(sourceId) as any
+    const nextSourceUrl = raster.source === 'image' ? raster.imageUrl : raster.tileUrl
+    if (
+      existingSource &&
+      nextSourceUrl &&
+      rasterSourceUrls.get(sourceId) &&
+      rasterSourceUrls.get(sourceId) !== nextSourceUrl
+    ) {
+      if (map.getLayer(rasterId)) {
+        map.removeLayer(rasterId)
+      }
+      map.removeSource(sourceId)
+      existingSource = null
+    }
+
+    if (!existingSource) {
       if (raster.source === 'image' && raster.imageUrl) {
-        const coords = raster.imageCoordinates ?? [
-          [raster.bbox.minX, raster.bbox.maxY],
-          [raster.bbox.maxX, raster.bbox.maxY],
-          [raster.bbox.maxX, raster.bbox.minY],
-          [raster.bbox.minX, raster.bbox.minY],
-        ]
+        const coords = imageCoordinatesForRaster(raster)
         map.addSource(sourceId, {
           type: 'image',
           url: raster.imageUrl,
@@ -69,7 +81,14 @@ export const rasterRenderer: LayerRenderer = {
         )
         return
       }
+      if (nextSourceUrl) rasterSourceUrls.set(sourceId, nextSourceUrl)
       ctx.registerSourceId(sourceId)
+    } else if (raster.source === 'image' && raster.imageUrl && typeof existingSource.updateImage === 'function') {
+      existingSource.updateImage({
+        url: raster.imageUrl,
+        coordinates: imageCoordinatesForRaster(raster),
+      })
+      rasterSourceUrls.set(sourceId, raster.imageUrl)
     }
 
     // ─── 添加图层 ──────────────────────────────────────
@@ -107,6 +126,20 @@ export const rasterRenderer: LayerRenderer = {
   listRenderLayerIds(def) {
     return [renderLayerId(def.id, 'raster')]
   },
+}
+
+function imageCoordinatesForRaster(raster: ParsedRasterData): [
+  [number, number],
+  [number, number],
+  [number, number],
+  [number, number],
+] {
+  return raster.imageCoordinates ?? [
+          [raster.bbox.minX, raster.bbox.maxY],
+          [raster.bbox.maxX, raster.bbox.maxY],
+          [raster.bbox.maxX, raster.bbox.minY],
+          [raster.bbox.minX, raster.bbox.minY],
+        ]
 }
 
 /**

@@ -195,8 +195,11 @@ export class PythonClient {
       this.ws.send(JSON.stringify(request))
 
       // Pick a timeout that reflects the call's cost class.
-      //  - chat.user_message drives the agent loop which may run many
-      //    LLM-bound steps; anything under ~10 minutes is too tight.
+      //  - chat.user_message is streamed by server notifications. Do not put
+      //    a renderer-side wall clock on it: if the UI request times out while
+      //    the backend agent keeps running, chat state becomes inconsistent.
+      //    Backend cancellation, websocket close, or stream_end/error events
+      //    are the source of truth for ending the visible run.
       //  - rpc.code.run_script is user-authored Python inside the
       //    subprocess sandbox; a heavy training script can easily take
       //    minutes. Match chat's 10-min ceiling so the TS side doesn't
@@ -210,7 +213,7 @@ export class PythonClient {
       const effectiveTimeout =
         timeoutMs ??
         (isChat
-          ? 10 * 60 * 1000 // 10 min
+          ? 0 // no frontend timeout; streamed run lifecycle is event-driven
           : isScriptRun
           ? 10 * 60 * 1000 // 10 min
           : isTool

@@ -66,9 +66,7 @@ class AgentProfile:
             tool_groups=["core", "qgis", "osm", "datasource"],
             permission_level=PermissionLevel.SAFE_WRITE,
             max_steps=max_steps,
-            metadata={
-                "tool_schema_budget": 36,
-            },
+            metadata={},
         )
 
     @staticmethod
@@ -82,7 +80,6 @@ class AgentProfile:
             permission_level=PermissionLevel.READ_ONLY,
             max_steps=steps,
             metadata={
-                "tool_schema_budget": 18,
                 "max_provider_turns": steps,
                 "max_code_steps": 1,
                 "max_tool_steps": steps,
@@ -105,7 +102,6 @@ class AgentProfile:
             permission_level=PermissionLevel.READ_ONLY,
             max_steps=steps,
             metadata={
-                "tool_schema_budget": 24,
                 "max_provider_turns": steps,
                 "max_code_steps": min(steps, 2),
                 "max_tool_steps": steps * 2,
@@ -124,7 +120,6 @@ class AgentProfile:
             permission_level=PermissionLevel.SAFE_WRITE,
             max_steps=steps,
             metadata={
-                "tool_schema_budget": 44,
                 "max_provider_turns": steps,
             },
         )
@@ -140,7 +135,6 @@ class AgentProfile:
             permission_level=PermissionLevel.SAFE_WRITE,
             max_steps=steps,
             metadata={
-                "tool_schema_budget": 32,
                 "max_provider_turns": steps,
             },
         )

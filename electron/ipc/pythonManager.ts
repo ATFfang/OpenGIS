@@ -339,11 +339,11 @@ export class PythonManager {
 
       proc.once('exit', cleanup)
       proc.once('error', cleanup)
-      proc.kill('SIGTERM')
+      this.terminateProcess(proc)
 
       this.killTimeout = setTimeout(() => {
         if (proc.exitCode === null && proc.signalCode === null) {
-          proc.kill('SIGKILL')
+          this.killProcessTree(proc)
           return
         }
         cleanup()
@@ -409,6 +409,43 @@ export class PythonManager {
     throw new Error(
       `Python backend not set up. Run \`npm run setup:python\` first. (looked for ${venvPython})`
     )
+  }
+
+  /**
+   * Terminate the sidecar without leaving subprocesses behind.
+   *
+   * On Windows, Node's POSIX-like signals are only emulated and do not kill
+   * child process trees. The Python backend can spawn agent/worker subprocesses,
+   * so we use taskkill /T for restart/shutdown just like the Python executor
+   * already does for per-run children.
+   */
+  private terminateProcess(proc: ChildProcess): void {
+    if (this.isWindows) {
+      this.killProcessTree(proc)
+      return
+    }
+    proc.kill('SIGTERM')
+  }
+
+  private killProcessTree(proc: ChildProcess): void {
+    if (this.isWindows && proc.pid) {
+      try {
+        execFile(
+          'taskkill',
+          ['/F', '/T', '/PID', String(proc.pid)],
+          { timeout: 5000 },
+          () => {},
+        )
+        return
+      } catch {
+        // Fall back to Node kill below.
+      }
+    }
+    try {
+      proc.kill(this.isWindows ? undefined : 'SIGKILL')
+    } catch {
+      // Best-effort shutdown.
+    }
   }
 
   /**

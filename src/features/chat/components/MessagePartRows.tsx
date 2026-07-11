@@ -64,15 +64,21 @@ export function UserMessageRow({
 export function ErrorRow({ text }: { text?: string }) {
   const errorText = text || 'Unknown error'
   const mainText = errorText.startsWith('⚠️') ? errorText : `⚠️ ${errorText}`
+  const isTimeout = /timeout|timed out|超时/i.test(errorText)
 
   return (
-    <div className="text-[13px] bg-accent-danger/5 border border-accent-danger/15 rounded-xl px-4 py-3 shadow-sm">
-      <div className="flex items-start gap-2.5">
-        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-accent-danger" />
+    <div className={`${isTimeout ? 'max-w-[520px] px-3 py-2 text-xs' : 'px-4 py-3 text-[13px]'} bg-accent-danger/5 border border-accent-danger/15 rounded-lg shadow-sm`}>
+      <div className="flex items-start gap-2">
+        <AlertTriangle className={`${isTimeout ? 'w-3.5 h-3.5' : 'w-4 h-4'} shrink-0 mt-0.5 text-accent-danger`} />
         <div className="flex-1 min-w-0">
           <span className="whitespace-pre-wrap break-words leading-relaxed text-text-primary">
             {mainText}
           </span>
+          {isTimeout && (
+            <span className="mt-1 block text-[11px] leading-snug text-text-muted">
+              后台可能仍在运行。请等待底部状态恢复，或点击停止后重试。
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -82,22 +88,29 @@ export function ErrorRow({ text }: { text?: string }) {
 export function ProgressRow({
   stage = 'processing',
   detail,
+  status,
 }: {
   stage?: string
   detail?: string
+  status?: 'pending' | 'running' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 }) {
   const labels = useProgressLabels()
   const label = labels[stage] || labels.processing
+  const isOpen = status === 'pending' || status === 'running' || status === 'streaming'
   const displayDetail = stage === 'calling_llm' || stage === 'thinking_next_step'
     ? label
     : detail || label
 
   return (
     <div className="flex items-center gap-2.5 py-1.5 animate-fade-in">
-      <div className="relative w-4 h-4">
-        <div className="absolute inset-0 rounded-full border-2 border-accent-primary/20" />
-        <div className="absolute inset-0 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
-      </div>
+      {isOpen ? (
+        <div className="relative w-4 h-4">
+          <div className="absolute inset-0 rounded-full border-2 border-accent-primary/20" />
+          <div className="absolute inset-0 rounded-full border-2 border-accent-primary border-t-transparent animate-spin" />
+        </div>
+      ) : (
+        <div className="w-4 h-4 rounded-full bg-text-muted/30" />
+      )}
       <span className="text-[12px] text-text-muted font-medium">
         {displayDetail}
       </span>
@@ -110,6 +123,7 @@ function useProgressLabels(): Record<string, string> {
   return {
     calling_llm: t.chat.thinking,
     thinking_next_step: t.chat.thinking,
+    tool_intent: t.chat.progressProcessing,
     installing_packages: `📦 ${t.chat.progressInstalling}`,
     loading_geodata: `🗺️ ${t.chat.progressLoadingGeodata}`,
     loading_raster: `🛰️ ${t.chat.progressLoadingRaster}`,

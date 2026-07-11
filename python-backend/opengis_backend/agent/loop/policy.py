@@ -21,7 +21,6 @@ class LoopBudget:
     max_code_steps: int | None
     max_tool_steps: int | None
     max_work_steps: int | None
-    max_tools_visible: int
 
 
 @dataclass(frozen=True)
@@ -38,7 +37,6 @@ class LoopPolicy:
     @classmethod
     def from_profile(cls, profile: AgentProfile) -> "LoopPolicy":
         metadata = dict(profile.metadata or {})
-        max_tools_visible = int(metadata.get("tool_schema_budget") or 44)
 
         def optional_int(key: str) -> int | None:
             value = metadata.get(key)
@@ -51,12 +49,11 @@ class LoopPolicy:
             max_code_steps=optional_int("max_code_steps"),
             max_tool_steps=optional_int("max_tool_steps"),
             max_work_steps=optional_int("max_work_steps"),
-            max_tools_visible=max_tools_visible,
         )
         return cls(profile=profile, budget=budget)
 
     def materialization_options(self) -> dict[str, Any]:
-        return {"max_tools": self.budget.max_tools_visible}
+        return {}
 
     def before_provider_turn(
         self,

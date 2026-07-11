@@ -114,7 +114,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
       if (idx !== -1) {
         // Replace existing entry with same ID
         const layers = [...state.layers]
-        if (layers[idx] !== layer) _releaseLayerResources(layers[idx])
+        if (layers[idx] !== layer) _releaseLayerResources(layers[idx], layer)
         layers[idx] = layer
         return { layers, activeLayerId: layer.id }
       }
@@ -130,7 +130,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
       for (const layer of incoming) {
         const idx = layers.findIndex((l) => l.id === layer.id)
         if (idx !== -1) {
-          if (layers[idx] !== layer) _releaseLayerResources(layers[idx])
+          if (layers[idx] !== layer) _releaseLayerResources(layers[idx], layer)
           layers[idx] = layer
         } else {
           layers.push(layer)
@@ -189,7 +189,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
 
   clearLayers: () => {
     resetLayerColorIndex()
-    useMapStore.getState().layers.forEach(_releaseLayerResources)
+    useMapStore.getState().layers.forEach((layer) => _releaseLayerResources(layer))
     set({ layers: [], activeLayerId: null })
   },
 
@@ -273,6 +273,7 @@ import { useAssetStore } from './assetStore'
 import { loadLayers, persistLayers, flushLayers } from '@/services/layerPersistence'
 import { loadMapView, persistMapView, flushMapView } from '@/services/mapViewPersistence'
 import { releaseVectorGeoJSON } from '@/services/geo'
+import { releaseRasterBuffer } from '@/services/geo/rasterSourceRegistry'
 import { releaseImageUrl } from '@/services/rpc/handlers/_image_url'
 
 // 加载完成前不要把"空图层"写回磁盘，否则会用空数据覆盖已有持久化。
@@ -280,12 +281,20 @@ let _layerPersistReady = false
 let _viewPersistReady = false
 let _isApplyingPersistedView = false
 
-function _releaseLayerResources(layer: MapLayerDefinition | undefined) {
+function _releaseLayerResources(layer: MapLayerDefinition | undefined, replacement?: MapLayerDefinition) {
   if (!layer) return
   if (layer.data.kind === 'vector') {
     releaseVectorGeoJSON(layer.data.dataHandle)
     return
   }
+  if (
+    layer.data.sourceBufferId
+    && replacement?.data.kind === 'raster'
+    && replacement.data.sourceBufferId === layer.data.sourceBufferId
+  ) {
+    return
+  }
+  releaseRasterBuffer(layer.data.sourceBufferId)
   const imageUrl = layer.data.imageUrl
   const ext = layer.meta.extension?.toLowerCase()
   const isOwnedGeoTiffBlob =

@@ -27,6 +27,125 @@ logger = logging.getLogger(__name__)
 CODE_EXECUTION_TOOLS = {"execute_code", "run_script_file"}
 
 
+def tool_intent_progress(tool_name: str, arguments: dict[str, Any] | None = None) -> tuple[str, str]:
+    """Return a compact, user-facing progress stage for a tool call.
+
+    This is intentionally not chain-of-thought. It exposes the next concrete
+    action so the UI does not look idle while the model immediately uses
+    function calls.
+    """
+    args = arguments or {}
+    target = _tool_target_hint(args)
+
+    explicit: dict[str, tuple[str, str]] = {
+        "execute_code": ("executing_code", "运行 Python 代码"),
+        "run_script_file": ("executing_code", "运行已保存脚本"),
+        "list_layers": ("tool_intent", "读取当前地图图层"),
+        "get_layer": ("tool_intent", "查看图层详情"),
+        "query_features": ("tool_intent", "查询图层要素"),
+        "fly_to": ("tool_intent", "调整地图视角"),
+        "set_map_camera": ("tool_intent", "调整地图相机"),
+        "enter_3d_view": ("tool_intent", "切换到三维视角"),
+        "exit_3d_view": ("tool_intent", "退出三维视角"),
+        "zoom_to_layer": ("tool_intent", "缩放到目标图层"),
+        "set_basemap_visibility": ("tool_intent", "切换底图显示"),
+        "get_map_state": ("tool_intent", "读取地图状态"),
+        "add_layer": ("loading_geodata", "加载要素图层"),
+        "add_raster": ("loading_raster", "加载栅格图层"),
+        "remove_layer": ("tool_intent", "移除地图图层"),
+        "csv_to_geojson": ("loading_data", "转换表格为空间数据"),
+        "update_layer_style": ("tool_intent", "更新图层样式"),
+        "set_graduated_style": ("tool_intent", "设置数值分级符号"),
+        "set_categorized_style": ("tool_intent", "设置分类符号"),
+        "set_extrusion_style": ("tool_intent", "设置三维拉伸"),
+        "set_layer_visual_variables": ("tool_intent", "设置图层视觉变量"),
+        "set_layer_filter": ("tool_intent", "设置图层过滤"),
+        "set_layer_label": ("tool_intent", "设置图层标注"),
+        "highlight_features": ("tool_intent", "高亮要素"),
+        "set_layer_order": ("tool_intent", "调整图层顺序"),
+        "update_legend_spec": ("tool_intent", "更新图例配置"),
+        "read_file": ("tool_intent", "读取文件"),
+        "write_file": ("tool_intent", "写入文件"),
+        "edit_file": ("tool_intent", "编辑文件"),
+        "file_exists": ("tool_intent", "检查文件是否存在"),
+        "list_directory": ("tool_intent", "查看目录"),
+        "glob": ("tool_intent", "搜索文件路径"),
+        "grep": ("tool_intent", "搜索文件内容"),
+        "bash": ("tool_intent", "运行 Shell 命令"),
+        "webfetch": ("tool_intent", "抓取网页内容"),
+        "websearch": ("tool_intent", "搜索网页信息"),
+        "save_plot": ("saving_results", "保存图表"),
+        "list_operations": ("tool_intent", "读取 Operation 列表"),
+        "get_operation": ("tool_intent", "查看 Operation 定义"),
+        "validate_operation": ("tool_intent", "校验 Operation 契约"),
+        "run_operation": ("tool_intent", "运行 Operation"),
+        "create_operation": ("tool_intent", "创建 Operation"),
+        "edit_operation": ("tool_intent", "编辑 Operation"),
+        "promote_script_to_operation": ("tool_intent", "沉淀脚本为 Operation"),
+        "create_workflow": ("tool_intent", "创建 Workflow"),
+        "update_plan": ("tool_intent", "更新执行计划"),
+        "run_subagent": ("tool_intent", "启动 Subagent"),
+        "run_subagents": ("tool_intent", "启动多个 Subagent"),
+        "start_worker": ("tool_intent", "启动 Worker"),
+        "start_dynamic_map_worker": ("tool_intent", "启动动态地图 Worker"),
+        "get_worker": ("tool_intent", "查看 Worker 状态"),
+        "wait_worker_update": ("tool_intent", "等待 Worker 更新"),
+        "restart_worker": ("tool_intent", "重启 Worker"),
+        "list_workers": ("tool_intent", "读取 Worker 列表"),
+        "pause_worker": ("tool_intent", "暂停 Worker"),
+        "delete_worker": ("tool_intent", "删除 Worker"),
+        "debug_agent_context": ("tool_intent", "检查 Agent 上下文"),
+        "load_skill": ("tool_intent", "加载 Skill"),
+        "update_user_instructions": ("tool_intent", "更新用户偏好"),
+    }
+    if tool_name in explicit:
+        stage, detail = explicit[tool_name]
+        return stage, _append_target_hint(detail, target)
+
+    if tool_name.startswith("layout_"):
+        return "tool_intent", _append_target_hint("更新制图画布", target)
+    if tool_name.startswith("academic_"):
+        return "tool_intent", "处理学术文本"
+    if tool_name.startswith("ext_heatmap"):
+        return "generating_visualization", "生成热力图"
+    if tool_name.startswith("export_") or tool_name.endswith("_pdf"):
+        return "saving_results", _append_target_hint("导出结果", target)
+    if tool_name.startswith("write_report") or tool_name.startswith("interactive_snapshot"):
+        return "tool_intent", _append_target_hint("生成报告内容", target)
+    return "tool_intent", _append_target_hint(f"调用工具 {tool_name}", target)
+
+
+def _tool_target_hint(arguments: dict[str, Any]) -> str:
+    for key in (
+        "layer_id",
+        "operation_id",
+        "worker_id",
+        "workflow_id",
+        "path",
+        "file_path",
+        "raster_path",
+        "geojson_path",
+        "script_path",
+        "url",
+    ):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return _compact_target(value.strip())
+    return ""
+
+
+def _compact_target(value: str, limit: int = 36) -> str:
+    compact = value.replace("\\", "/").rstrip("/").split("/")[-1] or value
+    compact = compact.replace("\n", " ").strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
+
+
+def _append_target_hint(detail: str, target: str) -> str:
+    return f"{detail} · {target}" if target else detail
+
+
 @dataclass
 class ToolSettlement:
     call_id: str
@@ -54,6 +173,7 @@ class LoopTurnTelemetry:
     tool_call_count: int = 0
     tool_schema_total: int = 0
     tool_schema_reason: str = ""
+    request_pressure: str = ""
     continuation: str = ""
 
     def log(self) -> None:
@@ -61,7 +181,7 @@ class LoopTurnTelemetry:
             "[LOOP-TURN] iteration=%d code_steps=%d tool_steps=%d "
             "messages=%d est_request_tokens=%d tools=%d/%d tool_reason=%s "
             "context_build=%.0fms llm=%.0fms tool=%.0fms "
-            "response_chars=%d tool_calls=%d continuation=%s",
+            "response_chars=%d tool_calls=%d pressure=%s continuation=%s",
             self.iteration,
             self.code_steps,
             self.tool_steps,
@@ -75,6 +195,7 @@ class LoopTurnTelemetry:
             self.tool_ms,
             self.response_chars,
             self.tool_call_count,
+            self.request_pressure or "-",
             self.continuation or "-",
         )
 
@@ -281,7 +402,7 @@ class ProviderTurnCaller:
     ) -> ProviderTurnResult:
         t0 = time.monotonic()
         materialized_tools = (
-            self.tool_materializer.materialize(messages)
+            self.tool_materializer.materialize()
             if self.tool_materializer is not None
             else None
         )
@@ -421,22 +542,35 @@ class ToolCallSettler:
         progress_callback: Callable[[str, str], None] | None = None,
         on_tool_start: Callable[[str, dict, str], None] | None = None,
         on_tool_result: Callable[..., Any] | None = None,
+        settlement_identity: dict[str, Any] | None = None,
     ) -> None:
         self.context = context
         self.tool_runtime = tool_runtime
         self.progress_callback = progress_callback
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result
+        self.settlement_identity = dict(settlement_identity or {})
 
     def settle_all(
         self,
         tool_calls: list[dict[str, Any]],
         *,
         streamed_tool_code: dict[int, dict[str, Any]] | None = None,
+        blocked_call_ids: dict[str, str] | None = None,
     ) -> list[ToolSettlement]:
         settlements: list[ToolSettlement] = []
         streamed_tool_code = streamed_tool_code or {}
+        blocked_call_ids = blocked_call_ids or {}
         for tool_index, tc in enumerate(tool_calls):
+            tc_id = str(tc.get("id", ""))
+            if tc_id in blocked_call_ids:
+                settlements.append(
+                    self._settle_blocked(
+                        tool_call=tc,
+                        reason=blocked_call_ids[tc_id],
+                    )
+                )
+                continue
             settlements.append(
                 self._settle_one(
                     tool_index=tool_index,
@@ -445,6 +579,49 @@ class ToolCallSettler:
                 )
             )
         return settlements
+
+    def _settle_blocked(
+        self,
+        *,
+        tool_call: dict[str, Any],
+        reason: str,
+    ) -> ToolSettlement:
+        tc_id = str(tool_call.get("id", ""))
+        func = tool_call.get("function", {}) if isinstance(tool_call.get("function"), dict) else {}
+        tool_name = str(func.get("name", ""))
+        arguments = parse_tool_arguments(func.get("arguments", "{}"))
+        content = json.dumps(
+            {
+                "success": False,
+                "error": "runner_guard_blocked",
+                "reason": reason,
+                "retry": "Choose a tool that directly serves the current turn objective.",
+            },
+            ensure_ascii=False,
+        )
+        metadata = {
+            "runner_guard_blocked": True,
+            "runner_guard_reason": reason,
+            **self.settlement_identity,
+            "tool_call_id": tc_id,
+        }
+        logger.warning("TOOL BLOCKED: %s(%s) -> %s", tool_name, tc_id, reason)
+        self.context.add_tool_result(
+            tc_id,
+            tool_name,
+            content,
+            meta=metadata,
+        )
+        return ToolSettlement(
+            call_id=tc_id,
+            name=tool_name,
+            arguments=arguments,
+            content=content,
+            error="runner_guard_blocked",
+            duration_ms=0.0,
+            metadata=metadata,
+            counts_as_code_step=False,
+        )
 
     def _settle_one(
         self,
@@ -466,7 +643,8 @@ class ToolCallSettler:
 
         if self.progress_callback:
             try:
-                self.progress_callback("tool_call", f"Calling {tool_name}...")
+                stage, detail = tool_intent_progress(tool_name, arguments)
+                self.progress_callback(stage, detail)
             except Exception:
                 logger.exception("progress_callback failed for tool start")
 
@@ -495,6 +673,8 @@ class ToolCallSettler:
 
         if not result_ms:
             result_ms = (time.monotonic() - t0) * 1000
+        result_metadata.update(self.settlement_identity)
+        result_metadata["tool_call_id"] = tc_id
 
         if self.on_tool_result:
             try:
@@ -555,5 +735,6 @@ __all__ = [
     "decide_text_continuation",
     "looks_like_action_completion",
     "looks_like_completion",
+    "tool_intent_progress",
     "tool_counts_as_code_step",
 ]

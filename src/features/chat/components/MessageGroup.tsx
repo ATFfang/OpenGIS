@@ -29,7 +29,7 @@ export function MessageGroup({
   if (role === 'user') {
     const userText = extractUserText(items)
     return (
-      <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
+      <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-1.5 animate-fade-in group/msg transition-colors`}>
         <div className="flex justify-end">
           <div className="max-w-[85%] min-w-0">
             {children}
@@ -51,8 +51,8 @@ export function MessageGroup({
 
   const groupText = extractGroupText(items)
   return (
-    <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-2 animate-fade-in group/msg transition-colors`}>
-      <div className="min-w-0 space-y-2.5">
+    <div className={`${highlighted ? 'bg-accent-primary/5' : ''} px-5 py-1.5 animate-fade-in group/msg transition-colors`}>
+      <div className="min-w-0 space-y-2">
         {children}
         {groupText && (
           <div className="flex gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
@@ -74,7 +74,7 @@ export function extractGroupText(items: ChatMessage[]): string {
           parts.push(part.text.trim())
         } else if (part.type === 'code' && part.text?.trim()) {
           parts.push('```python\n' + part.text.trim() + '\n```')
-        } else if (part.type === 'tool_output' && part.text?.trim() && !isCodeExecutionOutput(part)) {
+        } else if (part.type === 'tool_output' && part.text?.trim() && !isCodeExecutionOutput(part) && !isOperationToolOutput(part)) {
           parts.push(part.text.trim())
         }
       }
@@ -82,6 +82,10 @@ export function extractGroupText(items: ChatMessage[]): string {
     }
   }
   return parts.join('\n\n')
+}
+
+function isOperationToolOutput(part: ReturnType<typeof messagePartsForRender>[number]): boolean {
+  return !!part.tool && OPERATION_TOOLS.has(part.tool)
 }
 
 function isCodeExecutionOutput(part: ReturnType<typeof messagePartsForRender>[number]): boolean {
@@ -93,6 +97,16 @@ function isCodeExecutionOutput(part: ReturnType<typeof messagePartsForRender>[nu
     || data.step != null
   )
 }
+
+const OPERATION_TOOLS = new Set([
+  'list_operations',
+  'get_operation',
+  'validate_operation',
+  'run_operation',
+  'create_operation',
+  'edit_operation',
+  'promote_script_to_operation',
+])
 
 function extractUserText(items: ChatMessage[]): string {
   for (const message of items) {

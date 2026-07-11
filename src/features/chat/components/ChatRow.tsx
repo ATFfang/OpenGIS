@@ -53,7 +53,7 @@ function MessagePartsRenderer({
   onToggleExpand: () => void
 }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {parts.map((part, index) => (
         <MessagePartRow
           key={part.id || `${message.ts}:${index}`}

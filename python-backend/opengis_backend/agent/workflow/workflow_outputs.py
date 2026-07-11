@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+import json
 from pathlib import Path
 
+from opengis_backend.agent.context.observation import compress_observation
 from opengis_backend.agent.workflow.workflow_model import WorkflowNode
 
 logger = logging.getLogger(__name__)
@@ -57,10 +59,30 @@ def summarize_step_output(
     lines = full_output.strip().split("\n")
     paths = list(set(_PATH_RE.findall(full_output)))
     numbers = _COUNT_RE.findall(full_output)[:5]
+    compressed = compress_observation(
+        tool_name="workflow_step",
+        content=full_output,
+        metadata={"artifact_path": file_path or ""} if file_path else {},
+        max_chars=900,
+    )
+    contract = {
+        "workflow_step_contract": True,
+        "step": step_index,
+        "node_id": node.id,
+        "title": node.title,
+        "output_contract": node.output_contract,
+        "artifacts": [
+            {"kind": _artifact_kind(path), "path": path, "title": Path(path).name}
+            for path in paths[:8]
+        ],
+        "key_numbers": numbers[:5],
+        "detail_path": file_path,
+    }
 
     parts = [f"Step {step_index}: {node.title}"]
     if node.output_contract:
         parts.append(f"交付契约: {node.output_contract}")
+    parts.append("Contract: " + json.dumps(contract, ensure_ascii=False, default=str))
     if paths:
         parts.append("产出:\n" + "\n".join(f"  - {path}" for path in paths[:8]))
     if numbers:
@@ -72,10 +94,27 @@ def summarize_step_output(
             preview = stripped[:150] + ("..." if len(stripped) > 150 else "")
             parts.append(f"摘要: {preview}")
             break
+    if compressed and compressed != full_output:
+        parts.append(f"压缩观察: {compressed[:900]}")
 
     if file_path:
         parts.append(f"详情: {file_path}")
     return "\n".join(parts)
+
+
+def _artifact_kind(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        return "image"
+    if suffix in {".tif", ".tiff"}:
+        return "raster"
+    if suffix in {".geojson", ".shp", ".gpkg"}:
+        return "vector"
+    if suffix in {".csv", ".json"}:
+        return "dataset"
+    if suffix in {".py"}:
+        return "script"
+    return "file"
 
 
 def build_workflow_plan_payload(

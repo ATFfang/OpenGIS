@@ -50,7 +50,7 @@ class ToolParam:
             result["max_value"] = self.max_value
         return result
 
-    def to_json_schema(self) -> dict:
+    def to_json_schema(self, *, compact: bool = False) -> dict:
         """Convert to JSON Schema for OpenAI Function Calling."""
         type_map = {
             ParamType.FILE_PATH: "string",
@@ -83,7 +83,9 @@ class ToolParam:
             json_type = type_map.get(self.type, "string")
         else:
             json_type = str_type_map.get(str(self.type), "string")
-        schema: dict[str, Any] = {"description": self.description}
+        schema: dict[str, Any] = {
+            "description": _compact_description(self.description, 180 if compact else 2000),
+        }
         if json_type is not None:
             schema["type"] = json_type
         if json_type == "array":
@@ -153,19 +155,28 @@ class ToolSchema:
             "group": self.group,
         }
 
-    def to_openai_schema(self) -> dict:
+    def to_openai_schema(self, *, compact: bool = True) -> dict:
         """Convert to OpenAI Function Calling tool schema."""
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": _compact_description(self.description, 520 if compact else 4000),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        p.name: p.to_json_schema() for p in self.params
+                        p.name: p.to_json_schema(compact=compact) for p in self.params
                     },
                     "required": [p.name for p in self.params if p.required],
                 },
             },
         }
+
+
+def _compact_description(text: str, limit: int) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    head = max(80, int(limit * 0.7))
+    tail = max(0, limit - head - 18)
+    return compact[:head].rstrip() + " ... " + compact[-tail:].lstrip()

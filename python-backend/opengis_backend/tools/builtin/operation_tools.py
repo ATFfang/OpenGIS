@@ -1,4 +1,4 @@
-"""Agent tools for project-level reusable Operations."""
+"""Agent tools for reusable Operations."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _string_list(value: Any) -> list[str]:
     name="list_operations",
     display_name="List Reusable Operations",
     description=(
-        "List project-level reusable Operations under .opengis/operations. "
+        "List reusable Operations from the current workspace and OpenGIS built-ins. "
         "Use this before writing complex GIS/modeling code when an existing operation may solve the task."
     ),
     category="system",
@@ -60,7 +60,7 @@ def _string_list(value: Any) -> list[str]:
         {"name": "query", "type": "string", "required": False, "description": "Optional text filter over id/name/description/status."},
         {"name": "limit", "type": "number", "required": False, "description": "Maximum operations to return. Default 50."},
     ],
-    returns="dict with success, operations, and operation_root.",
+    returns="dict with success, operations, operation_root, and operation_roots.",
     examples=["Find reusable regression operations", "List existing hotspot analysis operations"],
     tags=["operation", "reuse", "project"],
     needs_context=True,
@@ -70,6 +70,7 @@ def list_operations(ctx: ToolContext, query: str = "", limit: int | float = 50) 
     return {
         "success": True,
         "operation_root": str(store.root),
+        "operation_roots": store.roots,
         "operations": store.list(query=str(query or ""), limit=int(limit or 50)),
     }
 
@@ -102,6 +103,60 @@ def get_operation(
         max_code_chars=int(max_code_chars or 40000),
     )
     return {"success": True, "operation": operation}
+
+
+@tool(
+    name="copy_operation_to_workspace",
+    display_name="Copy Operation To Workspace",
+    description=(
+        "Copy a built-in read-only Operation into the current workspace as an editable draft. "
+        "Use this when a built-in operation fails and the user asks to repair or customize the operation; "
+        "after copying, use edit_operation on the workspace copy instead of writing one-off scripts."
+    ),
+    category="system",
+    params=[
+        {"name": "operation_id", "type": "string", "required": True, "description": "Operation id to copy."},
+        {"name": "overwrite", "type": "boolean", "required": False, "description": "Overwrite an existing workspace copy."},
+    ],
+    returns="dict with success and the workspace operation.",
+    examples=["Copy kernel_density to workspace before repairing it"],
+    tags=["operation", "copy", "reuse", "repair"],
+    needs_context=True,
+)
+def copy_operation_to_workspace(
+    ctx: ToolContext,
+    operation_id: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    operation = _store(ctx).copy_to_workspace(operation_id, overwrite=bool(overwrite))
+    return {"success": True, "operation": operation}
+
+
+@tool(
+    name="validate_operation",
+    display_name="Validate Reusable Operation",
+    description=(
+        "Validate an Operation's contract before running it. Checks standard --input/--output protocol, "
+        "input_schema required keys, code-level params[...] usage, and supplied params. Use this after "
+        "get_operation or before rerunning a failed operation."
+    ),
+    category="system",
+    params=[
+        {"name": "operation_id", "type": "string", "required": True, "description": "Operation id."},
+        {"name": "params", "type": "object", "required": False, "description": "Optional run params to validate against the operation contract."},
+    ],
+    returns="dict with success, ok, errors, warnings, and inferred contract details.",
+    examples=["Validate dbscan_clustering before rerunning it"],
+    tags=["operation", "validate", "repair", "contract"],
+    needs_context=True,
+)
+def validate_operation(
+    ctx: ToolContext,
+    operation_id: str,
+    params: Any = None,
+) -> dict[str, Any]:
+    parsed_params = _json_obj(params, name="params") if params is not None else None
+    return _store(ctx).validate_contract(operation_id, params=parsed_params)
 
 
 @tool(
@@ -187,7 +242,8 @@ def create_operation(
     description=(
         "Modify an existing reusable Operation after inspection or a failed run. "
         "Use this to fix main.py, schemas, dependencies, README, or metadata instead "
-        "of abandoning the operation and writing one-off code."
+        "of abandoning the operation and writing one-off code. Built-in operations are read-only; "
+        "create a workspace copy before editing them."
     ),
     category="system",
     params=[

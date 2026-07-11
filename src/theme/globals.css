@@ -85,6 +85,11 @@
   --worker-surface: #242424;
   --worker-surface-soft: #2c2c2c;
   --worker-surface-muted: #1f1f1f;
+
+  --operation-card-bg: #2a2a2a;
+  --operation-card-soft: #303030;
+  --operation-card-muted: #222222;
+  --operation-card-border: #323232;
 }
 
 .light {
@@ -105,6 +110,11 @@
   --worker-surface: #e9edf3;
   --worker-surface-soft: #f3f5f8;
   --worker-surface-muted: #dde3eb;
+
+  --operation-card-bg: #eef1f5;
+  --operation-card-soft: #f6f7fa;
+  --operation-card-muted: #ffffff;
+  --operation-card-border: #d9dee7;
 }
 
 /* ============================================
@@ -131,6 +141,25 @@ body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+[role='button'],
+[contenteditable='true'] {
+  -webkit-app-region: no-drag;
+}
+
+input,
+textarea,
+pre,
+code,
+.select-text,
+[contenteditable='true'] {
+  user-select: text;
 }
 
 /* ============================================
@@ -174,6 +203,30 @@ body {
 
 .titlebar-no-drag {
   -webkit-app-region: no-drag;
+}
+
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-none *::-webkit-scrollbar {
+  display: none;
+}
+
+.operation-workbench {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--operation-card-bg) 35%, transparent), transparent 220px),
+    var(--bg-primary);
 }
 
 /* ============================================
