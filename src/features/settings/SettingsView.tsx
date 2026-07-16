@@ -1358,23 +1358,6 @@ export function SettingsView() {
                     />
                   </SettingItem>
 
-                  {/* Font Size */}
-                  <SettingItem
-                    id="appearance-fontsize"
-                    label={t.settings.fontSize}
-                    description={t.settings.fontSizeDesc}
-                  >
-                    <SettingSlider
-                      id="appearance-fontsize"
-                      value={appearance.fontSize}
-                      onChange={(v) => setAppearance({ fontSize: v })}
-                      min={10}
-                      max={24}
-                      step={1}
-                      valueFormatter={(v) => `${v}px`}
-                    />
-                  </SettingItem>
-
                   {/* Basemap Source */}
                   <SettingItem
                     id="appearance-basemap"
