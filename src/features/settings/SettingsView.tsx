@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { Fragment, useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import {
   Search,
   X,
@@ -6,6 +6,7 @@ import {
   Palette,
   Terminal,
   Cpu,
+  Gauge,
   ChevronDown,
   RotateCcw,
   CheckCircle2,
@@ -17,7 +18,9 @@ import {
 } from 'lucide-react'
 import { useT } from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useRunsStore } from '@/stores/runsStore'
 import type { ProtocolType, ModelPreset } from '@/stores/settingsStore'
+import type { RunDetail, RunLLMUsageRecord, RunSummary } from '@/stores/runsStore'
 import { BUILTIN_BASEMAPS } from '@/services/geo'
 import { useMapStore } from '@/stores/mapStore'
 import { mapEngine } from '@/features/map/engine/MapEngine'
@@ -60,6 +63,7 @@ export function SettingsView() {
   const NAV_SECTIONS: NavSection[] = [
     { id: 'model', label: t.settings.model, icon: Bot, keywords: ['llm', 'api', 'key', 'protocol', 'model', 'temperature', 'token'] },
     { id: 'agent', label: t.settings.agent, icon: Cpu, keywords: ['agent', 'iteration', 'confirmation', 'timeout', 'instructions'] },
+    { id: 'promptCache', label: t.settings.promptCacheTest, icon: Gauge, keywords: ['cache', 'prompt cache', 'deepseek', 'usage', 'token', 'section', 'llm'] },
     { id: 'appearance', label: t.settings.appearance, icon: Palette, keywords: ['theme', 'font', 'language', 'map', 'dark', 'light'] },
     { id: 'python', label: t.settings.python, icon: Terminal, keywords: ['python', 'path', 'environment', 'interpreter'] },
   ]
@@ -75,6 +79,27 @@ export function SettingsView() {
   const [showProviderDropdown, setShowProviderDropdown] = useState(false)
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
+  const [promptCacheTestEnabled, setPromptCacheTestEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem('opengis.settings.promptCacheTest.enabled') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [promptCacheTestExpanded, setPromptCacheTestExpanded] = useState(() => {
+    try {
+      return window.localStorage.getItem('opengis.settings.promptCacheTest.expanded') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [promptCacheClearedAt, setPromptCacheClearedAt] = useState(() => {
+    try {
+      return Number(window.localStorage.getItem('opengis.settings.promptCacheTest.clearedAt') || 0)
+    } catch {
+      return 0
+    }
+  })
 
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -97,11 +122,49 @@ export function SettingsView() {
     updateModel, updateAppearance, updateAgent,
     loadFromElectron, saveToElectron,
   } = useSettingsStore()
+  const runs = useRunsStore((s) => s.runs)
+  const runsLoaded = useRunsStore((s) => s.loaded)
+  const refreshRuns = useRunsStore((s) => s.refresh)
+  const getRunDetail = useRunsStore((s) => s.getDetail)
+  const runDetails = useRunsStore((s) => s.details)
 
   // Load settings on mount
   useEffect(() => {
     loadFromElectron()
   }, [loadFromElectron])
+
+  useEffect(() => {
+    if (!promptCacheTestEnabled) return
+    if (!runsLoaded) {
+      refreshRuns(12).catch(() => {})
+    }
+  }, [promptCacheTestEnabled, runsLoaded, refreshRuns])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('opengis.settings.promptCacheTest.enabled', promptCacheTestEnabled ? '1' : '0')
+    } catch {}
+  }, [promptCacheTestEnabled])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('opengis.settings.promptCacheTest.expanded', promptCacheTestExpanded ? '1' : '0')
+    } catch {}
+  }, [promptCacheTestExpanded])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('opengis.settings.promptCacheTest.clearedAt', String(promptCacheClearedAt || 0))
+    } catch {}
+  }, [promptCacheClearedAt])
+
+  useEffect(() => {
+    if (!promptCacheTestEnabled) return
+    const timer = window.setInterval(() => {
+      refreshRuns(12).catch(() => {})
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [promptCacheTestEnabled, refreshRuns])
 
   // Initialize selectedProviderId from current baseURL
   useEffect(() => {
@@ -458,6 +521,43 @@ export function SettingsView() {
         s.keywords.some((k) => k.includes(q))
     )
   }, [searchQuery])
+
+  const visiblePromptCacheRuns = useMemo(
+    () => runs.filter((run) => runCreatedAtMs(run.created_at) > promptCacheClearedAt),
+    [runs, promptCacheClearedAt],
+  )
+  const latestRun = visiblePromptCacheRuns[0] || null
+  const latestRunDetail = latestRun ? runDetails[latestRun.run_id] || null : null
+  const latestRunUsage = latestRunDetail?.llm_usage?.[latestRunDetail.llm_usage.length - 1] || null
+  const latestRunUsages = latestRunDetail?.llm_usage || []
+  const promptCacheLoopPoints = useMemo(
+    () => summarizePromptCacheRuns(visiblePromptCacheRuns.slice(0, 12), runDetails),
+    [visiblePromptCacheRuns, runDetails],
+  )
+  const currentRouteIsDeepSeek = useMemo(
+    () => isDeepSeekRoute(model.modelName, model.baseURL),
+    [model.modelName, model.baseURL],
+  )
+  const promptCacheStats = useMemo(
+    () => summarizePromptCacheUsage(latestRunUsages),
+    [latestRunUsages],
+  )
+
+  useEffect(() => {
+    if (!promptCacheTestEnabled) return
+    if (!latestRun) return
+    const shouldForce = !latestRunDetail || latestRunDetail.status !== latestRun.status
+    getRunDetail(latestRun.run_id, shouldForce).catch(() => {})
+  }, [promptCacheTestEnabled, latestRun?.run_id, latestRun?.status, latestRunDetail?.status, getRunDetail])
+
+  useEffect(() => {
+    if (!promptCacheTestEnabled || !promptCacheTestExpanded) return
+    for (const run of visiblePromptCacheRuns.slice(0, 12)) {
+      if (!runDetails[run.run_id]) {
+        getRunDetail(run.run_id, false).catch(() => {})
+      }
+    }
+  }, [promptCacheTestEnabled, promptCacheTestExpanded, visiblePromptCacheRuns, runDetails, getRunDetail])
 
   // Test API connection via Python backend (delegates to litellm)
   const handleTestConnection = useCallback(async () => {
@@ -1073,6 +1173,149 @@ export function SettingsView() {
               </div>
             )}
 
+            {/* DeepSeek Prompt Cache 测试 */}
+            {filteredSections.some((s) => s.id === 'promptCache') && (
+              <div
+                id="section-promptCache"
+                ref={(el) => { sectionRefs.current['promptCache'] = el }}
+              >
+                <SettingSection title={t.settings.promptCacheTestPanelTitle}>
+                  <SettingItem
+                    id="prompt-cache-summary"
+                    label={t.settings.promptCacheTestPanelTitle}
+                    description={t.settings.promptCacheTestPanelDesc}
+                  >
+                    <div className="space-y-2 text-sm text-text-secondary">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <SettingCheckbox
+                          id="prompt-cache-test-enabled"
+                          checked={promptCacheTestEnabled}
+                          onChange={setPromptCacheTestEnabled}
+                          label={t.settings.promptCacheTestEnable}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPromptCacheTestExpanded((v) => !v)}
+                          disabled={!promptCacheTestEnabled}
+                          className="
+                            inline-flex h-7 items-center gap-1.5 rounded-md border border-border
+                            bg-bg-tertiary px-2 text-xs text-text-secondary
+                            hover:bg-bg-hover disabled:opacity-45 disabled:hover:bg-bg-tertiary
+                          "
+                        >
+                          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${promptCacheTestExpanded ? '' : '-rotate-90'}`} />
+                          {promptCacheTestExpanded ? t.settings.promptCacheTestCollapse : t.settings.promptCacheTestExpand}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPromptCacheClearedAt(Date.now())}
+                          disabled={!promptCacheTestEnabled || visiblePromptCacheRuns.length === 0}
+                          className="
+                            inline-flex h-7 items-center rounded-md border border-border
+                            bg-bg-tertiary px-2 text-xs text-text-muted
+                            hover:bg-bg-hover hover:text-text-secondary disabled:opacity-45 disabled:hover:bg-bg-tertiary
+                          "
+                        >
+                          {t.settings.promptCacheClearHistory}
+                        </button>
+                        <span className={`rounded px-1.5 py-0.5 text-[11px] ${currentRouteIsDeepSeek ? 'bg-green-500/12 text-green-500' : 'bg-amber-500/12 text-amber-500'}`}>
+                          {currentRouteIsDeepSeek ? t.settings.promptCacheDeepSeekReady : t.settings.promptCacheDeepSeekOnly}
+                        </span>
+                      </div>
+
+                      {promptCacheTestEnabled && promptCacheTestExpanded && (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-2 gap-2 max-w-[760px] md:grid-cols-3">
+                            <MiniStat label={t.settings.promptCacheProvider} value={`${model.protocol} / ${model.modelName || '—'}`} />
+                            <MiniStat label={t.settings.promptCacheMode} value={promptCacheStats.modeLabel} />
+                            <MiniStat label={t.settings.promptCacheTurns} value={String(promptCacheStats.turns)} />
+                            <MiniStat label={t.settings.promptCacheInputTokens} value={promptCacheStats.inputTokensLabel} />
+                            <MiniStat label={t.settings.promptCacheHitTokens} value={promptCacheStats.hitTokensLabel} />
+                            <MiniStat label={t.settings.promptCacheHitRatio} value={promptCacheStats.hitRatioLabel} />
+                          </div>
+
+                          <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2 space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-text-primary">{t.settings.promptCacheLatestRun}</span>
+                              {latestRun && (
+                                <span className="text-[11px] text-text-muted font-mono">
+                                  {latestRun.run_id.slice(0, 8)}
+                                </span>
+                              )}
+                            </div>
+                            {latestRunUsage ? (
+                              <div className="space-y-1 text-xs text-text-muted/85">
+                                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                  <span>{t.settings.promptCacheTotalTokens}: <span className="font-mono">{promptCacheStats.totalTokensLabel}</span></span>
+                                  <span>{t.settings.promptCacheMissTokens}: <span className="font-mono">{promptCacheStats.missTokensLabel}</span></span>
+                                  <span>{t.settings.promptCacheKey}: <span className="font-mono">{latestRunUsage.prompt_cache?.cache_key || '—'}</span></span>
+                                  <span>{t.settings.promptCacheStrategy}: <span className="font-mono">{latestRunUsage.prompt_cache?.strategy || '—'}</span></span>
+                                  <span>{t.settings.promptCachePrefix}: <span className="font-mono">{latestRunUsage.prompt_cache?.prefix_hash?.slice(0, 12) || '—'}</span></span>
+                                  <span>{t.settings.promptCacheSections}: <span className="font-mono">{latestRunUsage.prompt_cache?.sections?.length ?? 0}</span></span>
+                                  <span>{t.settings.promptCacheReason}: <span className="font-mono">{promptCacheStats.reasonLabel}</span></span>
+                                </div>
+                                <div className="text-[11px] text-text-muted/70">
+                                  {(latestRunUsage.prompt_cache?.sections || []).slice(0, 3).map((section: any) => (
+                                    <span key={String(section.id)} className="inline-block mr-2 font-mono">
+                                      {String(section.id)}#{String(section.cache_policy || 'none')}
+                                    </span>
+                                  ))}
+                                  {(latestRunUsage.prompt_cache?.sections?.length || 0) > 3 && (
+                                    <span className="italic">+{(latestRunUsage.prompt_cache?.sections?.length || 0) - 3} {t.runs.more}</span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] leading-relaxed text-text-muted/75">
+                                  {t.settings.promptCacheDeepSeekHint}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-text-muted/70">
+                                {latestRun ? t.settings.promptCacheLoading : t.settings.promptCacheNoRun}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-text-primary">{t.settings.promptCacheAggregate}</span>
+                              <span className="text-[11px] text-text-muted">{promptCacheLoopPoints.length} {t.settings.promptCacheLoops}</span>
+                            </div>
+                            {promptCacheLoopPoints.length > 0 ? (
+                              <>
+                                <PromptCacheWave
+                                  points={promptCacheLoopPoints}
+                                  totalLabel={t.settings.promptCacheTotalTokens}
+                                  hitLabel={t.settings.promptCacheHitTokens}
+                                />
+                                <div className="max-h-[168px] overflow-auto pr-1">
+                                  <div className="grid grid-cols-[minmax(72px,1fr)_80px_80px_70px] gap-x-2 gap-y-1 text-[11px]">
+                                    <span className="text-text-muted">{t.settings.promptCacheLoop}</span>
+                                    <span className="text-right text-text-muted">{t.settings.promptCacheTotalTokens}</span>
+                                    <span className="text-right text-text-muted">{t.settings.promptCacheHitTokens}</span>
+                                    <span className="text-right text-text-muted">{t.settings.promptCacheHitRatio}</span>
+                                    {promptCacheLoopPoints.map((point) => (
+                                      <Fragment key={point.runId}>
+                                        <span className="truncate font-mono text-text-secondary" title={point.runId}>{point.label}</span>
+                                        <span className="text-right font-mono text-text-secondary">{formatNumberLabel(point.totalTokens)}</span>
+                                        <span className="text-right font-mono text-text-secondary">{formatNumberLabel(point.hitTokens)}</span>
+                                        <span className="text-right font-mono text-text-secondary">{point.hitRatio == null ? '—' : `${Math.round(point.hitRatio * 1000) / 10}%`}</span>
+                                      </Fragment>
+                                    ))}
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-xs text-text-muted/70">{t.settings.promptCacheNoDisplayHistory}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </SettingItem>
+                </SettingSection>
+              </div>
+            )}
+
             {/* 外观设置 */}
             {filteredSections.some((s) => s.id === 'appearance') && (
               <div
@@ -1320,4 +1563,240 @@ export function SettingsView() {
       </div>
     </div>
   )
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-2.5 py-2">
+      <div className="text-[11px] text-text-muted uppercase tracking-wider">{label}</div>
+      <div className="mt-0.5 text-sm text-text-primary truncate">{value}</div>
+    </div>
+  )
+}
+
+interface PromptCacheLoopPoint {
+  runId: string
+  label: string
+  totalTokens: number | null
+  inputTokens: number | null
+  hitTokens: number | null
+  missTokens: number | null
+  hitRatio: number | null
+}
+
+function PromptCacheWave({
+  points,
+  totalLabel,
+  hitLabel,
+}: {
+  points: PromptCacheLoopPoint[]
+  totalLabel: string
+  hitLabel: string
+}) {
+  const width = 520
+  const height = 96
+  const pad = 10
+  const values = points.map((point) => ({
+    total: point.totalTokens || 0,
+    hit: point.hitTokens || 0,
+  }))
+  const maxValue = Math.max(1, ...values.flatMap((v) => [v.total, v.hit]))
+  const xFor = (index: number) => {
+    if (values.length <= 1) return width / 2
+    return pad + (index / (values.length - 1)) * (width - pad * 2)
+  }
+  const yFor = (value: number) => height - pad - (value / maxValue) * (height - pad * 2)
+  const totalPath = values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i).toFixed(1)} ${yFor(v.total).toFixed(1)}`).join(' ')
+  const hitPath = values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i).toFixed(1)} ${yFor(v.hit).toFixed(1)}`).join(' ')
+  const totalFill = `${totalPath} L ${xFor(values.length - 1).toFixed(1)} ${height - pad} L ${xFor(0).toFixed(1)} ${height - pad} Z`
+  const hitFill = `${hitPath} L ${xFor(values.length - 1).toFixed(1)} ${height - pad} L ${xFor(0).toFixed(1)} ${height - pad} Z`
+
+  return (
+    <div className="rounded-md bg-bg-tertiary/70 px-2 py-2">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[96px] w-full overflow-visible">
+        <defs>
+          <linearGradient id="pcw-total-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.04" />
+          </linearGradient>
+          <linearGradient id="pcw-hit-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#22c55e" stopOpacity="0.30" />
+            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.04" />
+          </linearGradient>
+        </defs>
+        <path d={totalFill} fill="url(#pcw-total-grad)" />
+        <path d={hitFill} fill="url(#pcw-hit-grad)" />
+        <path d={totalPath} fill="none" stroke="#3b82f6" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        <path d={hitPath} fill="none" stroke="#22c55e" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        {values.map((v, i) => (
+          <g key={points[i]?.runId || i}>
+            <circle cx={xFor(i)} cy={yFor(v.total)} r="2.8" fill="#3b82f6" stroke="#1e3a5f" strokeWidth="1" />
+            <circle cx={xFor(i)} cy={yFor(v.hit)} r="2.8" fill="#22c55e" stroke="#14532d" strokeWidth="1" />
+          </g>
+        ))}
+      </svg>
+      <div className="mt-1.5 flex items-center gap-4 text-[11px] text-text-muted">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#3b82f6' }} /> {totalLabel}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#22c55e' }} /> {hitLabel}</span>
+      </div>
+    </div>
+  )
+}
+
+function summarizePromptCacheRuns(
+  runs: RunSummary[],
+  details: Record<string, RunDetail | undefined>,
+): PromptCacheLoopPoint[] {
+  return runs
+    .map((run) => {
+      const records = details[run.run_id]?.llm_usage || []
+      const metrics = collectPromptCacheMetrics(records)
+      return {
+        runId: run.run_id,
+        label: run.run_id.slice(0, 8),
+        totalTokens: metrics.hasTotal ? metrics.totalTokens : null,
+        inputTokens: metrics.hasInput ? metrics.inputTokens : null,
+        hitTokens: metrics.hasHitMiss || metrics.hasCached ? (metrics.hasHitMiss ? metrics.hitTokens : metrics.cachedTokens) : null,
+        missTokens: metrics.hasHitMiss ? metrics.missTokens : null,
+        hitRatio: metrics.hitRatio,
+      }
+    })
+    .filter((point) => point.totalTokens != null || point.hitTokens != null)
+    .reverse()
+}
+
+function summarizePromptCacheUsage(records: RunLLMUsageRecord[]) {
+  const metrics = collectPromptCacheMetrics(records)
+
+  return {
+    turns: records?.length || 0,
+    enabled: metrics.enabled,
+    sent: metrics.sent,
+    statusLabel: metrics.sent ? 'sent' : (metrics.blockReason || metrics.status || 'not_sent'),
+    modeLabel: metrics.mode || (metrics.sent ? 'openai_prompt_cache_key' : 'observe_only'),
+    reasonLabel: metrics.blockReason || metrics.note || metrics.status || (metrics.hasHitMiss || metrics.hasCached ? 'provider_reported' : 'provider_usage_not_reported'),
+    totalTokensLabel: metrics.hasTotal ? String(Math.round(metrics.totalTokens)) : '—',
+    inputTokensLabel: metrics.hasInput ? String(Math.round(metrics.inputTokens)) : '—',
+    cachedTokensLabel: metrics.hasCached ? String(Math.round(metrics.cachedTokens)) : '—',
+    hitTokensLabel: metrics.hasHitMiss || metrics.hasCached ? String(Math.round(metrics.hasHitMiss ? metrics.hitTokens : metrics.cachedTokens)) : '—',
+    missTokensLabel: metrics.hasHitMiss ? String(Math.round(metrics.missTokens)) : '—',
+    hitRatioLabel: metrics.hitRatio == null ? '—' : `${Math.round(metrics.hitRatio * 1000) / 10}%`,
+  }
+}
+
+function collectPromptCacheMetrics(records: RunLLMUsageRecord[]) {
+  const metrics = {
+    totalTokens: 0,
+    inputTokens: 0,
+    cachedTokens: 0,
+    hitTokens: 0,
+    missTokens: 0,
+    hasTotal: false,
+    hasInput: false,
+    hasCached: false,
+    hasHitMiss: false,
+    enabled: false,
+    sent: false,
+    blockReason: '',
+    status: '',
+    mode: '',
+    note: '',
+    hitRatio: null as number | null,
+  }
+
+  for (const record of records || []) {
+    const usage = record.usage || {}
+    const telemetry = record.telemetry || {}
+    const promptCache = record.prompt_cache || {}
+    metrics.enabled = metrics.enabled || Boolean(promptCache.enabled)
+    metrics.sent = metrics.sent || Boolean(promptCache.prompt_cache_key_sent)
+    metrics.status = String(promptCache.prompt_cache_key_status || metrics.status || '')
+    metrics.blockReason = String(promptCache.prompt_cache_key_block_reason || metrics.blockReason || '')
+    metrics.mode = String(promptCache.provider_cache_mode || metrics.mode || '')
+    metrics.note = String(promptCache.provider_cache_note || metrics.note || '')
+
+    const prompt = firstNumber(
+      usage.prompt_tokens,
+      usage.input_tokens,
+      telemetry.context_tokens,
+    )
+    const completion = firstNumber(usage.completion_tokens, usage.output_tokens)
+    const total = firstNumber(
+      usage.total_tokens,
+      prompt != null || completion != null ? Number(prompt || 0) + Number(completion || 0) : undefined,
+    )
+    if (total != null) {
+      metrics.totalTokens += total
+      metrics.hasTotal = true
+    }
+    if (prompt != null) {
+      metrics.inputTokens += prompt
+      metrics.hasInput = true
+    }
+
+    const cached = firstNumber(
+      usage.prompt_cache_hit_tokens,
+      nestedNumber(usage, ['prompt_tokens_details', 'cached_tokens']),
+      nestedNumber(usage, ['input_tokens_details', 'cached_tokens']),
+      nestedNumber(usage, ['input_token_details', 'cache_read']),
+      usage.cache_read_input_tokens,
+      usage.cached_tokens,
+      promptCache.cached_tokens,
+    )
+    if (cached != null) {
+      metrics.cachedTokens += cached
+      metrics.hasCached = true
+    }
+
+    const hit = firstNumber(usage.prompt_cache_hit_tokens, promptCache.cached_tokens)
+    const miss = firstNumber(usage.prompt_cache_miss_tokens)
+    if (hit != null || miss != null) {
+      metrics.hitTokens += hit || 0
+      metrics.missTokens += miss || 0
+      metrics.hasHitMiss = true
+    }
+  }
+
+  const hitMissTotal = metrics.hitTokens + metrics.missTokens
+  metrics.hitRatio = metrics.hasHitMiss && hitMissTotal > 0
+    ? Math.max(0, Math.min(1, metrics.hitTokens / hitMissTotal))
+    : metrics.hasCached && metrics.hasInput && metrics.inputTokens > 0
+      ? Math.max(0, Math.min(1, metrics.cachedTokens / metrics.inputTokens))
+      : null
+  return metrics
+}
+
+function isDeepSeekRoute(modelName: string, baseURL: string) {
+  const route = `${modelName || ''} ${baseURL || ''}`.toLowerCase()
+  return route.includes('deepseek') || route.includes('api.deepseek.com')
+}
+
+function runCreatedAtMs(createdAt: string) {
+  const ms = Date.parse(createdAt || '')
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function formatNumberLabel(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '—'
+  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}m`
+  if (value >= 1_000) return `${Math.round(value / 100) / 10}k`
+  return String(Math.round(value))
+}
+
+function firstNumber(...values: unknown[]) {
+  for (const value of values) {
+    if (value == null || value === '') continue
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 0) return n
+  }
+  return undefined
+}
+
+function nestedNumber(source: Record<string, unknown>, path: string[]) {
+  let current: unknown = source
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  return firstNumber(current)
 }
