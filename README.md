@@ -5,17 +5,22 @@
 <h1 align="center">OpenGIS</h1>
 
 <p align="center">
-  <strong>Agent 驱动的开源 GIS 桌面应用 — 用自然语言完成地理空间分析、制图、自动化与知识沉淀</strong>
+  <a href="README.zh.md">中文</a> |
+  <strong>English</strong>
 </p>
 
 <p align="center">
-  <a href="#1-介绍">介绍</a> •
-  <a href="#2-功能概览">功能概览</a> •
-  <a href="#3-技术架构">技术架构</a> •
-  <a href="#4-快速开始">快速开始</a> •
-  <a href="#5-开发指南">开发指南</a> •
+  <strong>Agent-driven open-source GIS desktop app — geospatial analysis, cartography, automation & knowledge retention with natural language</strong>
+</p>
+
+<p align="center">
+  <a href="#1-introduction">Introduction</a> •
+  <a href="#2-feature-overview">Features</a> •
+  <a href="#3-architecture">Architecture</a> •
+  <a href="#4-getting-started">Getting Started</a> •
+  <a href="#5-development-guide">Development</a> •
   <a href="#6-roadmap">Roadmap</a> •
-  <a href="#7-许可">许可</a>
+  <a href="#7-license">License</a>
 </p>
 
 <p align="center">
@@ -30,118 +35,118 @@
 ---
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=37wGkGV6h2U">
-    <img src="https://img.youtube.com/vi/37wGkGV6h2U/maxresdefault.jpg" alt="OpenGIS Demo" width="600">
+  <a href="https://youtu.be/F5lVRs_XXjU">
+    <img src="https://img.youtube.com/vi/F5lVRs_XXjU/maxresdefault.jpg" alt="OpenGIS Demo" width="600">
     <br>
     <img src="https://img.shields.io/badge/▶_Watch_Demo-red?style=for-the-badge" alt="Watch Demo">
   </a>
 </p>
 
-## 1. 介绍
+## 1. Introduction
 
-OpenGIS 是一个基于 Agent 的开源 GIS 桌面应用。它不是一个简单的“地图 + 聊天框”，而是一个把 **GIS 数据管理、地图渲染、空间分析、制图导出、工作流、后台 Worker、可复用 Operation、记忆系统和工具治理** 放在同一个桌面环境里的实验性 GIS Agent 客户端。
+OpenGIS is an Agent-based open-source GIS desktop application. It is not a simple "map + chat box" — it brings **GIS data management, map rendering, spatial analysis, cartographic export, workflows, background workers, reusable operations, memory systems, and tool governance** together in a single desktop environment.
 
-项目仍在高速迭代中。当前目标不是替代 ArcGIS Pro / QGIS 的全部能力，而是探索一个更自然的 GIS 工作方式：用户用自然语言描述意图，Agent 在受控工具系统中读取数据、运行代码、调用地图能力、生成图表、沉淀脚本和 Operation，并把结果直接展示在地图、对话、看板或制图画布里。
+The project is under active development. The current goal is not to replace all capabilities of ArcGIS Pro / QGIS, but to explore a more natural way of working with GIS: users describe intent in natural language, and the Agent reads data, runs code, calls map capabilities, generates charts, accumulates scripts and Operations within a governed tool system — with results displayed directly on the map, in chat, dashboards, or the cartographic canvas.
 
 <p align="center">
-  <img src="resources/assets/0.png" alt="主界面：地图 + Chat + 多面板布局" width="100%" />
+  <img src="resources/assets/0.png" alt="Main UI: Map + Chat + Multi-panel Layout" width="100%" />
 </p>
-<p align="center"><sub>主界面：左侧资源 / 图层 / Workflow / Operation / Worker 等面板 · 中间 Map / Code / Layout Composer · 右侧 Agent Chat。</sub></p>
+<p align="center"><sub>Main UI: Left — Resources / Layers / Workflow / Operation / Worker panels · Center — Map / Code / Layout Composer · Right — Agent Chat.</sub></p>
 
 <br>
 <p align="center">
-  <img src="resources/assets/用例1.png" alt="用例1" width="100%" />
-</p>
-
-<br>
-<p align="center">
-  <img src="resources/assets/用例2.png" alt="用例2" width="100%" />
+  <img src="resources/assets/用例1.png" alt="Use Case 1" width="100%" />
 </p>
 
 <br>
 <p align="center">
-  <img src="resources/assets/1.png" alt="Agent 对话：流式代码、工具调用、图表输出" width="100%" />
+  <img src="resources/assets/用例2.png" alt="Use Case 2" width="100%" />
 </p>
-<p align="center"><sub>Agent 可以读取数据、执行 Python、生成图表，并把图片 / 地图结果回显到对话和地图中。</sub></p>
 
 <br>
 <p align="center">
-  <img src="resources/assets/2.png" alt="GIS 数据加载与多种 Renderer" width="100%" />
+  <img src="resources/assets/1.png" alt="Agent Chat: Streaming Code, Tool Calls, Chart Output" width="100%" />
 </p>
-<p align="center"><sub>支持矢量、栅格、分类设色、分级设色、样式变量、图层排序、地图视角控制等 GIS 操作。</sub></p>
+<p align="center"><sub>The Agent can read data, execute Python, generate charts, and display images / map results back in the chat and on the map.</sub></p>
 
 <br>
 <p align="center">
-  <img src="resources/assets/3.png" alt="Workflow DAG 编辑器" width="100%" />
+  <img src="resources/assets/2.png" alt="GIS Data Loading with Multiple Renderers" width="100%" />
 </p>
-<p align="center"><sub>Workflow 以 DAG 形式组织多步骤任务，节点间通过结构化输入 / 输出描述传递上下文。</sub></p>
+<p align="center"><sub>Supports vector, raster, categorized styling, graduated styling, style variables, layer ordering, map camera control, and more.</sub></p>
 
-## 2. 功能概览
+<br>
+<p align="center">
+  <img src="resources/assets/3.png" alt="Workflow DAG Editor" width="100%" />
+</p>
+<p align="center"><sub>Workflows organize multi-step tasks as DAGs, with structured input/output descriptions passed between nodes.</sub></p>
 
-### 2.1 Agent 能力
+## 2. Feature Overview
 
-- **Function-call Agent Loop**：以结构化 tool call 为主，避免旧 CodeAct 时代从文本里猜代码块和工具调用。
-- **代码执行**：保留受控 Python 执行工具，适合临时 GIS 分析、数据清洗、绘图和长尾算法验证。
-- **工具治理**：所有工具经过统一 schema、权限、结果归一化、事件归档和前端展示。
-- **计划 / 子 Agent / Workflow**：Plan、Subagent、Workflow 都归入同一套 session / run / MessagePart 协议。
-- **记忆与知识沉淀**：结构化 MemoryStore、ContextProjector、KnowledgeExtractor、FailureMemory 共同管理上下文和经验。
-- **Operation 复用**：一次复杂分析可以沉淀成可编辑、可验证、可运行、跨 workspace 共享的 Operation。
-- **Worker 后台任务**：Agent 可以经用户批准创建 / 重启 / 暂停 / 删除常驻 Python Worker，用于动态数据接入和实时地图渲染。
+### 2.1 Agent Capabilities
 
-### 2.2 GIS 与地图能力
+- **Function-call Agent Loop**: Structured tool calls as the primary path, avoiding the old CodeAct era of guessing code blocks and tool calls from plain text.
+- **Code Execution**: Controlled Python execution for ad-hoc GIS analysis, data cleaning, charting, and long-tail algorithm validation.
+- **Tool Governance**: All tools go through unified schema, permissions, result normalization, event archiving, and frontend display.
+- **Plan / Sub-Agent / Workflow**: Plan, Subagent, and Workflow all share the same session / run / MessagePart protocol.
+- **Memory & Knowledge Retention**: Structured MemoryStore, ContextProjector, KnowledgeExtractor, and FailureMemory jointly manage context and experience.
+- **Operation Reuse**: A complex analysis can be distilled into an editable, verifiable, runnable, workspace-shareable Operation.
+- **Worker Background Tasks**: With user approval, the Agent can create / restart / pause / delete resident Python Workers for dynamic data ingestion and real-time map rendering.
 
-- **矢量数据**：GeoJSON、CSV、Shapefile、KML、GeoPackage 等常见格式。
-- **栅格数据**：GeoTIFF / TIFF 解析、前后端混合渲染、服务端瓦片、色带与透明度控制。
-- **地图渲染**：MapLibre GL JS，支持点 / 线 / 面、分类设色、分级设色、大小变量、透明度变量、排序变量、标注、筛选、高亮。
-- **动态地图**：Worker 通过 stdout JSON 协议持续推送 `rpc.ui.map.dynamic_layer_update`，前端即时更新动态图层。
-- **三维视角**：地图 pitch / bearing 控制，支持进入 3D 视角和基础 extrusion 样式。
-- **制图画布**：Layout Composer 支持地图框、比例尺、指北针、图例、画布比例、导出图片，并面向后续 ArcGIS / QGIS 风格扩展。
-- **数据透视**：图层 / 文件可打开数据透视面板，表格、统计、字段分布和 Agent 分析结果分离展示。
+### 2.2 GIS & Map Capabilities
 
-### 2.3 自动化与扩展
+- **Vector Data**: GeoJSON, CSV, Shapefile, KML, GeoPackage, and other common formats.
+- **Raster Data**: GeoTIFF / TIFF parsing, hybrid frontend/backend rendering, server-side tiles, color ramps, and transparency control.
+- **Map Rendering**: MapLibre GL JS with point / line / polygon, categorized styling, graduated styling, size variables, opacity variables, ordering variables, labels, filters, and highlights.
+- **Dynamic Maps**: Workers continuously push `rpc.ui.map.dynamic_layer_update` via stdout JSON protocol for real-time layer updates.
+- **3D View**: Map pitch / bearing control with basic extrusion styles.
+- **Cartographic Canvas**: Layout Composer supports map frames, scale bars, north arrows, legends, canvas ratios, image export, and is designed for ArcGIS / QGIS-style extensibility.
+- **Data Pivot**: Layers / files can open a data pivot panel with tables, statistics, field distributions, and Agent analysis results displayed separately.
 
-- **Workflow**：面向多步骤分析的 DAG，节点可描述接收上游什么内容、输出什么内容。
-- **Operation**：软件级原子操作，包含输入结构、输出结构、依赖、代码、说明和运行记录。
-- **Worker**：常驻 Python 服务包，结构固定为 `main.py + config.json + manifest.json + src/`，适合实时数据、轮询 API、动态渲染。
-- **Project Skills**：skills 是项目级能力 / 知识包，区别于 tool。Tool 是 Agent 可直接调用的函数；Skill 是用户接入的上下文、流程、约束或能力集合。
-- **Run Archive**：每一轮 Agent 执行都归档为事件流、工具调用、MessagePart、artifact 和元数据。
+### 2.3 Automation & Extensibility
 
-## 3. 技术架构
+- **Workflow**: DAG-based multi-step analysis where nodes describe what they receive from upstream and what they output.
+- **Operation**: Software-level atomic operations with input/output schemas, dependencies, code, documentation, and run history.
+- **Worker**: Resident Python service packages structured as `main.py + config.json + manifest.json + src/`, suitable for real-time data, API polling, and dynamic rendering.
+- **Project Skills**: Skills are project-level capability / knowledge packages, distinct from tools. Tools are functions the Agent can call directly; Skills are user-injected context, flows, constraints, or capability sets.
+- **Run Archive**: Every Agent execution round is archived as an event stream of tool calls, MessageParts, artifacts, and metadata.
 
-### 3.1 总体进程模型
+## 3. Architecture
 
-OpenGIS 是一个 **Electron 桌面壳 + React Renderer + Python Sidecar + Python 子进程 / Worker** 的混合架构：
+### 3.1 Process Model
+
+OpenGIS uses a hybrid architecture of **Electron shell + React Renderer + Python Sidecar + Python subprocess / Worker**:
 
 ```text
 Electron Main
-  ├─ 管理窗口、菜单、文件系统、设置、Python sidecar 生命周期
+  ├─ Window, menu, file system, settings, Python sidecar lifecycle
   │
   └─ Renderer (React + TypeScript)
-       ├─ MapLibre 地图渲染
+       ├─ MapLibre map rendering
        ├─ Chat / MessagePart UI
-       ├─ 图层、资源、Operation、Workflow、Worker、Layout Composer
-       └─ JSON-RPC Dispatcher：处理 Python -> UI 的反向 RPC
+       ├─ Layers, assets, Operation, Workflow, Worker, Layout Composer
+       └─ JSON-RPC Dispatcher: handles Python -> UI reverse RPC
 
 Python Sidecar (FastAPI + uvicorn + LiteLLM)
-  ├─ WebSocket JSON-RPC 服务
+  ├─ WebSocket JSON-RPC service
   ├─ Agent loop / session / memory / tool runtime
-  ├─ GIS / OSM / datasource / raster / operation / workflow / worker 集成
-  ├─ 每轮代码执行子进程
-  └─ 常驻 Worker 进程
+  ├─ GIS / OSM / datasource / raster / operation / workflow / worker integration
+  ├─ Per-turn code execution subprocess
+  └─ Resident Worker processes
 ```
 
-| 层 | 技术 | 主要职责 | 关键目录 |
+| Layer | Technology | Responsibilities | Key Directories |
 |---|---|---|---|
-| Electron Main | Electron 30 + Node | 窗口、菜单、IPC、Python sidecar 启停 | `electron/` |
-| Renderer | React 18 + TypeScript + Zustand | UI、地图、图层状态、反向 RPC handler | `src/features/`、`src/services/`、`src/stores/` |
-| Map Engine | MapLibre GL JS | WebGL 地图、source/layer 同步、导出 | `src/features/map/` |
-| Python Sidecar | FastAPI + uvicorn + LiteLLM | JSON-RPC、Agent、Tool、Workflow、Worker | `python-backend/opengis_backend/` |
-| Python Execution | subprocess runner | Agent 写的 Python 代码执行 | `agent/execution/` |
-| Resident Worker | Python process | 后台动态数据、持续渲染、长期服务 | `worker/` |
+| Electron Main | Electron 30 + Node | Window, menu, IPC, Python sidecar lifecycle | `electron/` |
+| Renderer | React 18 + TypeScript + Zustand | UI, map, layer state, reverse RPC handlers | `src/features/`, `src/services/`, `src/stores/` |
+| Map Engine | MapLibre GL JS | WebGL map, source/layer sync, export | `src/features/map/` |
+| Python Sidecar | FastAPI + uvicorn + LiteLLM | JSON-RPC, Agent, Tool, Workflow, Worker | `python-backend/opengis_backend/` |
+| Python Execution | subprocess runner | Agent-generated Python code execution | `agent/execution/` |
+| Resident Worker | Python process | Background dynamic data, continuous rendering | `worker/` |
 
-### 3.2 通信模型：双向 JSON-RPC
+### 3.2 Communication: Bidirectional JSON-RPC
 
-Renderer 和 Python sidecar 之间通过一条 WebSocket 通道通信。协议是 JSON-RPC 2.0，同时支持两种方向：
+The Renderer and Python sidecar communicate over a single WebSocket channel using JSON-RPC 2.0, supporting both directions:
 
 ```text
 Renderer -> Python
@@ -159,18 +164,18 @@ Python -> Renderer
   chat / event notification
 ```
 
-前端 `src/services/pythonClient.ts` 负责 WebSocket 连接、请求超时、通知分发和动态地图事件缓冲。入站 `rpc.ui.*` notification 进入 `src/services/rpc/handlers/`，最终写入 Zustand store 或直接调用 MapEngine。
+The frontend `src/services/pythonClient.ts` handles WebSocket connection, request timeouts, notification dispatch, and dynamic map event buffering. Inbound `rpc.ui.*` notifications go to `src/services/rpc/handlers/` and ultimately write to Zustand stores or directly invoke MapEngine.
 
-关键原则：
+Key principles:
 
-- **地图状态在前端**：Python 不持有 MapLibre 句柄，所有图层事实以前端 store 为准。
-- **重计算在 Python**：空间分析、栅格处理、模型推理、Operation、Worker 运行在 Python。
-- **UI 操作走反向 RPC**：Python 工具通过 `rpc.ui.map.*` 指挥前端加载图层、更新样式、切换视角。
-- **动态数据走通知流**：Worker stdout 输出一行 JSON，sidecar 解析后转发到前端 dynamic handler。
+- **Map state lives in the frontend**: Python does not hold MapLibre handles; all layer state is authoritative in the frontend store.
+- **Heavy computation in Python**: Spatial analysis, raster processing, model inference, Operations, and Workers run in Python.
+- **UI operations via reverse RPC**: Python tools command the frontend to load layers, update styles, and switch views through `rpc.ui.map.*`.
+- **Dynamic data via notification stream**: Worker stdout outputs one line of JSON; the sidecar parses and forwards it to the frontend dynamic handler.
 
-### 3.3 Agent 新架构
+### 3.3 Agent Architecture
 
-当前 Agent 已从旧 CodeAct 逐步升级为主流 function-call 架构，核心分层如下：
+The Agent has been upgraded from the old CodeAct to a mainstream function-call architecture with the following layered design:
 
 ```text
 AgentProfile
@@ -182,124 +187,124 @@ AgentProfile
   -> EventLog / RunArchive / MessagePart
 ```
 
-| 模块 | 职责 | 目录 |
+| Module | Responsibilities | Directory |
 |---|---|---|
-| `agent/loop/` | AgentLoop、TurnRunner、LoopKernel、RuntimeControl、循环策略 | `python-backend/opengis_backend/agent/loop/` |
-| `agent/execution/` | ToolRuntime、tool schema、参数校验、Python 执行、自动安装 | `agent/execution/` |
-| `agent/context/` | ContextManager、ContextProjector、MemoryStore、压缩、失败记忆 | `agent/context/` |
-| `agent/session/` | SessionCoordinator、queue、run session、inbox | `agent/session/` |
-| `agent/governance/` | AgentProfile、PermissionRuntime、权限规则 | `agent/governance/` |
-| `agent/telemetry/` | EventLog、MessagePart、RunArchive、script archive、artifact | `agent/telemetry/` |
-| `agent/workflow/` | Workflow 模型、存储、输出传递、DAG 编排 | `agent/workflow/` |
+| `agent/loop/` | AgentLoop, TurnRunner, LoopKernel, RuntimeControl, loop policy | `python-backend/opengis_backend/agent/loop/` |
+| `agent/execution/` | ToolRuntime, tool schema, parameter validation, Python execution, auto-install | `agent/execution/` |
+| `agent/context/` | ContextManager, ContextProjector, MemoryStore, compression, failure memory | `agent/context/` |
+| `agent/session/` | SessionCoordinator, queue, run session, inbox | `agent/session/` |
+| `agent/governance/` | AgentProfile, PermissionRuntime, permission rules | `agent/governance/` |
+| `agent/telemetry/` | EventLog, MessagePart, RunArchive, script archive, artifacts | `agent/telemetry/` |
+| `agent/workflow/` | Workflow model, storage, output passing, DAG orchestration | `agent/workflow/` |
 
-#### 3.3.1 Function-call 优先
+#### 3.3.1 Function-call First
 
-OpenGIS 现在以 function call 为 Agent 主路径。模型输出结构化 tool call，框架按 schema 执行工具并返回结构化结果。Python 代码执行仍是一个工具，但不再作为 loop 控制协议。
+OpenGIS now uses function calls as the primary Agent path. The model outputs structured tool calls, and the framework executes tools by schema and returns structured results. Python code execution remains a tool but is no longer the loop control protocol.
 
-这样做解决旧 CodeAct 的几个问题：
+This addresses several issues from the old CodeAct:
 
-- Agent 回复文本不会再被误当作 Python 代码执行。
-- Tool 参数由 schema 约束，不靠自然语言解析。
-- 前端可以统一展示 tool、code、artifact、operation、worker 和 error。
-- 权限审批、工具裁剪、结果压缩、run 归档都有统一入口。
+- Agent reply text is no longer mistakenly executed as Python code.
+- Tool parameters are constrained by schema, not natural language parsing.
+- The frontend can uniformly display tools, code, artifacts, Operations, Workers, and errors.
+- Permission approval, tool pruning, result compression, and run archiving all have unified entry points.
 
-#### 3.3.2 MessagePart 展示协议
+#### 3.3.2 MessagePart Display Protocol
 
-Agent 输出不再是一整段混合文本，而是事件化的 `MessagePart[]`：
+Agent output is no longer a single mixed block of text, but event-driven `MessagePart[]`:
 
-| Part 类型 | 用途 |
+| Part Type | Purpose |
 |---|---|
-| `text` | 普通 Agent 回复 |
-| `tool` | 工具调用和结果 |
-| `code` | 生成 / 执行 Python 代码 |
-| `artifact` | 图片、报告、文件、图层等产物 |
-| `operation` | Operation 运行块 |
-| `progress` | 当前最底部的运行状态 |
-| `plan` | Plan / Workflow 进度 |
-| `error` | 错误和中断 |
+| `text` | Normal Agent reply |
+| `tool` | Tool call and result |
+| `code` | Generated / executed Python code |
+| `artifact` | Images, reports, files, layers, etc. |
+| `operation` | Operation run block |
+| `progress` | Current bottom status bar |
+| `plan` | Plan / Workflow progress |
+| `error` | Errors and interruptions |
 
-前端 Chat 直接渲染 MessagePart。普通 tool call 默认折叠；Python 代码可折叠展示；执行输出默认压缩；图片和 Markdown 引用的本地资源通过安全路径转换渲染。
+The frontend Chat directly renders MessageParts. Default tool calls are collapsed; Python code is collapsible; execution output is compressed by default; images and locally-referenced Markdown resources are rendered through secure path conversion.
 
-#### 3.3.3 Loop 收敛与异常保护
+#### 3.3.3 Loop Convergence & Anomaly Protection
 
-Agent loop 不靠硬编码某个任务“最多几步”，而是结合以下信号收敛：
+The Agent loop does not rely on hard-coded step limits. Instead, it converges based on:
 
-- 模型自然停止且无 tool call。
-- TurnObjective / DeviationGuard 检测目标偏离。
-- Loop Anomaly Detector 检测重复工具、重复失败、无效重试。
-- RuntimeControl 针对 worker / operation 等长任务做健康检查和收口。
-- ToolRuntime 对错误结果做结构化反馈，鼓励修正原文件 / 原 operation，而不是绕开重写。
+- The model naturally stops with no tool calls.
+- TurnObjective / DeviationGuard detects goal deviation.
+- Loop Anomaly Detector catches repeated tools, repeated failures, and invalid retries.
+- RuntimeControl performs health checks and graceful shutdown for long-running tasks like Workers and Operations.
+- ToolRuntime provides structured feedback on errors, encouraging fixes to the original file / Operation rather than circumventing it.
 
-### 3.4 Tool、Skill、Operation 的边界
+### 3.4 Boundaries: Tool, Skill, Operation
 
-当前命名约定：
+Current naming conventions:
 
-| 名称 | 定义 | 示例 | 生命周期 |
+| Name | Definition | Example | Lifecycle |
 |---|---|---|---|
-| **Tool** | Agent 可直接调用的函数能力，有 schema、权限、结果结构 | `read_file`、`edit_file`、`add_layer`、`start_worker` | 代码内置 |
-| **Skill** | 用户 / 项目可接入的知识、流程、约束或能力包，可影响上下文与工具选择 | 外部 skill 包、项目级说明 | 项目 / 用户级 |
-| **Operation** | 可复用的软件级原子操作，带输入输出 schema、依赖、主程序、说明和运行记录 | DBSCAN 聚类、核密度、格式转换 | 内置 + workspace |
-| **Workflow** | DAG 多步骤任务编排，节点定义输入 / 输出描述 | 学术报告、流域分析 | `.flow.json` |
-| **Worker** | 常驻 Python 服务，用于持续数据处理和动态渲染 | 航班追踪、动态点、实时轨迹 | workspace |
+| **Tool** | A function the Agent can call directly, with schema, permissions, and result structure | `read_file`, `edit_file`, `add_layer`, `start_worker` | Built into code |
+| **Skill** | A user / project injectable knowledge, flow, constraint, or capability package that can influence context and tool selection | External skill packages, project-level docs | Project / user level |
+| **Operation** | A reusable software-level atomic operation with input/output schemas, dependencies, main program, docs, and run history | DBSCAN clustering, KDE, format conversion | Built-in + workspace |
+| **Workflow** | DAG multi-step task orchestration where nodes define input/output descriptions | Academic reports, watershed analysis | `.flow.json` |
+| **Worker** | A resident Python service for continuous data processing and dynamic rendering | Flight tracking, dynamic points, real-time trajectories | Workspace |
 
-旧代码中曾经把工具也叫 skill。新架构中应当尽量避免混用：**工具叫 Tool，外部能力包叫 Skill，复用算法叫 Operation。**
+Legacy code sometimes called tools "skills." In the new architecture, avoid mixing: **Tools are tools, external capability packages are Skills, reusable algorithms are Operations.**
 
 ### 3.5 Tool Runtime
 
-所有工具集中在 `python-backend/opengis_backend/tools/`：
+All tools are centralized in `python-backend/opengis_backend/tools/`:
 
-| 工具组 | 代表工具 | 说明 |
+| Tool Group | Representative Tools | Description |
 |---|---|---|
-| 文件 | `read_file`、`write_file`、`edit_file`、`list_directory`、`glob`、`grep` | 支持模糊匹配、diff 输出、读前保护、文件建议 |
-| Shell | `bash` | 带权限治理和风险提示的 shell 调用 |
-| Web | `webfetch`、`websearch` | 抓取网页、实时搜索 |
-| 地图 | `list_layers`、`add_layer`、`update_layer_style`、`set_categorized_style`、`set_graduated_style`、`set_layer_order` | 通过反向 RPC 操作前端地图 |
-| 栅格 | `add_raster`、`get_raster_info`、`set_raster_style` | TIFF / GeoTIFF / 服务端瓦片 / 色带 |
-| OSM | `osm_call` | Nominatim + Overpass 获取 OSM 数据 |
-| DataSource | `datasource_call` | 内置数据源 |
-| Workflow | `create_workflow`、`run_workflow` 等 | 创建、读取、保存、执行 Workflow |
-| Operation | `list_operations`、`run_operation`、`edit_operation`、`validate_operation` | 运行和维护可复用操作 |
-| Worker | `start_worker`、`start_dynamic_map_worker`、`restart_worker`、`wait_worker_update`、`pause_worker`、`delete_worker` | 常驻后台服务 |
-| Report | `export_map_snapshot`、`write_report_section`、`export_report_pdf` | 报告与导出 |
-| Subagent | `run_subagent` | 子 Agent 执行 |
-| Debug | `debug_agent_context` | 上下文和工具暴露调试 |
+| File | `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep` | Fuzzy matching, diff output, read protection, file suggestions |
+| Shell | `bash` | Shell execution with permission governance and risk prompts |
+| Web | `webfetch`, `websearch` | Fetch web pages, real-time search |
+| Map | `list_layers`, `add_layer`, `update_layer_style`, `set_categorized_style`, `set_graduated_style`, `set_layer_order` | Operate frontend maps via reverse RPC |
+| Raster | `add_raster`, `get_raster_info`, `set_raster_style` | TIFF / GeoTIFF / server-side tiles / color ramps |
+| OSM | `osm_call` | Nominatim + Overpass for OSM data |
+| DataSource | `datasource_call` | Built-in data sources |
+| Workflow | `create_workflow`, `run_workflow`, etc. | Create, read, save, execute Workflows |
+| Operation | `list_operations`, `run_operation`, `edit_operation`, `validate_operation` | Run and maintain reusable operations |
+| Worker | `start_worker`, `start_dynamic_map_worker`, `restart_worker`, `wait_worker_update`, `pause_worker`, `delete_worker` | Resident background services |
+| Report | `export_map_snapshot`, `write_report_section`, `export_report_pdf` | Reports and export |
+| Subagent | `run_subagent` | Sub-agent execution |
+| Debug | `debug_agent_context` | Context and tool exposure debugging |
 
-ToolRuntime 负责：
+ToolRuntime is responsible for:
 
-- 将 Python 函数注册成 LLM 可见 JSON schema。
-- 执行前做参数校验和权限决策。
-- 执行后统一输出结构、截断大结果、生成 artifact pointer。
-- 将 tool call / result 写入 RunArchive 和 MessagePart。
-- 将前端 UI 需要的事件投影到统一流。
+- Registering Python functions as LLM-visible JSON schemas.
+- Performing parameter validation and permission decisions before execution.
+- Normalizing output, truncating large results, and generating artifact pointers after execution.
+- Writing tool calls / results to RunArchive and MessagePart.
+- Projecting frontend UI events into a unified stream.
 
-### 3.6 Memory 与 Context
+### 3.6 Memory & Context
 
-新记忆系统不再以一整段 `memory.md` 注入为中心，而是分层组织：
+The new memory system is no longer centered on injecting a single `memory.md`, but is organized in layers:
 
 ```text
 MemoryStore
-  facts          # 稳定事实：项目、文件、图层、用户偏好
-  recipes        # 可复用操作步骤和调试经验
-  dataset_cards  # 数据集字段、范围、统计摘要、路径
-  failure_memory # 重复错误、失败原因、修复建议
+  facts          # Stable facts: projects, files, layers, user preferences
+  recipes        # Reusable operation steps and debugging experience
+  dataset_cards  # Dataset field, range, statistical summary, path
+  failure_memory # Repeated errors, failure causes, fix suggestions
 
 ContextProjector
-  -> 根据当前用户意图检索相关 memory
-  -> 组合 recent turns / working state / artifacts
-  -> ProviderProjector 生成完整 provider request
+  -> Retrieves relevant memory based on current user intent
+  -> Combines recent turns / working state / artifacts
+  -> ProviderProjector generates the complete provider request
 ```
 
-关键点：
+Key points:
 
-- **按任务检索**：不是把所有历史都塞进 system prompt，而是按当前 turn 选择相关事实。
-- **完整 request 预算**：上下文裁剪不只看历史消息，也要看 system prompt、tools、memory、artifact、provider 格式后的完整请求。
-- **失败记忆**：工具连续失败、包缺失、签名误用等会沉淀为 failure memory，用于下一轮避免重复踩坑。
-- **知识提取**：run 结束后 KnowledgeExtractor 提取 facts、recipes、dataset cards。
-- **用户指令**：全局偏好和项目级偏好分开管理。
+- **Task-based retrieval**: Not all history is stuffed into the system prompt; relevant facts are selected per turn.
+- **Complete request budget**: Context trimming considers not just message history, but also system prompt, tools, memory, artifacts, and provider format.
+- **Failure memory**: Consecutive tool failures, missing packages, and signature misuse accumulate as failure memory to avoid repeating mistakes.
+- **Knowledge extraction**: After a run, KnowledgeExtractor extracts facts, recipes, and dataset cards.
+- **User instructions**: Global preferences and project-level preferences are managed separately.
 
-### 3.7 RunArchive 与 Event-Sourced UI
+### 3.7 RunArchive & Event-Sourced UI
 
-每次 Agent run 都会写入 `.opengis/runs/<run_id>/`：
+Every Agent run writes to `.opengis/runs/<run_id>/`:
 
 ```text
 meta.json
@@ -310,26 +315,26 @@ artifacts.jsonl
 steps.jsonl
 ```
 
-这套 event-sourced 结构让前端可以：
+This event-sourced structure enables the frontend to:
 
-- 实时渲染 Chat。
-- 恢复历史 run。
-- 展示工具调用、代码、Operation、Worker、Artifact。
-- 检测异常结束并补齐 running 状态。
-- 将长输出落盘为 artifact pointer，避免 UI 和上下文被大 JSON 卡死。
+- Render Chat in real time.
+- Recover historical runs.
+- Display tool calls, code, Operations, Workers, and Artifacts.
+- Detect abnormal endings and backfill running status.
+- Offload long outputs to artifact pointers to prevent UI and context from freezing on large JSON.
 
-### 3.8 Workflow 架构
+### 3.8 Workflow Architecture
 
-Workflow 是 DAG 编排，不是简单 prompt 模板。每个 node 需要描述：
+Workflow is DAG orchestration, not simple prompt templates. Each node needs to describe:
 
-- 它接收上游什么内容。
-- 它要执行什么任务。
-- 它输出给下游什么内容。
-- 失败时是否重试。
+- What it receives from upstream.
+- What task it executes.
+- What it outputs to downstream.
+- Whether to retry on failure.
 
-Workflow 文件通常存储为 `.flow.json`。内置 workflow 位于项目资源或 workspace 的 `.opengis/workflows/`，用户也可以让 Agent 创建和保存 workflow。
+Workflow files are typically stored as `.flow.json`. Built-in workflows are located in project resources or the workspace's `.opengis/workflows/`. Users can also have the Agent create and save workflows.
 
-执行方式：
+Execution flow:
 
 ```text
 Workflow document
@@ -341,65 +346,65 @@ Workflow document
   -> final report
 ```
 
-前端 Workflow UI 和 Plan UI 共享 MessagePart 协议，但显示样式不同：Workflow 强调 DAG 进度，Plan 强调当前任务步骤。
+The frontend Workflow UI and Plan UI share the MessagePart protocol but display differently: Workflow emphasizes DAG progress, Plan emphasizes current task steps.
 
-### 3.9 Operation 架构
+### 3.9 Operation Architecture
 
-Operation 是比脚本更稳定的复用单元。它用于把一次复杂探索沉淀为以后可复用、可修改、可验证的原子能力。
+Operation is a more stable reuse unit than scripts. It distills a complex exploration into a reusable, modifiable, verifiable atomic capability.
 
-一个 Operation 包含：
+An Operation contains:
 
 ```text
 operation/
-  manifest.json      # 名称、描述、输入输出 schema、依赖、版本
-  main.py            # 唯一入口
-  README.md          # 使用说明
-  examples/          # 示例参数
-  runs/              # 运行记录
+  manifest.json      # Name, description, input/output schema, dependencies, version
+  main.py            # Single entry point
+  README.md          # Usage instructions
+  examples/          # Example parameters
+  runs/              # Run history
 ```
 
-Operation 分两类：
+Two types of Operations:
 
-- **内置 Operation**：随 OpenGIS 源码分发，所有 workspace 共享。
-- **Workspace Operation**：用户项目中创建，可手动提升为内置。
+- **Built-in Operations**: Shipped with OpenGIS source, shared across all workspaces.
+- **Workspace Operations**: Created in user projects, can be promoted to built-in.
 
-Agent 可以：
+The Agent can:
 
-- 查询 Operation。
-- 按 schema 构造参数运行。
-- 运行失败后读取 Operation 代码并修复。
-- 将稳定脚本提升为 Operation。
+- Query Operations.
+- Construct parameters by schema and run.
+- Read Operation code and fix after a failed run.
+- Promote stable scripts to Operations.
 
-前端 Operation 面板采用列表 + 详情结构，Chat 中也会以独立 Operation block 展示运行状态和结果。
+The frontend Operation panel uses a list + detail structure, and Chat also displays run status and results as independent Operation blocks.
 
-### 3.10 Worker 架构
+### 3.10 Worker Architecture
 
-Worker 是常驻 Python 服务，适合以下场景：
+Worker is a resident Python service suitable for:
 
-- 持续轮询外部 API。
-- 实时读取动态数据。
-- 持续处理数据流。
-- 将动态点、轨迹、状态推送到地图。
+- Continuously polling external APIs.
+- Real-time reading of dynamic data.
+- Continuous data stream processing.
+- Pushing dynamic points, trajectories, and status to the map.
 
-Worker 服务包结构：
+Worker service package structure:
 
 ```text
 worker/<name>-<worker_id>/
-  main.py              # 唯一入口
-  opengis_worker.py    # OpenGIS 自动生成 helper，不应手改
-  config.json          # worker_id、interval_seconds、layer ids、API 参数
-  manifest.json        # 服务元数据、权限、动态层声明
+  main.py              # Single entry point
+  opengis_worker.py    # Auto-generated OpenGIS helper, should not be manually edited
+  config.json          # worker_id, interval_seconds, layer ids, API parameters
+  manifest.json        # Service metadata, permissions, dynamic layer declarations
   README.md
   stdout.log
   stderr.log
   metadata.json
   src/
-    datasource.py      # 数据获取
-    service.py         # 状态和业务逻辑
-    publisher.py       # OpenGIS 输出适配
+    datasource.py      # Data fetching
+    service.py         # State and business logic
+    publisher.py       # OpenGIS output adapter
 ```
 
-动态地图协议：
+Dynamic map protocol:
 
 ```python
 from opengis_worker import emit_moving_objects
@@ -413,86 +418,86 @@ emit_moving_objects(
 )
 ```
 
-Helper 会向 stdout 输出：
+The helper outputs to stdout:
 
 ```json
 {"opengis_method":"rpc.ui.map.dynamic_layer_update","params":{...}}
 ```
 
-Worker manager 解析 stdout，补充 `worker_id`、`worker_name`、`workspace_path`、`worker_started_at`，再转发给前端。前端 dynamic handler 更新图层 store，并即时同步 MapLibre source。
+The worker manager parses stdout, supplements `worker_id`, `worker_name`, `workspace_path`, `worker_started_at`, and forwards to the frontend. The frontend dynamic handler updates the layer store and instantly syncs MapLibre sources.
 
-约束：
+Constraints:
 
-- 默认最多两个 running worker。
-- 启动、重启、暂停、删除需要权限治理。
-- 后台持续任务必须用 worker，不应写在 `execute_code` 里。
-- 入口强制是 `main.py`，可以有多个辅助模块，但不能有多个入口。
+- Default max of two running workers.
+- Start, restart, pause, and delete require permission governance.
+- Background continuous tasks must use workers, not `execute_code`.
+- Entry point must be `main.py`; auxiliary modules are allowed but multiple entry points are not.
 
-### 3.11 地图与渲染架构
+### 3.11 Map & Rendering Architecture
 
-前端地图由 `src/features/map/engine/MapEngine.ts` 统一管理。Renderer 拆分在 `src/features/map/renderers/`：
+The frontend map is managed by `src/features/map/engine/MapEngine.ts`. Renderers are split across `src/features/map/renderers/`:
 
-| Renderer | 用途 |
+| Renderer | Purpose |
 |---|---|
-| `circleRenderer` | 点 / 多点 |
-| `lineRenderer` | 线 / 多线 |
-| `fillRenderer` | 面 |
-| `categorizedRenderer` | 分类设色 |
-| `graduatedRenderer` | 数值分级 |
-| `symbolRenderer` | 图标 / 标注 |
-| `rasterRenderer` | 栅格 |
-| `extrusionRenderer` | 3D 拉伸 |
+| `circleRenderer` | Points / multi-points |
+| `lineRenderer` | Lines / multi-lines |
+| `fillRenderer` | Polygons |
+| `categorizedRenderer` | Categorized coloring |
+| `graduatedRenderer` | Numeric graduated |
+| `symbolRenderer` | Icons / labels |
+| `rasterRenderer` | Raster |
+| `extrusionRenderer` | 3D extrusion |
 
-图层数据解析位于 `src/services/geo/parsers/`。大矢量数据会使用 handle 化策略，避免把全部 GeoJSON 反复塞入 React store。栅格数据支持前端解析和后端服务端瓦片两条路径。
+Layer data parsing is in `src/services/geo/parsers/`. Large vector data uses handle-based strategies to avoid repeatedly stuffing entire GeoJSON into the React store. Raster data supports both frontend parsing and backend server-side tile paths.
 
-样式系统支持：
+The style system supports:
 
-- 点颜色、大小、透明度、描边。
-- 线颜色、宽度、透明度、虚线。
-- 面填充、边框、填充透明度和边框透明度分离。
-- 分类设色、分级设色、显式颜色映射。
-- 大小变量、透明度变量、排序变量。
-- label / symbol / legend / filter。
+- Point color, size, opacity, stroke.
+- Line color, width, opacity, dashes.
+- Fill, border, separate fill and border opacity.
+- Categorized and graduated coloring, explicit color mapping.
+- Size variables, opacity variables, ordering variables.
+- Labels / symbols / legends / filters.
 
-### 3.12 栅格架构
+### 3.12 Raster Architecture
 
-栅格加载采用前后端混合策略：
+Raster loading uses a hybrid frontend/backend strategy:
 
-- **前端轻量解析**：适合小型 GeoTIFF，使用 `geotiff.js` 读取并渲染为 image source。
-- **后端 RasterService**：适合较大 TIFF / 多波段数据，后端读取统计信息、生成瓦片、应用色带。
-- **样式编辑**：支持 ramp、custom stops、source value stops、透明度、stretch min/max。
-- **Agent 感知**：`get_raster_info` 可让 Agent 读取宽高、波段、统计值、色带状态。
+- **Frontend lightweight parsing**: Suitable for small GeoTIFFs, using `geotiff.js` to read and render as image sources.
+- **Backend RasterService**: Suitable for larger TIFF / multi-band data; reads statistics, generates tiles, applies color ramps.
+- **Style editing**: Supports ramp, custom stops, source value stops, transparency, and stretch min/max.
+- **Agent awareness**: `get_raster_info` lets the Agent read dimensions, bands, statistics, and color ramp state.
 
-主流 WebGIS 通常将服务端栅格渲染为 PNG / JPEG 瓦片或 Cloud Optimized GeoTIFF 窗口读取。OpenGIS 当前以 PNG 瓦片和 image source 为主，后续可继续增强 COG / 金字塔 / overviews。
+Mainstream WebGIS typically renders server-side rasters as PNG / JPEG tiles or Cloud Optimized GeoTIFF window reads. OpenGIS currently uses PNG tiles and image sources, with potential future enhancement for COG / pyramids / overviews.
 
 ### 3.13 Layout Composer
 
-Layout Composer 是面向制图导出的画布系统，目标对标 ArcGIS / QGIS 的基础制图工作流：
+Layout Composer is a canvas system for cartographic export, targeting the basic mapping workflow of ArcGIS / QGIS:
 
-- 定义画布比例：16:9、4:3、1:1、自定义。
-- 添加地图框，并可调整地图框位置、大小和内部视角。
-- 添加比例尺、指北针、图例。
-- 调整背景、边框、字体、颜色、透明度。
-- 导出图片。
-- 将画布元素暴露为 Agent tool，便于自然语言制图。
+- Define canvas ratios: 16:9, 4:3, 1:1, custom.
+- Add map frames with adjustable position, size, and internal viewport.
+- Add scale bars, north arrows, legends.
+- Adjust background, borders, fonts, colors, transparency.
+- Export images.
+- Expose canvas elements as Agent tools for natural-language cartography.
 
-当前实现位于 `src/features/layout-composer/`。
+Current implementation is in `src/features/layout-composer/`.
 
-### 3.14 权限与安全
+### 3.14 Permissions & Security
 
-OpenGIS 不是强沙箱产品，但提供多层安全网：
+OpenGIS is not a hard sandbox product, but provides multiple safety layers:
 
-| 层 | 机制 |
+| Layer | Mechanism |
 |---|---|
-| WebSocket | 本地 loopback + 启动 token |
-| ToolRuntime | 工具权限策略、ask / allow / deny |
-| Shell / 文件 | 风险动作记录、审批 UI、读前写保护 |
-| Worker | 启动 / 重启 / 删除审批，最大运行数限制 |
-| RunArchive | 完整事件与工具调用留痕 |
-| Workspace | git snapshot，可回滚 |
-| Python 执行 | 子进程隔离，可中断、可清理进程树 |
+| WebSocket | Local loopback + startup token |
+| ToolRuntime | Tool permission policy: ask / allow / deny |
+| Shell / File | Risk action logging, approval UI, read-before-write protection |
+| Worker | Start / restart / delete approval, max running limit |
+| RunArchive | Complete event and tool call audit trail |
+| Workspace | Git snapshot, rollback capable |
+| Python Execution | Subprocess isolation, interruptible, process tree cleanup |
 
-### 3.15 项目目录
+### 3.15 Project Directory
 
 ```text
 OpenGIS/
@@ -501,66 +506,66 @@ OpenGIS/
     features/
       chat/                         # MessagePart Chat UI
       map/                          # MapLibre engine / renderers / identify
-      layers/                       # 图层管理和样式面板
-      assets/                       # 文件资源浏览
-      workflows/                    # Workflow 编辑器
+      layers/                       # Layer management and style panel
+      assets/                       # File asset browsing
+      workflows/                    # Workflow editor
       operations/                   # Operation UI
-      workers/                      # Worker 管理面板
-      layout-composer/              # 制图画布
-      pivot/                        # 数据透视
-      settings/                     # 设置
+      workers/                      # Worker management panel
+      layout-composer/              # Cartographic canvas
+      pivot/                        # Data pivot
+      settings/                     # Settings
     services/
-      rpc/                          # 前端 JSON-RPC dispatcher / handlers
-      geo/                          # 数据类型、解析器、栅格 / 矢量工具
+      rpc/                          # Frontend JSON-RPC dispatcher / handlers
+      geo/                          # Data types, parsers, raster / vector tools
     stores/                         # Zustand stores
   python-backend/
     opengis_backend/
-      agent/                        # Agent 新架构
-      tools/                        # Tool registry 和内置工具
-      integrations/                 # gis / osm / qgis / datasource
-      operations/                   # 内置 Operation
-      worker/                       # Worker manager 和协议
+      agent/                        # Agent architecture
+      tools/                        # Tool registry and built-in tools
+      integrations/                 # GIS / OSM / QGIS / datasource
+      operations/                   # Built-in Operations
+      worker/                       # Worker manager and protocol
       runs/                         # RunArchive
       rpc/                          # WebSocket JSON-RPC handler
       workspace/                    # Workspace snapshot / templates
-  resources/                        # 图标、截图、静态资源
-  docs/                             # 设计记录和 bug scan
+  resources/                        # Icons, screenshots, static assets
+  docs/                             # Design records and bug scans
 ```
 
-## 4. 快速开始
+## 4. Getting Started
 
-### 4.1 前置依赖
+### 4.1 Prerequisites
 
-| 依赖 | 版本 | 必需 | 说明 |
+| Dependency | Version | Required | Description |
 |---|---|---|---|
-| Node.js | >= 18 | 是 | 前端、Electron、构建 |
-| Python | >= 3.11 | 是 | Python sidecar 和 GIS 工具 |
-| Git | 任意 | 是 | workspace snapshot / run 回滚 |
-| LLM API Key | OpenAI / Anthropic / DeepSeek / MiniMax / GLM / Ollama 等 | Agent 必需 | 地图基础功能不依赖 LLM |
-| GDAL / Rasterio 相关 wheel | 与 Python 环境匹配 | 推荐 | 栅格 / Shapefile / GeoPandas 能力 |
+| Node.js | >= 18 | Yes | Frontend, Electron, build |
+| Python | >= 3.11 | Yes | Python sidecar and GIS tools |
+| Git | Any | Yes | Workspace snapshot / run rollback |
+| LLM API Key | OpenAI / Anthropic / DeepSeek / MiniMax / GLM / Ollama, etc. | Required for Agent | Basic map features do not require LLM |
+| GDAL / Rasterio wheels | Matching Python environment | Recommended | Raster / Shapefile / GeoPandas capabilities |
 
-### 4.2 克隆仓库
+### 4.2 Clone the Repository
 
 ```bash
 git clone <repo-url>
 cd OpenGIS
 ```
 
-### 4.3 安装前端依赖
+### 4.3 Install Frontend Dependencies
 
 ```bash
 npm install
 ```
 
-### 4.4 安装 Python 后端环境
+### 4.4 Install Python Backend Environment
 
 ```bash
 npm run setup:python
 ```
 
-该命令会在用户数据目录创建共享虚拟环境并安装 Python 依赖。开发模式和打包后的应用都会复用这个环境，避免在源码目录和用户应用目录之间维护两套 Python 依赖。
+This command creates a shared virtual environment in the user data directory and installs Python dependencies. Both dev mode and packaged applications reuse this environment, avoiding the need to maintain two sets of Python dependencies between source and installed locations.
 
-典型路径：
+Typical paths:
 
 ```text
 macOS:   ~/Library/Application Support/opengis/venv
@@ -568,45 +573,45 @@ Windows: %APPDATA%/opengis/venv
 Linux:   ~/.config/opengis/venv
 ```
 
-如果 Windows / macOS 上 GDAL、Fiona、Rasterio 安装失败，可以先使用 conda 安装二进制依赖：
+If GDAL, Fiona, or Rasterio fail to install on Windows / macOS, use conda for binary dependencies first:
 
 ```bash
 conda install -c conda-forge geopandas rasterio fiona pyproj shapely -y
 npm run setup:python
 ```
 
-### 4.5 启动开发模式
+### 4.5 Start Development Mode
 
 ```bash
 npm run dev:electron
 ```
 
-启动过程：
+Startup sequence:
 
-1. electron-vite 启动 renderer dev server。
-2. 编译 Electron main / preload。
-3. Electron main 拉起 Python sidecar。
-4. Renderer 通过 token 连接 sidecar WebSocket。
+1. electron-vite starts the renderer dev server.
+2. Compiles Electron main / preload.
+3. Electron main launches the Python sidecar.
+4. Renderer connects to the sidecar WebSocket via token.
 
-看到窗口和 Python ready 状态后即可使用。
+Once the window and Python ready status appear, you're good to go.
 
-### 4.6 配置模型
+### 4.6 Configure the Model
 
-打开 Settings / Model：
+Open Settings / Model:
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| Provider | OpenAI、Anthropic、DeepSeek、MiniMax、GLM、Ollama 等 |
-| Protocol | OpenAI Compatible 或 Anthropic Compatible |
-| Base URL | 模型服务地址 |
-| API Key | 本地保存 |
-| Model Name | 具体模型 ID |
+| Provider | OpenAI, Anthropic, DeepSeek, MiniMax, GLM, Ollama, etc. |
+| Protocol | OpenAI Compatible or Anthropic Compatible |
+| Base URL | Model service endpoint |
+| API Key | Saved locally |
+| Model Name | Specific model ID |
 
-点击 Test Connection 验证连接。保存后向 Agent 发送一句“你好”，看到流式回复即代表链路正常。
+Click Test Connection to verify. After saving, send "hello" to the Agent; seeing a streaming reply means the pipeline is working.
 
-### 4.7 打开 Workspace
+### 4.7 Open a Workspace
 
-通过 File / Open Workspace 选择项目目录。OpenGIS 会在 workspace 下创建 `.opengis/`：
+Use File / Open Workspace to select a project directory. OpenGIS creates `.opengis/` under the workspace:
 
 ```text
 .opengis/
@@ -619,61 +624,61 @@ npm run dev:electron
   map-layers.json
 ```
 
-不同 workspace 的图层、run、operation、workflow 和 memory 独立管理。
+Different workspaces have independent layers, runs, Operations, workflows, and memory.
 
-## 5. 开发指南
+## 5. Development Guide
 
-### 5.1 常用命令
+### 5.1 Common Commands
 
 ```bash
-npm run dev:electron     # 启动桌面开发模式
-npm run typecheck        # TypeScript 类型检查
-npm test                 # 前端单元测试
-npm run build            # 构建 main / preload / renderer
-npm run dist:mac         # macOS 打包
-npm run dist:win         # Windows 打包
-npm run dist:linux       # Linux 打包
+npm run dev:electron     # Start desktop dev mode
+npm run typecheck        # TypeScript type checking
+npm test                 # Frontend unit tests
+npm run build            # Build main / preload / renderer
+npm run dist:mac         # macOS packaging
+npm run dist:win         # Windows packaging
+npm run dist:linux       # Linux packaging
 ```
 
-后端测试示例：
+Backend test example:
 
 ```bash
 "$HOME/Library/Application Support/opengis/venv/bin/python" -m unittest discover -s python-backend/tests
 ```
 
-Windows PowerShell 路径通常是：
+Windows PowerShell path is typically:
 
 ```powershell
 & "$env:APPDATA/opengis/venv/Scripts/python.exe" -m unittest discover -s python-backend/tests
 ```
 
-### 5.2 添加一个 Tool
+### 5.2 Adding a Tool
 
-1. 在 `python-backend/opengis_backend/tools/builtin/` 新建或修改工具文件。
-2. 使用 `@tool(...)` 声明名称、分组、参数和返回说明。
-3. 通过 `ToolContext` 访问 workspace、conversation、notify 等上下文。
-4. 如果要操作地图，优先发 `rpc.ui.map.*` 反向 RPC，不要在 Python 里维护地图状态。
-5. 补充测试，至少覆盖参数校验和返回结构。
+1. Create or modify a tool file in `python-backend/opengis_backend/tools/builtin/`.
+2. Use `@tool(...)` to declare name, group, parameters, and return description.
+3. Access workspace, conversation, notify, and other context via `ToolContext`.
+4. For map operations, prefer sending `rpc.ui.map.*` reverse RPC; do not maintain map state in Python.
+5. Add tests covering at least parameter validation and return structure.
 
-### 5.3 添加地图能力
+### 5.3 Adding Map Capabilities
 
-地图能力通常需要两端一起做：
+Map capabilities typically require changes on both sides:
 
-1. 后端 tool：声明 Agent 可调用入口。
-2. 前端 RPC handler：在 `src/services/rpc/handlers/map/` 接收 `rpc.ui.map.*`。
-3. Store：必要时扩展 `MapLayerDefinition` 或 `LayerStyle`。
-4. Renderer：在 `src/features/map/renderers/` 扩展 MapLibre paint / layout。
-5. UI：如果用户也要手动控制，在图层面板或样式面板添加编辑入口。
+1. Backend tool: Declare the Agent-callable entry point.
+2. Frontend RPC handler: Receive `rpc.ui.map.*` in `src/services/rpc/handlers/map/`.
+3. Store: Extend `MapLayerDefinition` or `LayerStyle` if needed.
+4. Renderer: Extend MapLibre paint / layout in `src/features/map/renderers/`.
+5. UI: If users need manual control, add an edit entry in the layer or style panel.
 
-### 5.4 添加 Operation
+### 5.4 Adding an Operation
 
-内置 Operation 放在：
+Built-in Operations go in:
 
 ```text
 python-backend/opengis_backend/operations/builtin/
 ```
 
-推荐结构：
+Recommended structure:
 
 ```text
 my_operation/
@@ -683,54 +688,54 @@ my_operation/
   examples/
 ```
 
-`manifest.json` 应清楚描述：
+`manifest.json` should clearly describe:
 
-- 输入 schema。
-- 输出 schema。
-- Python 依赖。
-- 操作说明。
-- 适用场景。
+- Input schema.
+- Output schema.
+- Python dependencies.
+- Operation description.
+- Applicable scenarios.
 
-### 5.5 添加 Worker 场景
+### 5.5 Adding Worker Scenarios
 
-Worker 不应写成一个巨大脚本。推荐结构：
+Workers should not be written as a single large script. Recommended structure:
 
 ```text
-main.py              # 加载 config，启动循环
-src/datasource.py    # 取数据
-src/service.py       # 更新状态、轨迹、过滤
+main.py              # Load config, start loop
+src/datasource.py    # Fetch data
+src/service.py       # Update state, trajectories, filters
 src/publisher.py     # emit_dynamic_points / emit_moving_objects
 ```
 
-动态地图必须保证：
+Dynamic maps must ensure:
 
-- layer id 稳定。
-- 第一帧 full，后续 diff，或使用 high-level helper 自动处理。
-- feature id 稳定。
-- sequence 单调递增。
-- 不要在 `execute_code` 中写无限循环。
+- Stable layer IDs.
+- Full first frame, subsequent diffs, or use high-level helpers for automatic handling.
+- Stable feature IDs.
+- Monotonically increasing sequence.
+- Do not write infinite loops in `execute_code`.
 
-### 5.6 Windows 注意事项
+### 5.6 Windows Notes
 
-- 路径中可能包含空格和中文，代码应使用 `Path` / JSON 参数，不要拼 shell 字符串。
-- Python venv 路径和 Electron 打包路径不同，避免硬编码 macOS 路径。
-- 子进程取消在 Windows 走 `CTRL_BREAK_EVENT` 和 `taskkill /F /T`，新增后台进程时要考虑进程树清理。
-- GDAL / Rasterio 推荐使用预编译 wheel 或 conda-forge。
+- Paths may contain spaces and Chinese characters; use `Path` / JSON parameters, not shell string concatenation.
+- Python venv paths and Electron packaging paths differ; avoid hardcoding macOS paths.
+- Subprocess cancellation on Windows uses `CTRL_BREAK_EVENT` and `taskkill /F /T`; consider process tree cleanup when adding background processes.
+- GDAL / Rasterio are recommended to use precompiled wheels or conda-forge.
 
 ## 6. Roadmap
 
-- 更完整的动态地图协议：前端 source diff adapter、状态监控、Worker 调试回路。
-- 更强的 Operation 市场化：版本、依赖锁定、可视化参数表单、运行基准。
-- 更完整的 Layout Composer：图例分组、地图书签、多页面、PDF 导出。
-- 更大数据渲染：矢量瓦片、WebGL 聚合、deck.gl / 自研高性能渲染路径评估。
-- 更强栅格金字塔：COG、overviews、服务端窗口读取、时序栅格。
-- 更成熟的 skills 接入：项目级 skill registry、skill marketplace、权限隔离。
-- 更严格的权限模式：可配置审批、持久化授权、风险规则模板。
+- More complete dynamic map protocol: frontend source diff adapter, state monitoring, Worker debug loop.
+- Stronger Operation marketplace: versioning, dependency locking, visual parameter forms, run benchmarks.
+- More complete Layout Composer: legend grouping, map bookmarks, multi-page, PDF export.
+- Larger data rendering: vector tiles, WebGL aggregation, deck.gl / custom high-performance rendering evaluation.
+- Stronger raster pyramids: COG, overviews, server-side window reads, time-series rasters.
+- More mature skills integration: project-level skill registry, skill marketplace, permission isolation.
+- Stricter permission modes: configurable approval, persistent authorization, risk rule templates.
 
-## 7. 许可
+## 7. License
 
-本项目采用 **MIT License**。
+This project is licensed under the **MIT License**.
 
 ---
 
-OpenGIS 仍在快速变化中。README 描述的是当前主干架构、核心实现路径和近期演进方向；如果代码和文档出现轻微差异，以代码和测试为准。
+OpenGIS is under active development. This README describes the current mainline architecture, core implementation paths, and near-term evolution direction. If there are minor discrepancies between code and documentation, the code and tests are authoritative.
