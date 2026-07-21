@@ -111,7 +111,6 @@ frontend/
 # ===== Legacy / Internal Docs =====
 PRD/
 doc/
-docs/
 ARCHITECTURE_SPEC.md
 Internal-Agent-Projects.md
 
