@@ -28,6 +28,7 @@ from opengis_backend.agent.context.provider_projector import (
     ProviderContextProjector,
     ProviderProjectionConfig,
 )
+from opengis_backend.agent.context.provider_request import ProviderRequest, ProviderRequestBuilder
 from opengis_backend.agent.context.summarizer import llm_summarize, simple_summarize
 from opengis_backend.agent.context.token_utils import (
     CHARS_PER_TOKEN,
@@ -290,37 +291,64 @@ class ContextManager:
             "_meta": message_meta,
         })
 
-    def build_messages(
+    def build_provider_request(
         self,
         system_prompt: str,
-        user_instructions: str | None = None,
         *,
+        user_instructions: str | None = None,
         exclude_workflow_context: bool = False,
         projection_limits: Any | None = None,
-    ) -> list[dict[str, Any]]:
-        """Build the messages list for an LLM call.
+        stable_system_sections: list[tuple[str, str]] | None = None,
+        dynamic_tail_sections: list[tuple[str, str]] | None = None,
+    ) -> ProviderRequest:
+        """Assemble the canonical provider request (the single assembler).
 
-        Structure:
-        1. System prompt (always first)
-        2. User preferences (if provided)
-        3. Summary of older turns (if compressed)
-        4. Recent messages (from _summary_cutoff onward)
+        Enforces the layout contract from ``docs/prompt-cache-stable-prefix-architecture.md``
+        (3.1.2). Physical order is::
 
-        Internal-only fields (anything starting with ``_``, e.g. ``_meta``
-        used by tool-result pruning) are stripped before returning.
+            ── STABLE PREFIX (cacheable, append-only) ──
+            [S0] system core prompt
+            [S1] stable system sections (capability manifest / active tools / rules)
+            [S2] user preferences
+            [S3] conversation summary
+            ── conversation history (append-only) ──
+            ── DYNAMIC TAIL (recomputed each turn, never cached) ──
+            [D*] turn objective / deviation feedback (dynamic_tail_sections)
+            [D1] runtime anchor
+            [D2] working state
+
+        The critical invariant: every per-turn-changing block lives in the
+        DYNAMIC TAIL, physically *after* the conversation history, so the
+        cache prefix is not broken at the top of the request.
         """
-        result: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-        ]
+        builder = ProviderRequestBuilder()
         # Cache system prompt token count for should_compress().
         self._system_prompt_tokens = estimate_tokens(system_prompt)
 
+        # ── STABLE PREFIX ──────────────────────────────────────────────
+        builder.add_system_text(
+            id="system.base",
+            kind="system",
+            content=system_prompt,
+            stability="static",
+            cache_policy="cacheable",
+        )
+        for section_id, content in (stable_system_sections or []):
+            builder.add_system_text(
+                id=section_id,
+                kind="system",
+                content=content,
+                stability="session_static",
+                cache_policy="cacheable",
+            )
         if user_instructions and user_instructions.strip():
-            result.append({
-                "role": "system",
-                "content": f"## User Preferences\n{user_instructions.strip()[:2000]}",
-            })
-
+            builder.add_system_text(
+                id="system.user_preferences",
+                kind="user_preferences",
+                content=f"## User Preferences\n{user_instructions.strip()[:2000]}",
+                stability="session_static",
+                cache_policy="cacheable",
+            )
         if self._summary:
             summary = (
                 self._strip_workflow_summary(self._summary)
@@ -333,40 +361,91 @@ class ContextManager:
                     "That context is intentionally hidden from this normal chat turn "
                     "unless the user explicitly asks to continue it."
                 )
-            result.append({
-                "role": "system",
-                "content": (
-                    f"[Conversation summary of earlier turns]\n{summary}"
-                ),
-            })
+            builder.add_system_text(
+                id="context.summary",
+                kind="conversation_summary",
+                content=f"[Conversation summary of earlier turns]\n{summary}",
+                stability="session_static",
+                cache_policy="cacheable",
+            )
 
-        runtime_anchor = self._build_runtime_anchor_message(exclude_workflow_context=exclude_workflow_context)
-        if runtime_anchor:
-            result.append({"role": "system", "content": runtime_anchor})
-
-        working_state = WorkingStateProjector().project(
-            self.messages,
-            summary_cutoff=self._summary_cutoff,
-            exclude_workflow_context=exclude_workflow_context,
-        ).to_prompt()
-        if working_state:
-            result.append({"role": "system", "content": working_state})
-
+        # ── CONVERSATION HISTORY (append-only) ─────────────────────────
         projector = ProviderContextProjector(
             config=self._provider_projection_config(projection_limits),
             is_tool_result=self._is_tool_result,
             make_pruned_placeholder=self._make_pruned_placeholder,
             is_workflow_context_message=self._is_workflow_context_message,
         )
-        result.extend(
-            projector.project_live_messages(
-                self.messages,
-                summary_cutoff=self._summary_cutoff,
-                exclude_workflow_context=exclude_workflow_context,
-            )
+        history = projector.project_live_messages(
+            self.messages,
+            summary_cutoff=self._summary_cutoff,
+            exclude_workflow_context=exclude_workflow_context,
+        )
+        builder.add_section(
+            id="context.history",
+            kind="history",
+            messages=history,
+            stability="turn_dynamic",
+            cache_policy="cacheable",
         )
 
-        return result
+        # ── DYNAMIC TAIL (after history, never cached) ─────────────────
+        for index, (section_id, content) in enumerate(dynamic_tail_sections or []):
+            builder.add_system_text(
+                id=section_id or f"runtime.control_{index + 1}",
+                kind="runtime",
+                content=content,
+                stability="turn_dynamic",
+                cache_policy="none",
+            )
+        runtime_anchor = self._build_runtime_anchor_message(exclude_workflow_context=exclude_workflow_context)
+        if runtime_anchor:
+            builder.add_system_text(
+                id="runtime.anchor",
+                kind="runtime",
+                content=runtime_anchor,
+                stability="turn_dynamic",
+                cache_policy="none",
+            )
+        working_state = WorkingStateProjector().project(
+            self.messages,
+            summary_cutoff=self._summary_cutoff,
+            exclude_workflow_context=exclude_workflow_context,
+        ).to_prompt()
+        if working_state:
+            builder.add_system_text(
+                id="runtime.working_state",
+                kind="working_state",
+                content=working_state,
+                stability="turn_dynamic",
+                cache_policy="none",
+            )
+
+        return builder.build()
+
+    def build_messages(
+        self,
+        system_prompt: str,
+        user_instructions: str | None = None,
+        *,
+        exclude_workflow_context: bool = False,
+        projection_limits: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Thin wrapper over :py:meth:`build_provider_request`.
+
+        Kept for callers that only need the flat provider message list (e.g.
+        the debug projection tool). It shares the exact same assembly path so
+        there is only ONE place that decides request layout.
+
+        Internal-only fields (anything starting with ``_``) are already
+        stripped by the underlying builder.
+        """
+        return self.build_provider_request(
+            system_prompt,
+            user_instructions=user_instructions,
+            exclude_workflow_context=exclude_workflow_context,
+            projection_limits=projection_limits,
+        ).messages
 
     def should_compress(self) -> tuple[bool, str]:
         """Check if compression should trigger.

@@ -16,6 +16,8 @@ from opengis_backend.agent.context.token_utils import estimate_messages_tokens
 
 PromptSectionKind = Literal[
     "system",
+    "capability_manifest",
+    "tool_protocol",
     "user_preferences",
     "conversation_summary",
     "runtime",
@@ -104,6 +106,37 @@ class ProviderRequest:
                 }
             )
         raw = json.dumps(cacheable, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @property
+    def system_prefix_hash(self) -> str:
+        """Hash of the stable system prefix (all sections before conversation history).
+
+        This is the canonical-layout STABLE PREFIX minus the append-only history.
+        In a healthy setup it must stay constant turn-to-turn; any change points at
+        dynamic content leaking into the prefix (see docs 3.1.2 / 3.2).
+        """
+        prefix: list[dict[str, Any]] = []
+        for section in self.sections:
+            if section.kind == "history":
+                break
+            prefix.append({"id": section.id, "kind": section.kind, "digest": section.digest})
+        raw = json.dumps(prefix, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @property
+    def dynamic_suffix_hash(self) -> str:
+        """Hash of the DYNAMIC TAIL (all sections after the last history section)."""
+        last_history = -1
+        for index, section in enumerate(self.sections):
+            if section.kind == "history":
+                last_history = index
+        tail = self.sections[last_history + 1:] if last_history >= 0 else []
+        raw = json.dumps(
+            [{"id": s.id, "kind": s.kind, "digest": s.digest} for s in tail],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def section_debug(self) -> list[dict[str, Any]]:

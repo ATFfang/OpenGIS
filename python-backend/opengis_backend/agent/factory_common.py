@@ -10,6 +10,7 @@ from typing import Any, Callable
 from opengis_backend.agent.context.context_projector import ContextProjector
 from opengis_backend.agent.context.request_budget import RequestBudgetManager
 from opengis_backend.agent.execution.executor_factory import build_subprocess_executor
+from opengis_backend.agent.execution.tool_capabilities import format_capability_manifest
 from opengis_backend.agent.execution.tool_output import ToolOutputRuntime
 from opengis_backend.agent.execution.tool_runtime import ToolRuntime, build_tool_schemas
 from opengis_backend.agent.governance.permission import PermissionRuntime
@@ -35,6 +36,11 @@ class LoopRuntimeBundle:
     executor_call: Callable[[str], Any]
     tool_runtime: ToolRuntime
     system_prompt: str
+    # Task-relevant project memory for the CURRENT user message. Deliberately
+    # kept OUT of ``system_prompt`` (the cacheable stable prefix): memory is
+    # keyed on the live user message and changes every run, so the loops inject
+    # it into the DYNAMIC TAIL (after conversation history) instead.
+    project_memory: str = ""
 
 
 def compose_system_prompt(
@@ -43,12 +49,27 @@ def compose_system_prompt(
     *,
     include_workspace_write_note: bool,
 ) -> str:
+    """Build the STABLE system prefix.
+
+    Everything appended here must be byte-stable across turns and across runs
+    of the same workspace/profile so the provider can cache the prefix. Only
+    static content belongs here: the base template, the domain capability
+    manifest, the workspace path, and the workspace-write note. Per-run dynamic
+    content (project memory) is projected separately by
+    :func:`project_run_memory` and placed in the dynamic tail by the loops.
+    """
     workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
     user_skills = UserSkillDiscovery(workspace_path=workspace).list()
     prompt = OPENGIS_SYSTEM_PROMPT.format(
         tool_signatures=build_tool_catalog_summary(registered_tools),
         available_skills=format_available_skills(user_skills),
     )
+    # Stable capability manifest: domain-level "what this platform can do".
+    # Deterministic from the profile tool set, so it rides the cache prefix and
+    # keeps the model from denying a supported capability.
+    manifest = format_capability_manifest([rs.schema.name for rs in registered_tools])
+    if manifest:
+        prompt += "\n" + manifest + "\n"
     if not workspace:
         return prompt
 
@@ -62,6 +83,21 @@ def compose_system_prompt(
             "You may write to / read from any file under this directory. Writes\n"
             "are snapshotted by git so the user can revert any run.\n"
         )
+    return prompt
+
+
+def project_run_memory(ctx: ToolContext) -> str:
+    """Retrieve task-relevant project memory for the CURRENT user message.
+
+    Returns a ready-to-inject block (or ``""``). This is intentionally NOT part
+    of the system prompt: because it is keyed on the live user message it
+    changes every run and would otherwise break the cacheable stable prefix at
+    the very top. The loops inject the returned text into the DYNAMIC TAIL,
+    physically after the conversation history.
+    """
+    workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
+    if not workspace:
+        return ""
     try:
         current_user_message = str(((getattr(ctx, "meta", None) or {}).get("_current_user_message")) or "")
         memory_limit = RequestBudgetManager().suggest_limits().max_memory_records
@@ -70,10 +106,10 @@ def compose_system_prompt(
             max_records=memory_limit,
         )
         if projected:
-            prompt += f"\n## Retrieved Project Memory\n{projected}\n"
+            return f"## Retrieved Project Memory\n{projected}"
     except Exception:
-        logger.debug("ContextProjector failed; continuing without project memory", exc_info=True)
-    return prompt
+        logger.debug("project_run_memory failed; continuing without project memory", exc_info=True)
+    return ""
 
 
 def build_loop_runtime_bundle(
@@ -169,4 +205,5 @@ def build_loop_runtime_bundle(
             ctx,
             include_workspace_write_note=include_workspace_write_note,
         ),
+        project_memory=project_run_memory(ctx),
     )

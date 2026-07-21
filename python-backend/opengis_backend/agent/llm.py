@@ -395,6 +395,10 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     cache_creation = int(_usage_field(usage, "cache_creation_input_tokens") or 0)
     if cache_read:
         cached = max(cached, cache_read)
+    # DeepSeek-compatible providers report hit/miss on the input directly.
+    deepseek_hit = int(_usage_field(usage, "prompt_cache_hit_tokens") or 0)
+    if deepseek_hit:
+        cached = max(cached, deepseek_hit)
 
     out["prompt_tokens"] = prompt
     out["completion_tokens"] = completion
@@ -402,6 +406,25 @@ def _extract_usage(response: Any) -> dict[str, Any]:
     out["cached_tokens"] = cached
     out["cache_read_input_tokens"] = cache_read
     out["cache_creation_input_tokens"] = cache_creation
+
+    # Normalized derived view (docs 3.5 UsageNormalizer). Providers that do not
+    # report any cache accounting are marked explicitly so the UI does not show
+    # a misleading 0% hit.
+    out["non_cached_input_tokens"] = max(0, prompt - cached)
+    reports_cache = (
+        cached > 0
+        or cache_read > 0
+        or cache_creation > 0
+        or _usage_field(usage, "prompt_tokens_details") is not None
+        or deepseek_hit > 0
+        or _usage_field(usage, "prompt_cache_miss_tokens") is not None
+    )
+    if not reports_cache:
+        out["cache_status"] = "provider_not_reported"
+        out["cache_hit_ratio"] = None
+    else:
+        out["cache_status"] = "reported"
+        out["cache_hit_ratio"] = round(cached / prompt, 4) if prompt > 0 else 0.0
     return out
 
 

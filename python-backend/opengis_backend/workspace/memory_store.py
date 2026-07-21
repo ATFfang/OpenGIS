@@ -159,6 +159,7 @@ class MemoryStore:
         scopes: list[str] | None = None,
         kinds: list[str] | None = None,
         limit: int = 12,
+        touch: bool = True,
     ) -> list[MemoryRecord]:
         terms = _tokenize(query)
         records = self.list(kinds=kinds, limit=1000)
@@ -171,9 +172,17 @@ class MemoryStore:
             if score <= 0:
                 continue
             scored.append((score, record))
-        scored.sort(key=lambda item: item[0], reverse=True)
+        # Deterministic ordering: relevance desc, then newest-first, then id.
+        # A stable tie-breaker keeps the retrieved set byte-identical across
+        # turns so any cacheable prompt text that embeds it does not drift.
+        scored.sort(key=lambda item: (-item[0], -item[1].created_at, item[1].id))
         selected = [record for _, record in scored[: max(1, limit)]]
-        self._touch(selected)
+        # ``_touch`` mutates last_used_at, which reorders future retrievals.
+        # The prompt-projection path passes ``touch=False`` so reading memory
+        # for the prompt never perturbs subsequent retrievals (a structural
+        # source of turn-to-turn drift).
+        if touch:
+            self._touch(selected)
         return selected
 
     def _read_file(self, path: Path) -> list[MemoryRecord]:
@@ -253,8 +262,11 @@ class MemoryStore:
             base = sum(1.0 for term in terms if term in haystack)
         if base <= 0:
             return 0.0
-        recency = min(0.5, max(0.0, (record.last_used_at or record.created_at) / max(time.time(), 1.0)) * 0.5)
-        return base + record.confidence + recency
+        # Deterministic score: NO wall-clock term. A time-based recency factor
+        # made the float score (and thus the ordering) drift every call, which
+        # broke prompt-prefix stability. Recency is now expressed only through
+        # the stable ``created_at`` tie-breaker in :py:meth:`search`.
+        return base + record.confidence
 
     @staticmethod
     def _is_duplicate(path: Path, record: MemoryRecord) -> bool:

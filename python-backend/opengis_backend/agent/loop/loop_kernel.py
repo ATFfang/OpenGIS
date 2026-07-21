@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_manager import ContextManager
-from opengis_backend.agent.context.provider_request import ProviderRequest, PromptSection
+from opengis_backend.agent.context.provider_request import ProviderRequest
 from opengis_backend.agent.context.provider_request_adapter import ProviderRequestAdapter
 from opengis_backend.agent.context.request_budget import RequestBudgetManager, RequestBudgetReport
 from opengis_backend.agent.execution.tool_materializer import (
@@ -136,15 +136,9 @@ class LoopKernel:
         budget_limits = budget_manager.suggest_limits(
             live_tokens=self.context.estimate_live_tokens(),
         )
-        context_t0 = time.monotonic()
-        messages = self.context.build_messages(
-            request.system_prompt,
-            user_instructions=request.user_instructions,
-            exclude_workflow_context=request.exclude_workflow_context,
-            projection_limits=budget_limits,
-        )
-        context_build_ms = (time.monotonic() - context_t0) * 1000
 
+        # Materialize tools first: the active-tool hint is a STABLE prefix
+        # section, so it must be known before assembling the request.
         materialization_options = dict(request.materialization_options or {})
         if request.disable_tools:
             materialization = ToolMaterialization(
@@ -167,17 +161,35 @@ class LoopKernel:
             if materialization is not None
             else self.tool_schemas
         )
+
+        # Split inserts by stability: active-tool hint is profile-stable and
+        # belongs in the cacheable prefix; runtime control messages (turn
+        # objective / final-turn instruction / deviation feedback) are
+        # turn-dynamic and belong in the DYNAMIC TAIL after history.
         active_tool_prompt = format_active_tool_prompt(materialization)
-        system_inserts = list(request.extra_system_messages or [])
+        stable_system_sections: list[tuple[str, str]] = []
         if active_tool_prompt:
-            system_inserts.append(active_tool_prompt)
-        if system_inserts:
-            messages = [
-                messages[0],
-                *({"role": "system", "content": content} for content in system_inserts if content),
-                *messages[1:],
-            ]
-        messages = _ensure_provider_tool_protocol(messages)
+            stable_system_sections.append(("system.active_tools", active_tool_prompt))
+        dynamic_tail_sections: list[tuple[str, str]] = [
+            (f"runtime.control_{index + 1}", content)
+            for index, content in enumerate(request.extra_system_messages or [])
+            if content
+        ]
+
+        def _assemble(limits: Any) -> tuple[ProviderRequest, list[dict[str, Any]]]:
+            provider_request = self.context.build_provider_request(
+                request.system_prompt,
+                user_instructions=request.user_instructions,
+                exclude_workflow_context=request.exclude_workflow_context,
+                projection_limits=limits,
+                stable_system_sections=stable_system_sections,
+                dynamic_tail_sections=dynamic_tail_sections,
+            )
+            return provider_request, _ensure_provider_tool_protocol(provider_request.messages)
+
+        context_t0 = time.monotonic()
+        provider_request, messages = _assemble(budget_limits)
+        context_build_ms = (time.monotonic() - context_t0) * 1000
 
         budget_report = self._analyze_request_budget(messages, active_tool_schemas)
         if (
@@ -194,22 +206,9 @@ class LoopKernel:
                 budget_report.pressure,
                 budget_report.total_tokens,
             )
-            messages = self.context.build_messages(
-                request.system_prompt,
-                user_instructions=request.user_instructions,
-                exclude_workflow_context=request.exclude_workflow_context,
-                projection_limits=budget_limits,
-            )
-            if system_inserts:
-                messages = [
-                    messages[0],
-                    *({"role": "system", "content": content} for content in system_inserts if content),
-                    *messages[1:],
-                ]
-            messages = _ensure_provider_tool_protocol(messages)
+            provider_request, messages = _assemble(budget_limits)
             budget_report = self._analyze_request_budget(messages, active_tool_schemas)
 
-        provider_request = _provider_request_from_messages(messages)
         prompt_cache_plan = ProviderRequestAdapter(provider_request).prompt_cache_plan(
             model=str(getattr(self.llm_call, "opengis_model", "") or ""),
             provider=str(getattr(self.llm_call, "opengis_provider", "") or ""),
@@ -278,6 +277,9 @@ class LoopKernel:
                         "section_count": len(provider_request.sections),
                         "sections": provider_request.section_debug(),
                         "cacheable_prefix_hash": provider_request.cacheable_prefix_hash,
+                        "system_prefix_hash": provider_request.system_prefix_hash,
+                        "dynamic_suffix_hash": provider_request.dynamic_suffix_hash,
+                        "tool_schema_hash": prompt_cache_plan.tool_schema_hash,
                         "tool_schema_count": len(active_tool_schemas or []),
                         "tool_schema_total": telemetry.tool_schema_total,
                         "tool_schema_reason": telemetry.tool_schema_reason,
@@ -382,37 +384,6 @@ class LoopKernel:
         return RequestBudgetManager(
             input_token_budget=getattr(self.context, "token_budget", 100_000),
         ).analyze(messages=messages, tools=active_tool_schemas or [])
-
-
-def _provider_request_from_messages(messages: list[dict[str, Any]]) -> ProviderRequest:
-    """Wrap the already-built provider messages in cache diagnostic sections.
-
-    This is intentionally observational: it must not reorder or rewrite the
-    messages sent to the model on this branch.
-    """
-    if not messages:
-        return ProviderRequest(messages=[], sections=[])
-    sections: list[PromptSection] = [
-        PromptSection(
-            id="system.base",
-            kind="system",
-            messages=[dict(messages[0])],
-            stability="static",
-            cache_policy="cacheable",
-        )
-    ]
-    if len(messages) > 1:
-        sections.append(
-            PromptSection(
-                id="context.cacheable_prefix",
-                kind="history",
-                messages=[dict(message) for message in messages[1:]],
-                stability="turn_dynamic",
-                cache_policy="breakpoint",
-                metadata={"observational": True},
-            )
-        )
-    return ProviderRequest(messages=messages, sections=sections)
 
 
 def _ensure_provider_tool_protocol(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

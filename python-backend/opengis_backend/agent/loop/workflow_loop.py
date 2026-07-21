@@ -99,6 +99,9 @@ class WorkflowLoop:
     tool_runtime: Optional[ToolRuntime] = None
     tool_schemas: Optional[list[dict]] = None
     tool_materializer: Optional[ToolMaterializer] = None
+    # Task-relevant project memory for the current user request. Injected into
+    # the DYNAMIC TAIL (after history), never into the cacheable stable prefix.
+    project_memory: str = ""
     # Workspace path for writing intermediate files.
     workspace: str = ""
     # When True, the workflow stops immediately if any node fails
@@ -297,6 +300,7 @@ class WorkflowLoop:
                     tool_result_scope_kind="workflow_tool_result",
                     tool_progress_label=f"Step {step_index}: {node.title}",
                     force_all_tools=force_all_tools_once,
+                    extra_system_messages=[self.project_memory] if self.project_memory else None,
                 )
             )
             force_all_tools_once = False

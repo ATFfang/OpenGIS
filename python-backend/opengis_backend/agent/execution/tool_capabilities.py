@@ -94,9 +94,56 @@ def tools_with_side_effect(side_effect: str) -> set[str]:
     return {name for name, capability in CAPABILITIES.items() if capability.side_effect == side_effect}
 
 
+# Human-readable, domain-level description of what the platform can do. Keyed by
+# ``ToolCapability.domain`` so the manifest stays in sync with the capability
+# table. Ordering below is irrelevant: the manifest renderer sorts domains for
+# byte-stable output.
+_DOMAIN_MANIFEST_LABELS: dict[str, str] = {
+    "map": "Map & GIS — add/query/remove layers, categorized/graduated/extrusion styling, labels, filters, legends, raster layers, 2D/3D view and camera control",
+    "operation": "Operations — list, inspect, validate, create, copy, edit, run and promote reusable geoprocessing operations",
+    "file": "Files — read, write, edit, glob and grep files and directories in the workspace",
+    "code": "Code — execute Python through execute_code and run persisted script files",
+    "system": "System — run shell commands",
+    "worker": "Resident workers — start, pause, restart, delete, inspect and stream long-running / dynamic map workers",
+    "workflow": "Workflows — orchestrate multi-step DAG workflows",
+    "data": "Data — convert and inspect datasets (e.g. CSV to GeoJSON)",
+    "debug": "Debug — inspect agent context and observability state",
+    "general": "General-purpose tools",
+}
+
+
+def format_capability_manifest(tool_names: list[str]) -> str:
+    """Render a STABLE, domain-level statement of platform capabilities.
+
+    This is deterministic given the profile's tool set (domains are sorted, no
+    per-turn state), so it rides the cacheable stable prefix untouched. Its job
+    is to tell the model which capability *domains* exist so it never claims a
+    supported capability is missing merely because a specific function is not
+    in the current turn's tool list.
+    """
+    domains: dict[str, bool] = {}
+    for name in tool_names:
+        domains[capability_for(name).domain] = True
+    if not domains:
+        return ""
+    lines = [
+        "## Platform Capabilities",
+        "This platform natively supports the capability domains listed below. "
+        "If a task fits one of these domains, the capability EXISTS — locate and "
+        "call the matching function tool (the per-turn function list is the "
+        "source of truth for exact names and parameters). Never tell the user a "
+        "supported capability is unavailable; if you cannot see a specific tool, "
+        "state precisely which capability you need.",
+    ]
+    for domain in sorted(domains):
+        lines.append(f"- {_DOMAIN_MANIFEST_LABELS.get(domain, domain)}")
+    return "\n".join(lines)
+
+
 __all__ = [
     "CAPABILITIES",
     "ToolCapability",
     "capability_for",
     "tools_with_side_effect",
+    "format_capability_manifest",
 ]

@@ -1265,6 +1265,24 @@ export function SettingsView() {
                                     <span className="italic">+{(latestRunUsage.prompt_cache?.sections?.length || 0) - 3} {t.runs.more}</span>
                                   )}
                                 </div>
+                                {promptCacheStats.hasSegmentHash && (
+                                  <div className="rounded border border-border/60 bg-bg-secondary/40 px-2 py-1.5 space-y-1">
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                                      <span className="text-text-muted/90">{t.settings.promptCacheSegmentHash}</span>
+                                      <span className={`rounded px-1.5 py-0.5 ${promptCacheStats.systemPrefixStable ? 'bg-green-500/12 text-green-500' : 'bg-red-500/15 text-red-500'}`}>
+                                        {promptCacheStats.systemPrefixStable ? t.settings.promptCachePrefixStable : t.settings.promptCachePrefixBroken}
+                                      </span>
+                                      <span className={`rounded px-1.5 py-0.5 ${promptCacheStats.toolSchemaStable ? 'bg-green-500/12 text-green-500' : 'bg-amber-500/15 text-amber-500'}`}>
+                                        {promptCacheStats.toolSchemaStable ? t.settings.promptCacheToolStable : t.settings.promptCacheToolChanged}
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                                      <span>{t.settings.promptCacheSystemPrefixHash}: <span className="font-mono">{promptCacheStats.systemPrefixHashLabel}</span>{promptCacheStats.systemPrefixHashCount > 1 && <span className="text-red-500"> ×{promptCacheStats.systemPrefixHashCount}</span>}</span>
+                                      <span>{t.settings.promptCacheDynamicSuffixHash}: <span className="font-mono">{promptCacheStats.dynamicSuffixHashLabel}</span></span>
+                                      <span>{t.settings.promptCacheToolSchemaHash}: <span className="font-mono">{promptCacheStats.toolSchemaHashLabel}</span>{promptCacheStats.toolSchemaHashCount > 1 && <span className="text-amber-500"> ×{promptCacheStats.toolSchemaHashCount}</span>}</span>
+                                    </div>
+                                  </div>
+                                )}
                                 <p className="text-[11px] leading-relaxed text-text-muted/75">
                                   {t.settings.promptCacheDeepSeekHint}
                                 </p>
@@ -1665,6 +1683,14 @@ function summarizePromptCacheUsage(records: RunLLMUsageRecord[]) {
     hitTokensLabel: metrics.hasHitMiss || metrics.hasCached ? String(Math.round(metrics.hasHitMiss ? metrics.hitTokens : metrics.cachedTokens)) : '—',
     missTokensLabel: metrics.hasHitMiss ? String(Math.round(metrics.missTokens)) : '—',
     hitRatioLabel: metrics.hitRatio == null ? '—' : `${Math.round(metrics.hitRatio * 1000) / 10}%`,
+    systemPrefixHashLabel: metrics.systemPrefixHash ? metrics.systemPrefixHash.slice(0, 12) : '—',
+    dynamicSuffixHashLabel: metrics.dynamicSuffixHash ? metrics.dynamicSuffixHash.slice(0, 12) : '—',
+    toolSchemaHashLabel: metrics.toolSchemaHash ? metrics.toolSchemaHash.slice(0, 12) : '—',
+    systemPrefixStable: metrics.systemPrefixStable,
+    toolSchemaStable: metrics.toolSchemaStable,
+    systemPrefixHashCount: metrics.systemPrefixHashCount,
+    toolSchemaHashCount: metrics.toolSchemaHashCount,
+    hasSegmentHash: Boolean(metrics.systemPrefixHash || metrics.dynamicSuffixHash || metrics.toolSchemaHash),
   }
 }
 
@@ -1686,12 +1712,36 @@ function collectPromptCacheMetrics(records: RunLLMUsageRecord[]) {
     mode: '',
     note: '',
     hitRatio: null as number | null,
+    systemPrefixHash: '',
+    dynamicSuffixHash: '',
+    toolSchemaHash: '',
+    systemPrefixHashCount: 0,
+    toolSchemaHashCount: 0,
+    systemPrefixStable: true,
+    toolSchemaStable: true,
   }
+
+  const systemPrefixHashes = new Set<string>()
+  const toolSchemaHashes = new Set<string>()
 
   for (const record of records || []) {
     const usage = record.usage || {}
     const telemetry = record.telemetry || {}
     const promptCache = record.prompt_cache || {}
+    const request = record.request || {}
+
+    const systemPrefixHash = String(request.system_prefix_hash || '')
+    const dynamicSuffixHash = String(request.dynamic_suffix_hash || '')
+    const toolSchemaHash = String(request.tool_schema_hash || promptCache.tool_schema_hash || '')
+    if (systemPrefixHash) {
+      systemPrefixHashes.add(systemPrefixHash)
+      metrics.systemPrefixHash = systemPrefixHash
+    }
+    if (dynamicSuffixHash) metrics.dynamicSuffixHash = dynamicSuffixHash
+    if (toolSchemaHash) {
+      toolSchemaHashes.add(toolSchemaHash)
+      metrics.toolSchemaHash = toolSchemaHash
+    }
     metrics.enabled = metrics.enabled || Boolean(promptCache.enabled)
     metrics.sent = metrics.sent || Boolean(promptCache.prompt_cache_key_sent)
     metrics.status = String(promptCache.prompt_cache_key_status || metrics.status || '')
@@ -1747,6 +1797,12 @@ function collectPromptCacheMetrics(records: RunLLMUsageRecord[]) {
     : metrics.hasCached && metrics.hasInput && metrics.inputTokens > 0
       ? Math.max(0, Math.min(1, metrics.cachedTokens / metrics.inputTokens))
       : null
+
+  metrics.systemPrefixHashCount = systemPrefixHashes.size
+  metrics.toolSchemaHashCount = toolSchemaHashes.size
+  // 稳定前缀应跨 turn 恒定：只要出现 >1 个不同 hash，说明前缀在会话中途被打断。
+  metrics.systemPrefixStable = systemPrefixHashes.size <= 1
+  metrics.toolSchemaStable = toolSchemaHashes.size <= 1
   return metrics
 }
 

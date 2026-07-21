@@ -137,6 +137,7 @@ def build_workflow_loop(
         tool_runtime=runtime.tool_runtime,
         tool_schemas=runtime.tool_schemas,
         tool_materializer=ToolMaterializer(runtime.tool_schemas),
+        project_memory=runtime.project_memory,
         workspace=str((getattr(ctx, "meta", None) or {}).get("workspace_path", "")),
     )
 

@@ -58,7 +58,10 @@ class ContextProjector:
                 "Do not start workflows, subagents, reports, or broad analysis unless explicitly asked."
             )
 
-        records = self.store.search(user_message, limit=max_records)
+        # touch=False: projecting memory into the prompt must not mutate
+        # last_used_at, otherwise the next retrieval reorders and the injected
+        # text drifts turn-to-turn (breaking prefix stability).
+        records = self.store.search(user_message, limit=max_records, touch=False)
         if not records:
             return ""
         return self.format(records)

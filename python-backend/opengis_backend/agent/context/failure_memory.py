@@ -144,7 +144,9 @@ class FailureMemoryProjector:
     def project(self, query: str, *, limit: int = 4) -> str:
         if not self.workspace_path:
             return ""
-        records = self.store.search(query, kinds=["failure_lesson"], limit=limit)
+        # touch=False: this projection feeds prompt text; mutating last_used_at
+        # here would reorder future retrievals and destabilize the prompt.
+        records = self.store.search(query, kinds=["failure_lesson"], limit=limit, touch=False)
         if not records:
             return ""
         return self.format(records)

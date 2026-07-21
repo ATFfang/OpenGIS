@@ -88,6 +88,9 @@ class AgentLoop:
     context: ContextManager = field(default_factory=ContextManager)
     user_instructions: Optional[str] = None
     agent_profile: Optional[AgentProfile] = None
+    # Task-relevant project memory for the current user message. Injected into
+    # the DYNAMIC TAIL (after history), never into the cacheable stable prefix.
+    project_memory: str = ""
     exclude_workflow_context: bool = True
     # Set by external code (e.g. cancel handler) to signal the loop to
     # stop at the next safe point. Checked at the top of each iteration.
@@ -190,6 +193,10 @@ class AgentLoop:
                 else None
             )
             system_inserts = list(extra_system_messages or [])
+            # Project memory rides the DYNAMIC TAIL (keyed on the user message,
+            # changes per run) so it never breaks the cacheable stable prefix.
+            if self.project_memory:
+                system_inserts.append(self.project_memory)
             system_inserts.append(runtime_control.system_prompt())
             outcome = kernel.run_turn(
                 LoopTurnRequest(
