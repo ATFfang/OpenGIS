@@ -84,6 +84,7 @@ class AgentLoop:
     on_code_start: Optional[Callable[[int], None]] = None  # arg: step number (1-indexed code step)
     on_code_delta: Optional[Callable[[int, str], None]] = None
     on_code_end: Optional[Callable[[int], None]] = None
+    on_provider_result: Optional[Callable[..., None]] = None
     context: ContextManager = field(default_factory=ContextManager)
     user_instructions: Optional[str] = None
     agent_profile: Optional[AgentProfile] = None
@@ -153,6 +154,7 @@ class AgentLoop:
                 on_code_end=self.on_code_end,
                 on_tool_start=self.on_tool_start,
                 on_tool_result=self.on_tool_result,
+                on_provider_result=self.on_provider_result,
             ),
         )
 

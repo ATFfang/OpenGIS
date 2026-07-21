@@ -1320,6 +1320,7 @@ class RpcHandler:
             "artifacts": ra.read_artifacts(),
             "events": ra.read_events(),
             "message_parts": ra.read_message_parts(),
+            "llm_usage": ra.read_llm_usage(),
         }
 
     def _operation_store(self, params: dict) -> OperationStore:

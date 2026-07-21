@@ -80,6 +80,8 @@ class LLMResponse:
     content: str | None = None
     tool_calls: list[dict] | None = None
     finish_reason: str = "stop"  # "stop" | "tool_calls" | "length"
+    usage: dict[str, Any] | None = None
+    prompt_cache: dict[str, Any] | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -335,6 +337,105 @@ def _extract_finish_reason(choice: Any) -> str:
     return str(fr or "stop")
 
 
+def _usage_field(obj: Any, name: str) -> Any:
+    value = getattr(obj, name, None)
+    if value is None and isinstance(obj, dict):
+        value = obj.get(name)
+    return value
+
+
+def _to_plain_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _to_plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_plain_jsonable(v) for v in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _to_plain_jsonable(value.model_dump())
+        except Exception:
+            pass
+    if hasattr(value, "dict"):
+        try:
+            return _to_plain_jsonable(value.dict())
+        except Exception:
+            pass
+    try:
+        return {
+            key: _to_plain_jsonable(getattr(value, key))
+            for key in dir(value)
+            if not key.startswith("_") and not callable(getattr(value, key, None))
+        }
+    except Exception:
+        return str(value)
+
+
+def _extract_usage(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is None:
+        return {}
+
+    plain = _to_plain_jsonable(usage)
+    out: dict[str, Any] = dict(plain) if isinstance(plain, dict) else {}
+    prompt = int(_usage_field(usage, "prompt_tokens") or _usage_field(usage, "input_tokens") or 0)
+    completion = int(_usage_field(usage, "completion_tokens") or _usage_field(usage, "output_tokens") or 0)
+    total = int(_usage_field(usage, "total_tokens") or 0)
+
+    cached = 0
+    details = _usage_field(usage, "prompt_tokens_details")
+    if details is not None:
+        cached = int(_usage_field(details, "cached_tokens") or 0)
+    input_details = _usage_field(usage, "input_tokens_details") or _usage_field(usage, "input_token_details")
+    if input_details is not None:
+        cached = max(cached, int(_usage_field(input_details, "cached_tokens") or _usage_field(input_details, "cache_read") or 0))
+    cache_read = int(_usage_field(usage, "cache_read_input_tokens") or 0)
+    cache_creation = int(_usage_field(usage, "cache_creation_input_tokens") or 0)
+    if cache_read:
+        cached = max(cached, cache_read)
+
+    out["prompt_tokens"] = prompt
+    out["completion_tokens"] = completion
+    out["total_tokens"] = total
+    out["cached_tokens"] = cached
+    out["cache_read_input_tokens"] = cache_read
+    out["cache_creation_input_tokens"] = cache_creation
+    return out
+
+
+def _provider_cache_mode(model: str, api_base: str | None) -> str:
+    route = f"{model or ''} {api_base or ''}".lower()
+    if "deepseek" in route:
+        return "deepseek_automatic"
+    if "anthropic" in route or "claude" in route:
+        return "anthropic_cache_control"
+    if "openai" in route or model.startswith("openai/"):
+        return "openai_automatic"
+    return "provider_reported"
+
+
+def _build_prompt_cache_info(
+    *,
+    metadata: dict[str, Any] | None,
+    model: str,
+    api_base: str | None,
+) -> dict[str, Any]:
+    info = dict(metadata or {})
+    mode = _provider_cache_mode(model, api_base)
+    info.setdefault("provider_cache_mode", mode)
+    if mode == "deepseek_automatic":
+        info.setdefault("prompt_cache_key_sent", False)
+        info.setdefault("prompt_cache_key_status", "automatic_provider_cache")
+        info.setdefault("provider_cache_note", "deepseek_automatic_cache_no_request_hint")
+    else:
+        info.setdefault("prompt_cache_key_sent", False)
+        info.setdefault("prompt_cache_key_status", "observe_only")
+        info.setdefault("provider_cache_note", "provider_usage_accounting_only")
+    return info
+
+
 # ──────────────────────────────────────────────────────────────────
 # Factory — direct litellm caller
 # ──────────────────────────────────────────────────────────────────
@@ -366,6 +467,8 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
         on_delta: Callable[[str], None] | None = None,
         on_tool_delta: Callable[[int, str, dict[str, Any]], None] | None = None,
         tools: list[dict] | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": resolved_model,
@@ -379,48 +482,70 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
         if tools:
             kwargs["tools"] = tools
             logger.info("[LLM] Passing %d tools to LLM: %s", len(tools), [t.get("function", {}).get("name", "?") for t in tools[:10]])
+        prompt_cache_info = _build_prompt_cache_info(
+            metadata=prompt_cache_metadata,
+            model=resolved_model,
+            api_base=api_base,
+        )
+        if prompt_cache_key:
+            prompt_cache_info.setdefault("cache_key", prompt_cache_key)
 
         # Non-streaming fast path
         if on_delta is None:
             response = litellm.completion(**kwargs)
             choice = response.choices[0]
             msg = choice.message
-            return _normalize_llm_message(
+            out = _normalize_llm_message(
                 msg.content or None,
                 _extract_tool_calls(msg),
                 finish_reason=_extract_finish_reason(choice),
             )
+            out.usage = _extract_usage(response)
+            out.prompt_cache = prompt_cache_info
+            return out
 
         # Streaming path.
         kwargs["stream"] = True
+        kwargs.setdefault("stream_options", {"include_usage": True})
         try:
             stream = litellm.completion(**kwargs)
         except Exception:
-            logger.warning("streaming completion failed, retrying non-streaming", exc_info=True)
-            kwargs.pop("stream", None)
-            response = litellm.completion(**kwargs)
-            choice = response.choices[0]
-            msg = choice.message
-            full = msg.content or None
-            repaired = _normalize_llm_message(
-                full,
-                _extract_tool_calls(msg),
-                finish_reason=_extract_finish_reason(choice),
-            )
-            if repaired.content:
-                try:
-                    on_delta(repaired.content)
-                except Exception:
-                    logger.exception("on_delta callback raised on fallback path")
-            return repaired
+            logger.warning("streaming completion with usage failed, retrying streaming without usage metadata", exc_info=True)
+            kwargs.pop("stream_options", None)
+            try:
+                stream = litellm.completion(**kwargs)
+            except Exception:
+                logger.warning("streaming completion failed, retrying non-streaming", exc_info=True)
+                kwargs.pop("stream", None)
+                response = litellm.completion(**kwargs)
+                choice = response.choices[0]
+                msg = choice.message
+                full = msg.content or None
+                repaired = _normalize_llm_message(
+                    full,
+                    _extract_tool_calls(msg),
+                    finish_reason=_extract_finish_reason(choice),
+                )
+                repaired.usage = _extract_usage(response)
+                repaired.prompt_cache = prompt_cache_info
+                if repaired.content:
+                    try:
+                        on_delta(repaired.content)
+                    except Exception:
+                        logger.exception("on_delta callback raised on fallback path")
+                return repaired
 
         # Collect streaming chunks
         parts: list[str] = []
         # For streaming tool_calls, we need to collect them incrementally
         streaming_tool_calls: dict[int, dict] = {}  # index -> {id, name, arguments_parts}
         finish_reason = "stop"
+        stream_usage: dict[str, Any] = {}
 
         for chunk in stream:
+            chunk_usage = _extract_usage(chunk)
+            if chunk_usage.get("prompt_tokens") or chunk_usage.get("total_tokens"):
+                stream_usage = chunk_usage
             choice = getattr(chunk, "choices", [None])[0] if hasattr(chunk, "choices") else None
             if choice is None:
                 continue
@@ -507,14 +632,21 @@ def build_llm_caller(config: LLMConfig) -> LLMCaller:
             tool_calls,
             finish_reason=finish_reason,
         )
+        response.usage = stream_usage
+        response.prompt_cache = prompt_cache_info
 
-        logger.info("[LLM] Response: content_len=%d, tool_calls=%d, finish_reason=%s",
+        logger.info("[LLM] Response: content_len=%d, tool_calls=%d, finish_reason=%s, cached_tokens=%d/%d",
                    len(response.content) if response.content else 0,
                    len(response.tool_calls) if response.tool_calls else 0,
-                   response.finish_reason)
+                   response.finish_reason,
+                   stream_usage.get("cached_tokens", 0),
+                   stream_usage.get("prompt_tokens", 0))
 
         return response
 
+    setattr(_call, "opengis_model", resolved_model)
+    setattr(_call, "opengis_provider", config.protocol or "")
+    setattr(_call, "opengis_base_url", api_base or "")
     return _call
 
 

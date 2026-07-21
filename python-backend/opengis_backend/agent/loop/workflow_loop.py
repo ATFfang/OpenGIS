@@ -92,6 +92,7 @@ class WorkflowLoop:
     on_code_end: Optional[Callable[[int], None]] = None
     on_tool_start: Optional[Callable[[str, dict, str], None]] = None
     on_tool_result: Optional[Callable[..., None]] = None
+    on_provider_result: Optional[Callable[..., None]] = None
     # Plan callback — emits plan_update events for compact workflow UI.
     plan_callback: Optional[Callable[[dict], None]] = None
     context: ContextManager = field(default_factory=ContextManager)
@@ -261,6 +262,7 @@ class WorkflowLoop:
                 on_code_end=self.on_code_end,
                 on_tool_start=self.on_tool_start,
                 on_tool_result=self.on_tool_result,
+                on_provider_result=self.on_provider_result,
             ),
         )
 
@@ -530,7 +532,10 @@ class WorkflowLoop:
                 base_delay=LLM_BASE_DELAY,
                 progress_callback=self.progress_callback,
                 interrupted=lambda: self._interrupted,
-                hooks=LoopKernelHooks(on_thought_delta=self.on_thought_delta),
+                hooks=LoopKernelHooks(
+                    on_thought_delta=self.on_thought_delta,
+                    on_provider_result=self.on_provider_result,
+                ),
             )
             outcome = summary_kernel.run_turn(
                 LoopTurnRequest(

@@ -82,7 +82,7 @@ class ProviderContextProjector:
             if exclude_workflow_context and self.is_workflow_context_message(msg):
                 continue
             result.append(self.message_for_provider(msg, project=False))
-        return result
+        return self.ensure_tool_protocol(result)
 
     def build_recent_user_anchor(
         self,
@@ -155,6 +155,106 @@ class ProviderContextProjector:
                 # of truth and drop any draft XML/markdown content.
                 out["content"] = ""
         return out
+
+    def ensure_tool_protocol(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return OpenAI-compatible messages with no orphan ``role=tool`` entries.
+
+        Projection is allowed to trim the raw conversation window. If that cut
+        lands between an assistant ``tool_calls`` message and its tool results,
+        the OpenAI protocol rejects the whole request. Treat incomplete
+        historical tool-call transactions as ordinary system summaries instead
+        of leaking half of the structured protocol.
+        """
+        out: list[dict[str, Any]] = []
+        pending_buffer: list[dict[str, Any]] = []
+        pending_ids: set[str] = set()
+
+        def flush_pending_as_summary() -> None:
+            nonlocal pending_buffer, pending_ids
+            if not pending_buffer:
+                return
+            out.append(self.tool_transaction_summary(pending_buffer, pending_ids))
+            pending_buffer = []
+            pending_ids = set()
+
+        for msg in messages:
+            role = msg.get("role")
+            if pending_buffer:
+                if role == "tool" and str(msg.get("tool_call_id") or "") in pending_ids:
+                    pending_buffer.append(msg)
+                    pending_ids.discard(str(msg.get("tool_call_id") or ""))
+                    if not pending_ids:
+                        out.extend(pending_buffer)
+                        pending_buffer = []
+                    continue
+                flush_pending_as_summary()
+
+            tool_calls = msg.get("tool_calls")
+            if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+                ids = {
+                    str(tool_call.get("id") or "")
+                    for tool_call in tool_calls
+                    if isinstance(tool_call, dict) and str(tool_call.get("id") or "")
+                }
+                if ids:
+                    pending_buffer = [msg]
+                    pending_ids = ids
+                else:
+                    out.append(self.tool_transaction_summary([msg], set()))
+                continue
+
+            if role == "tool":
+                out.append(self.orphan_tool_result_summary(msg))
+                continue
+
+            out.append(msg)
+
+        flush_pending_as_summary()
+        return out
+
+    def tool_transaction_summary(
+        self,
+        messages: list[dict[str, Any]],
+        missing_ids: set[str],
+    ) -> dict[str, Any]:
+        assistant = messages[0] if messages else {}
+        names: list[str] = []
+        tool_calls = assistant.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+                if isinstance(fn, dict):
+                    names.append(str(fn.get("name") or "unknown"))
+        result_notes: list[str] = []
+        for msg in messages[1:]:
+            if msg.get("role") != "tool":
+                continue
+            result_notes.append(
+                f"{msg.get('name') or 'tool'} id={msg.get('tool_call_id') or '?'} "
+                f"chars={len(str(msg.get('content') or ''))}"
+            )
+        missing = f" missing_ids={','.join(sorted(missing_ids))}" if missing_ids else ""
+        results = f" results={'; '.join(result_notes[:6])}" if result_notes else ""
+        return {
+            "role": "system",
+            "content": (
+                "[Historical tool-call transaction summarized because the provider "
+                "projection did not contain a complete assistant/tool sequence.] "
+                f"tool_calls={', '.join(names) or 'unknown'}{missing}{results}"
+            ),
+        }
+
+    def orphan_tool_result_summary(self, msg: dict[str, Any]) -> dict[str, Any]:
+        name = str(msg.get("name") or "tool")
+        tool_call_id = str(msg.get("tool_call_id") or "")
+        content = compact_inline(str(msg.get("content") or ""), 900)
+        return {
+            "role": "system",
+            "content": (
+                "[Historical orphan tool result summarized for provider protocol safety.] "
+                f"tool={name} tool_call_id={tool_call_id or '?'} content={content}"
+            ),
+        }
 
     def build_digest(self, messages: list[dict]) -> str:
         if not messages:

@@ -5,6 +5,7 @@ from opengis_backend.agent.execution.tool_result import ToolExecutionResult
 from opengis_backend.agent.governance.profile import AgentMode, AgentProfile, PermissionLevel
 from opengis_backend.agent.llm import LLMResponse, _extract_xmlish_tool_calls
 from opengis_backend.agent.loop.agent_loop import AgentLoop
+from opengis_backend.agent.loop.loop_kernel import _ensure_provider_tool_protocol
 from opengis_backend.agent.loop.turn_runner import tool_intent_progress
 
 
@@ -32,6 +33,18 @@ class OperationRepairFakeRuntime(FakeToolRuntime):
 
 
 class AgentLoopFunctionCallTests(unittest.TestCase):
+    def test_provider_tool_protocol_sanitizer_removes_orphan_tool_result(self) -> None:
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "tool", "tool_call_id": "call-missing", "name": "execute_code", "content": "ok"},
+            {"role": "user", "content": "continue"},
+        ]
+
+        sanitized = _ensure_provider_tool_protocol(messages)
+
+        self.assertFalse(any(message.get("role") == "tool" for message in sanitized))
+        self.assertIn("orphan tool result", sanitized[1]["content"])
+
     def test_tool_intent_progress_is_semantic(self) -> None:
         stage, detail = tool_intent_progress(
             "zoom_to_layer",

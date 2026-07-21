@@ -160,6 +160,7 @@ class RunArchive:
         (run_dir / "artifacts.jsonl").touch()
         (run_dir / "events.jsonl").touch()
         (run_dir / "message_parts.jsonl").touch()
+        (run_dir / "llm_usage.jsonl").touch()
         logger.info("RunArchive opened at %s", run_dir)
         return archive
 
@@ -292,6 +293,36 @@ class RunArchive:
             self._flush_meta()
         except Exception:
             logger.exception("record_session failed for run=%s", self.run_id)
+
+    def record_llm_usage(
+        self,
+        *,
+        usage: dict[str, Any] | None = None,
+        prompt_cache: dict[str, Any] | None = None,
+        telemetry: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
+    ) -> None:
+        """Append one provider-turn usage record for token/cache diagnostics."""
+        entry = {
+            "run_id": self.run_id,
+            "usage": usage or {},
+            "prompt_cache": prompt_cache or {},
+            "telemetry": telemetry or {},
+            "request": request or {},
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        }
+        try:
+            with (self.run_dir / "llm_usage.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            self._meta["llm_turn_count"] = int(self._meta.get("llm_turn_count", 0)) + 1
+            usage_data = entry["usage"]
+            if isinstance(usage_data, dict):
+                self._meta["llm_total_tokens"] = int(self._meta.get("llm_total_tokens", 0)) + int(usage_data.get("total_tokens") or 0)
+                self._meta["llm_prompt_tokens"] = int(self._meta.get("llm_prompt_tokens", 0)) + int(usage_data.get("prompt_tokens") or usage_data.get("input_tokens") or 0)
+                self._meta["llm_cached_tokens"] = int(self._meta.get("llm_cached_tokens", 0)) + int(usage_data.get("cached_tokens") or 0)
+            self._flush_meta()
+        except Exception:
+            logger.exception("record_llm_usage failed for run=%s", self.run_id)
 
     def append_stdout(self, text: str) -> None:
         """Mirror subprocess stdout into stdout.log. Never raises."""
@@ -452,6 +483,10 @@ class RunArchive:
     def read_message_parts(self) -> list[dict]:
         """Return projected message parts for this run."""
         return self._read_jsonl("message_parts.jsonl")
+
+    def read_llm_usage(self) -> list[dict]:
+        """Return provider usage/cache records for this run."""
+        return self._read_jsonl("llm_usage.jsonl")
 
     def _read_jsonl(self, filename: str) -> list[dict]:
         path = self.run_dir / filename

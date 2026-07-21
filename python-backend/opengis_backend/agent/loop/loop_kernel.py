@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from opengis_backend.agent.context.context_manager import ContextManager
+from opengis_backend.agent.context.provider_request import ProviderRequest, PromptSection
+from opengis_backend.agent.context.provider_request_adapter import ProviderRequestAdapter
 from opengis_backend.agent.context.request_budget import RequestBudgetManager, RequestBudgetReport
 from opengis_backend.agent.execution.tool_materializer import (
     ToolMaterialization,
@@ -41,6 +43,7 @@ class LoopKernelHooks:
     on_code_end: Callable[[int], None] | None = None
     on_tool_start: Callable[[str, dict, str], None] | None = None
     on_tool_result: Callable[..., Any] | None = None
+    on_provider_result: Callable[..., Any] | None = None
 
 
 @dataclass
@@ -174,6 +177,7 @@ class LoopKernel:
                 *({"role": "system", "content": content} for content in system_inserts if content),
                 *messages[1:],
             ]
+        messages = _ensure_provider_tool_protocol(messages)
 
         budget_report = self._analyze_request_budget(messages, active_tool_schemas)
         if (
@@ -202,7 +206,15 @@ class LoopKernel:
                     *({"role": "system", "content": content} for content in system_inserts if content),
                     *messages[1:],
                 ]
+            messages = _ensure_provider_tool_protocol(messages)
             budget_report = self._analyze_request_budget(messages, active_tool_schemas)
+
+        provider_request = _provider_request_from_messages(messages)
+        prompt_cache_plan = ProviderRequestAdapter(provider_request).prompt_cache_plan(
+            model=str(getattr(self.llm_call, "opengis_model", "") or ""),
+            provider=str(getattr(self.llm_call, "opengis_provider", "") or ""),
+            tools=active_tool_schemas,
+        )
 
         telemetry = LoopTurnTelemetry(
             iteration=request.iteration,
@@ -241,11 +253,39 @@ class LoopKernel:
             ),
             code_step_for_tool=request.code_step_for_tool,
             retry_detail=request.retry_detail,
+            prompt_cache_key=prompt_cache_plan.cache_key,
+            prompt_cache_metadata=prompt_cache_plan.to_dict(),
         )
 
         telemetry.llm_ms = provider_result.duration_ms
         telemetry.response_chars = len(provider_result.response_text)
         telemetry.tool_call_count = len(provider_result.tool_calls) if provider_result.tool_calls else 0
+        usage = getattr(provider_result.response, "usage", None)
+        if isinstance(usage, dict):
+            telemetry.prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            telemetry.cached_tokens = int(usage.get("cached_tokens") or 0)
+            telemetry.completion_tokens = int(usage.get("completion_tokens") or 0)
+            telemetry.cache_read_tokens = int(usage.get("cache_read_input_tokens") or 0)
+            telemetry.cache_creation_tokens = int(usage.get("cache_creation_input_tokens") or 0)
+        if self.hooks.on_provider_result:
+            try:
+                self.hooks.on_provider_result(
+                    usage=getattr(provider_result.response, "usage", None) or {},
+                    prompt_cache=getattr(provider_result.response, "prompt_cache", None) or prompt_cache_plan.to_dict(),
+                    telemetry=asdict(telemetry),
+                    request={
+                        "message_count": len(messages),
+                        "section_count": len(provider_request.sections),
+                        "sections": provider_request.section_debug(),
+                        "cacheable_prefix_hash": provider_request.cacheable_prefix_hash,
+                        "tool_schema_count": len(active_tool_schemas or []),
+                        "tool_schema_total": telemetry.tool_schema_total,
+                        "tool_schema_reason": telemetry.tool_schema_reason,
+                        "request_pressure": budget_report.pressure,
+                    },
+                )
+            except Exception:
+                logger.debug("on_provider_result hook failed", exc_info=True)
         provider_result.tool_schema_count = len(active_tool_schemas or [])
         provider_result.tool_schema_total = telemetry.tool_schema_total
         provider_result.tool_schema_reason = telemetry.tool_schema_reason
@@ -342,6 +382,113 @@ class LoopKernel:
         return RequestBudgetManager(
             input_token_budget=getattr(self.context, "token_budget", 100_000),
         ).analyze(messages=messages, tools=active_tool_schemas or [])
+
+
+def _provider_request_from_messages(messages: list[dict[str, Any]]) -> ProviderRequest:
+    """Wrap the already-built provider messages in cache diagnostic sections.
+
+    This is intentionally observational: it must not reorder or rewrite the
+    messages sent to the model on this branch.
+    """
+    if not messages:
+        return ProviderRequest(messages=[], sections=[])
+    sections: list[PromptSection] = [
+        PromptSection(
+            id="system.base",
+            kind="system",
+            messages=[dict(messages[0])],
+            stability="static",
+            cache_policy="cacheable",
+        )
+    ]
+    if len(messages) > 1:
+        sections.append(
+            PromptSection(
+                id="context.cacheable_prefix",
+                kind="history",
+                messages=[dict(message) for message in messages[1:]],
+                stability="turn_dynamic",
+                cache_policy="breakpoint",
+                metadata={"observational": True},
+            )
+        )
+    return ProviderRequest(messages=messages, sections=sections)
+
+
+def _ensure_provider_tool_protocol(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize final provider request messages for OpenAI tool-call rules."""
+    out: list[dict[str, Any]] = []
+    pending_buffer: list[dict[str, Any]] = []
+    pending_ids: set[str] = set()
+
+    def summarize_pending() -> None:
+        nonlocal pending_buffer, pending_ids
+        if not pending_buffer:
+            return
+        assistant = pending_buffer[0]
+        names: list[str] = []
+        tool_calls = assistant.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+                if isinstance(fn, dict):
+                    names.append(str(fn.get("name") or "unknown"))
+        missing = f" missing_ids={','.join(sorted(pending_ids))}" if pending_ids else ""
+        out.append({
+            "role": "system",
+            "content": (
+                "[Historical tool-call transaction summarized for provider protocol safety.] "
+                f"tool_calls={', '.join(names) or 'unknown'}{missing}"
+            ),
+        })
+        pending_buffer = []
+        pending_ids = set()
+
+    for message in messages:
+        role = message.get("role")
+        if pending_buffer:
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if role == "tool" and tool_call_id in pending_ids:
+                pending_buffer.append(message)
+                pending_ids.discard(tool_call_id)
+                if not pending_ids:
+                    out.extend(pending_buffer)
+                    pending_buffer = []
+                continue
+            summarize_pending()
+
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            ids = {
+                str(tool_call.get("id") or "")
+                for tool_call in tool_calls
+                if isinstance(tool_call, dict) and str(tool_call.get("id") or "")
+            }
+            if ids:
+                pending_buffer = [message]
+                pending_ids = ids
+            else:
+                out.append({
+                    "role": "system",
+                    "content": "[Historical assistant tool_calls omitted because call ids were missing.]",
+                })
+            continue
+
+        if role == "tool":
+            out.append({
+                "role": "system",
+                "content": (
+                    "[Historical orphan tool result summarized for provider protocol safety.] "
+                    f"tool={message.get('name') or 'tool'} "
+                    f"tool_call_id={message.get('tool_call_id') or '?'}"
+                ),
+            })
+            continue
+
+        out.append(message)
+
+    summarize_pending()
+    return out
 
 
 __all__ = [

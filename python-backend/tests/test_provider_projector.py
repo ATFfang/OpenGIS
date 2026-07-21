@@ -119,6 +119,86 @@ class ProviderContextProjectorTests(unittest.TestCase):
         self.assertIn("[projected_tool_result]", projected[2]["content"])
         self.assertEqual(projected[-1]["content"], "继续")
 
+    def test_raw_recent_orphan_tool_result_is_summarized_as_system(self) -> None:
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(
+                raw_recent=1,
+                collapse_old_messages=True,
+                recent_user_turns=0,
+            ),
+            is_tool_result=is_tool_result,
+            make_pruned_placeholder=placeholder,
+            is_workflow_context_message=lambda msg: False,
+        )
+        messages = [
+            {"role": "user", "content": "run"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-code",
+                    "type": "function",
+                    "function": {"name": "execute_code", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-code",
+                "name": "execute_code",
+                "content": "ok",
+                "_meta": {"kind": "tool_result", "tool_name": "execute_code"},
+            },
+        ]
+
+        projected = projector.project_live_messages(
+            messages,
+            summary_cutoff=0,
+            exclude_workflow_context=False,
+        )
+
+        self.assertFalse(any(message.get("role") == "tool" for message in projected))
+        self.assertTrue(any("orphan tool result" in str(message.get("content", "")) for message in projected))
+
+    def test_complete_recent_tool_transaction_is_preserved(self) -> None:
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(
+                raw_recent=2,
+                collapse_old_messages=True,
+                recent_user_turns=0,
+            ),
+            is_tool_result=is_tool_result,
+            make_pruned_placeholder=placeholder,
+            is_workflow_context_message=lambda msg: False,
+        )
+        messages = [
+            {"role": "user", "content": "run"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-code",
+                    "type": "function",
+                    "function": {"name": "execute_code", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-code",
+                "name": "execute_code",
+                "content": "ok",
+                "_meta": {"kind": "tool_result", "tool_name": "execute_code"},
+            },
+        ]
+
+        projected = projector.project_live_messages(
+            messages,
+            summary_cutoff=0,
+            exclude_workflow_context=False,
+        )
+
+        self.assertTrue(any(isinstance(message.get("tool_calls"), list) for message in projected))
+        self.assertTrue(any(message.get("role") == "tool" for message in projected))
+
 
 if __name__ == "__main__":
     unittest.main()

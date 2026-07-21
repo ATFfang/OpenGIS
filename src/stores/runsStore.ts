@@ -67,6 +67,15 @@ export interface RunSession {
   metadata?: Record<string, unknown>
 }
 
+export interface RunLLMUsageRecord {
+  run_id?: string
+  usage?: Record<string, any>
+  prompt_cache?: Record<string, any>
+  telemetry?: Record<string, any>
+  request?: Record<string, any>
+  ts?: string
+}
+
 export type AgentWorkStatus = 'queued' | 'running' | 'completed' | 'success' | 'error' | 'cancelled' | 'unknown'
 
 export interface AgentInboxItem {
@@ -112,6 +121,7 @@ export interface RunDetail extends RunSummary {
   tool_calls?: RunToolCall[]
   tool_call_events?: RunToolCall[]
   artifacts?: RunArtifact[]
+  llm_usage?: RunLLMUsageRecord[]
   session?: RunSession | null
   stdout?: string
   final_answer?: string | null
@@ -126,6 +136,7 @@ interface RunDetailResponse {
   tool_calls?: RunToolCall[]
   tool_call_events?: RunToolCall[]
   artifacts?: RunArtifact[]
+  llm_usage?: RunLLMUsageRecord[]
 }
 
 function normalizeRunDetail(raw: RunDetailResponse | RunDetail | null | undefined): RunDetail | null {
@@ -152,6 +163,11 @@ function normalizeRunDetail(raw: RunDetailResponse | RunDetail | null | undefine
     artifacts: Array.isArray((raw as RunDetailResponse).artifacts)
       ? (raw as RunDetailResponse).artifacts
       : [],
+    llm_usage: Array.isArray((raw as RunDetailResponse).llm_usage)
+      ? (raw as RunDetailResponse).llm_usage
+      : Array.isArray((meta as any).llm_usage)
+        ? (meta as any).llm_usage
+        : [],
     session: ((meta as any).session || null) as RunSession | null,
   }
 }
@@ -178,7 +194,7 @@ interface RunsStore {
   removePermissionRule: (ruleId: string) => Promise<void>
 
   /** 读某条 run 的完整 detail；命中缓存直接返回。 */
-  getDetail: (runId: string) => Promise<RunDetail | null>
+  getDetail: (runId: string, forceRefresh?: boolean) => Promise<RunDetail | null>
 
   /** 撤回某个 run：reset 到该 run 的 pre_sha。 */
   revertRun: (runId: string) => Promise<void>
@@ -291,9 +307,9 @@ export const useRunsStore = create<RunsStore>((set, get) => ({
     await get().refreshControlPlane()
   },
 
-  getDetail: async (runId) => {
+  getDetail: async (runId, forceRefresh = false) => {
     const cached = get().details[runId]
-    if (cached) return cached
+    if (cached && !forceRefresh) return cached
     try {
       const workspacePath = useAssetStore.getState().workspacePath || undefined
       const raw = await pythonClient.send<RunDetailResponse>(

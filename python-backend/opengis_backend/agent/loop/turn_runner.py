@@ -173,13 +173,26 @@ class LoopTurnTelemetry:
     tool_schema_reason: str = ""
     request_pressure: str = ""
     continuation: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+
+    @property
+    def cache_hit_rate(self) -> float:
+        total_input = self.prompt_tokens + self.cache_read_tokens + self.cache_creation_tokens
+        if total_input <= 0:
+            return 0.0
+        return min(1.0, self.cached_tokens / total_input)
 
     def log(self) -> None:
         logger.info(
             "[LOOP-TURN] iteration=%d code_steps=%d tool_steps=%d "
             "messages=%d est_request_tokens=%d tools=%d/%d tool_reason=%s "
             "context_build=%.0fms llm=%.0fms tool=%.0fms "
-            "response_chars=%d tool_calls=%d pressure=%s continuation=%s",
+            "response_chars=%d tool_calls=%d pressure=%s "
+            "prompt_tokens=%d cached_tokens=%d cache_write=%d cache_hit=%.1f%% continuation=%s",
             self.iteration,
             self.code_steps,
             self.tool_steps,
@@ -194,6 +207,10 @@ class LoopTurnTelemetry:
             self.response_chars,
             self.tool_call_count,
             self.request_pressure or "-",
+            self.prompt_tokens,
+            self.cached_tokens,
+            self.cache_creation_tokens,
+            self.cache_hit_rate * 100.0,
             self.continuation or "-",
         )
 
@@ -397,6 +414,8 @@ class ProviderTurnCaller:
         callbacks: ProviderTurnCallbacks,
         code_step_for_tool: Callable[[int], int],
         retry_detail: str = "Connection error",
+        prompt_cache_key: str | None = None,
+        prompt_cache_metadata: dict[str, Any] | None = None,
     ) -> ProviderTurnResult:
         t0 = time.monotonic()
         materialized_tools = (
@@ -458,6 +477,8 @@ class ProviderTurnCaller:
                     on_delta=_on_llm_delta,
                     on_tool_delta=_on_tool_delta,
                     tools=active_tool_schemas,
+                    prompt_cache_key=prompt_cache_key,
+                    prompt_cache_metadata=prompt_cache_metadata,
                 )
                 break
             except self.retryable_exceptions as exc:

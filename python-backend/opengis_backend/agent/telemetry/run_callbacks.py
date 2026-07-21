@@ -136,6 +136,24 @@ class AgentRunCallbacks:
     def progress_callback(self, stage: str, detail: str = "") -> None:
         self.recorder.on_progress(stage, detail)
 
+    def on_provider_result(
+        self,
+        *,
+        usage: dict[str, Any] | None = None,
+        prompt_cache: dict[str, Any] | None = None,
+        telemetry: dict[str, Any] | None = None,
+        request: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            self.run_archive.record_llm_usage(
+                usage=usage or {},
+                prompt_cache=prompt_cache or {},
+                telemetry=telemetry or {},
+                request=request or {},
+            )
+        except Exception:
+            logger.debug("llm usage archive recording failed (non-fatal)", exc_info=True)
+
     def execution_output_callback(self, text: str) -> None:
         if not text:
             return

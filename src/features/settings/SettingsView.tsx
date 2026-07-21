@@ -546,16 +546,17 @@ export function SettingsView() {
   useEffect(() => {
     if (!promptCacheTestEnabled) return
     if (!latestRun) return
-    const shouldForce = !latestRunDetail || latestRunDetail.status !== latestRun.status
+    const shouldForce = !latestRunDetail
+      || latestRunDetail.status !== latestRun.status
+      || !Array.isArray(latestRunDetail.llm_usage)
     getRunDetail(latestRun.run_id, shouldForce).catch(() => {})
   }, [promptCacheTestEnabled, latestRun?.run_id, latestRun?.status, latestRunDetail?.status, getRunDetail])
 
   useEffect(() => {
     if (!promptCacheTestEnabled || !promptCacheTestExpanded) return
     for (const run of visiblePromptCacheRuns.slice(0, 12)) {
-      if (!runDetails[run.run_id]) {
-        getRunDetail(run.run_id, false).catch(() => {})
-      }
+      const detail = runDetails[run.run_id]
+      getRunDetail(run.run_id, !detail || !Array.isArray(detail.llm_usage)).catch(() => {})
     }
   }, [promptCacheTestEnabled, promptCacheTestExpanded, visiblePromptCacheRuns, runDetails, getRunDetail])
 
