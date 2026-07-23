@@ -12,16 +12,13 @@ EXECUTE_CODE_SCHEMA = {
     "function": {
         "name": "execute_code",
         "description": (
-            "Execute Python code in a sandbox. Use ONLY when no other tool matches "
-            "the task. The code runs with access to numpy, pandas, geopandas, "
-            "shapely, rasterio, matplotlib, seaborn, and the registered OpenGIS "
-            "tools as top-level functions. Missing imported packages are "
-            "auto-installed before execution when permitted; do not switch to a "
-            "weaker method just because a package may be absent. The code "
-            "argument must be code-only Python: no chain-of-thought, no strategy "
-            "narration in comments, no Markdown fences, and no <think> tags. "
-            "Do not use execute_code just to sleep while a resident worker runs; "
-            "call wait_worker_update or get_worker instead."
+            "Run Python in a sandbox ONLY when no other tool matches. Has numpy, "
+            "pandas, geopandas, shapely, rasterio, matplotlib, seaborn and the "
+            "registered OpenGIS tools as top-level functions; missing packages are "
+            "auto-installed when permitted (don't downgrade method for that). code "
+            "must be code-only Python: no reasoning, no comment narration, no "
+            "Markdown fences, no <think> tags. Never use it to sleep while a worker "
+            "runs; call wait_worker_update or get_worker instead."
         ),
         "parameters": {
             "type": "object",
@@ -29,16 +26,15 @@ EXECUTE_CODE_SCHEMA = {
                 "code": {
                     "type": "string",
                     "description": (
-                        "Raw executable Python source only. Do not include "
-                        "Markdown fences, hidden reasoning, planning prose, or "
-                        "long comments explaining tool strategy."
+                        "Raw executable Python only: no Markdown fences, hidden "
+                        "reasoning, planning prose, or strategy comments."
                     ),
                 },
                 "persist": {
                     "type": "boolean",
                     "description": (
-                        "Normal chat only: persist this code as a reusable/auditable script. "
-                        "Use false for quick one-off inspection. Workflow runs persist all code regardless."
+                        "Normal chat: persist as reusable/auditable script. "
+                        "false for one-off inspection. Workflow runs always persist."
                     ),
                 },
                 "script_name": {

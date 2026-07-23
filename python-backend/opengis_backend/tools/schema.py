@@ -84,7 +84,7 @@ class ToolParam:
         else:
             json_type = str_type_map.get(str(self.type), "string")
         schema: dict[str, Any] = {
-            "description": _compact_description(self.description, 180 if compact else 2000),
+            "description": _compact_description(self.description, 130 if compact else 2000),
         }
         if json_type is not None:
             schema["type"] = json_type
@@ -101,7 +101,11 @@ class ToolParam:
             schema["minimum"] = self.min_value
         if self.max_value is not None:
             schema["maximum"] = self.max_value
-        if self.default is not None:
+        # In compact mode the default is intentionally omitted: it costs bytes in
+        # the (cached) stable prefix while the Python function signature is the
+        # real source of truth for omitted optional arguments. Full mode keeps it
+        # for docs/debug projections.
+        if self.default is not None and not compact:
             schema["default"] = self.default
         return schema
 
@@ -161,7 +165,7 @@ class ToolSchema:
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": _compact_description(self.description, 520 if compact else 4000),
+                "description": _compact_description(self.description, 360 if compact else 4000),
                 "parameters": {
                     "type": "object",
                     "properties": {
