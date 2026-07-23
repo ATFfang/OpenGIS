@@ -49,6 +49,9 @@ function pivotDataFromLayer(layer: MapLayerDefinition, target: PivotTarget): Piv
       layer,
     }
   }
+  if (layer.data.kind !== 'vector') {
+    throw new Error(`该图层类型（${layer.data.kind}）不支持数据透视`)
+  }
   return {
     target,
     dataKind: 'vector',

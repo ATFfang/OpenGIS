@@ -16,6 +16,8 @@ import { clusterRenderer } from './clusterRenderer'
 import { extrusionRenderer } from './extrusionRenderer'
 import { rasterRenderer } from './rasterRenderer'
 import { symbolRenderer } from './symbolRenderer'
+import { tiles3dRenderer } from './tiles3dRenderer'
+import { pointCloudRenderer } from './pointCloudRenderer'
 import type { LayerRenderer } from './types'
 
 export const ALL_RENDERERS: LayerRenderer[] = [
@@ -29,6 +31,8 @@ export const ALL_RENDERERS: LayerRenderer[] = [
   extrusionRenderer,
   rasterRenderer,
   symbolRenderer,
+  tiles3dRenderer,
+  pointCloudRenderer,
 ]
 
 const REGISTRY: Record<string, LayerRenderer> = Object.fromEntries(
@@ -55,3 +59,4 @@ export function listRenderTypes(): string[] {
 
 export type { LayerRenderer, RendererContext } from './types'
 export { renderLayerId, sourceIdFor } from './types'
+export { deckOverlay } from './deckOverlay'

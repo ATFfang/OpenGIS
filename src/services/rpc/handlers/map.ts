@@ -13,6 +13,7 @@ import { layerHandlers } from './map/layers';
 import { rasterHandlers } from './map/raster';
 import { styleHandlers } from './map/style';
 import { viewHandlers } from './map/view';
+import { tiles3dHandlers } from './map/tiles3d';
 
 export const mapHandlers: Record<string, RpcHandler> = {
   ...layerHandlers,
@@ -21,4 +22,5 @@ export const mapHandlers: Record<string, RpcHandler> = {
   ...exportHandlers,
   ...viewHandlers,
   ...dynamicHandlers,
+  ...tiles3dHandlers,
 };

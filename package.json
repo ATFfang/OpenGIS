@@ -26,6 +26,14 @@
     "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.0.36",
+    "@deck.gl/geo-layers": "^9.0.36",
+    "@deck.gl/layers": "^9.0.36",
+    "@deck.gl/mapbox": "^9.0.36",
+    "@loaders.gl/3d-tiles": "^4.2.3",
+    "@loaders.gl/core": "^4.2.3",
+    "@loaders.gl/las": "^4.2.3",
+    "@loaders.gl/tiles": "^4.2.3",
     "@monaco-editor/react": "^4.7.0",
     "@tmcw/togeojson": "^7.1.2",
     "ai": "^3.4.7",

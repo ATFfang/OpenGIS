@@ -50,7 +50,7 @@ export interface GeoJSONSourceDiff {
 
 // ─── Data Source Descriptor ───────────────────────────────────────
 
-export type DataSourceType = 'geojson' | 'csv' | 'shapefile' | 'geopackage' | 'kml' | 'geotiff'
+export type DataSourceType = 'geojson' | 'csv' | 'shapefile' | 'geopackage' | 'kml' | 'geotiff' | '3dtiles' | 'pointcloud'
 
 export interface DataSourceMeta {
   /** Original file name */
@@ -162,7 +162,52 @@ export interface ParsedRasterData {
   rerenderable?: boolean
 }
 
-export type ParsedData = ParsedVectorData | ParsedRasterData
+/**
+ * 3D Tiles 数据（OGC 3D Tiles：tileset.json + b3dm/i3dm/pnts + glTF）。
+ *
+ * MapLibre 原生无法渲染 3D Tiles —— 这类图层由 deck.gl 的 `Tile3DLayer`
+ * （底层 loaders.gl `Tiles3DLoader`）通过共享 MapLibre 相机的 `MapboxOverlay`
+ * 叠加渲染，不走任何 MapLibre source。
+ */
+export interface ParsedTiles3DData {
+  kind: 'tiles3d'
+  /** tileset.json 的 HTTP URL（通常由后端文件服务端点提供）。 */
+  tilesetUrl: string
+  /** 可选的经纬度范围，供 fitBounds 使用。 */
+  bbox?: BBox
+  /** 非地理配准 tileset 的摆放矩阵（column-major 4x4，共 16 个数）。 */
+  modelMatrix?: number[]
+  /** 点云类瓦片（pnts）的点数估计，用于 UI 展示。 */
+  pointCount?: number
+  /** CRS 标识（3D Tiles 通常为 EPSG:4979 / ECEF，多数已内嵌）。 */
+  crs?: string
+}
+
+/**
+ * 裸点云数据（.las / .laz），由 deck.gl `PointCloudLayer` + loaders.gl
+ * `LASLoader` 渲染，同样挂在共享的 `MapboxOverlay` 上。
+ */
+export interface ParsedPointCloudData {
+  kind: 'pointcloud'
+  /** 点云文件的 HTTP URL（由后端文件服务端点提供）。 */
+  url: string
+  /** 文件格式。 */
+  format: 'las' | 'laz'
+  /**
+   * 坐标参考方式：
+   *  - 'lnglat' : 点坐标已是经纬度（WGS84），直接落位
+   *  - 'meter-offset' : 点坐标是相对某锚点的米偏移，需要 `origin`
+   */
+  coordinate?: 'lnglat' | 'meter-offset'
+  /** `coordinate='meter-offset'` 时的锚点经纬度 [lng, lat, altitude?]。 */
+  origin?: [number, number, number?]
+  bbox?: BBox
+  pointCount?: number
+  /** CRS 标识（点云原始坐标系，用于展示与后续重投影）。 */
+  crs?: string
+}
+
+export type ParsedData = ParsedVectorData | ParsedRasterData | ParsedTiles3DData | ParsedPointCloudData
 
 export interface FieldDescriptor {
   name: string
@@ -201,6 +246,15 @@ export type LayerRenderType =
    * 3D 拔起：按某个数值字段把 Polygon 拔出高度（fill-extrusion）。
    */
   | 'extrusion'
+  /**
+   * OGC 3D Tiles（tileset.json）：由 deck.gl Tile3DLayer 叠加渲染，
+   * 支持 b3dm/i3dm 网格与 pnts 点云。不走 MapLibre source。
+   */
+  | 'tiles3d'
+  /**
+   * 裸点云（.las/.laz）：由 deck.gl PointCloudLayer 叠加渲染。
+   */
+  | 'pointcloud'
 
 /** 分档策略 —— graduated renderer 使用 */
 export type ClassificationMethod =
@@ -319,6 +373,25 @@ export interface ExtrusionSettings {
   baseField?: string
 }
 
+export interface Tiles3DSettings {
+  /** pnts 点云瓦片的点大小（像素），默认 1.5。 */
+  pointSize?: number
+  /** 叠加着色（十六进制），未设置时使用瓦片自带颜色。 */
+  color?: string
+  /**
+   * 最大屏幕空间误差（SSE）。越大越省性能、越粗糙；越小越精细、越耗性能。
+   * 默认 16。
+   */
+  maximumScreenSpaceError?: number
+}
+
+export interface PointCloudSettings {
+  /** 点大小（像素），默认 1.5。 */
+  pointSize?: number
+  /** 着色（十六进制），未设置时使用点自带颜色或默认白色。 */
+  color?: string
+}
+
 export type RasterColorRampName =
   | 'viridis'
   | 'magma'
@@ -396,6 +469,10 @@ export interface LayerStyle {
   extrusion?: ExtrusionSettings
   /** `renderType='raster'` 时可选 — color ramp / stretch settings. */
   raster?: RasterStyleSettings
+  /** `renderType='tiles3d'` 时可选 — 3D Tiles 渲染设置。 */
+  tiles3d?: Tiles3DSettings
+  /** `renderType='pointcloud'` 时可选 — 点云渲染设置。 */
+  pointcloud?: PointCloudSettings
   /** `renderType='symbol'` 时可选 — 图标配置 */
   icon?: string  // 'circle' | 'emoji:📍' | 'svg:pin' | 'path:/abs/icon.svg'
   /** `renderType='symbol'` 时可选 — 文字标注配置 */

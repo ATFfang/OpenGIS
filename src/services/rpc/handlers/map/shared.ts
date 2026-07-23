@@ -236,10 +236,10 @@ export function summarizeLayer(layer: MapLayerDefinition) {
     name: layer.name,
     source_type: layer.sourceType,
     visible: layer.visible,
-    bbox: bboxToTuple(layer.data.bbox),
+    bbox: layer.data.bbox ? bboxToTuple(layer.data.bbox) : null,
     feature_count: vector ? vector.featureCount : 0,
     geometry_type: vector ? vector.geometryType : null,
-    crs: layer.data.crs,
+    crs: layer.data.crs ?? null,
     fields: vector ? vector.fields.map((f) => ({ name: f.name, type: f.type })) : [],
     style: {
       render_type: layer.style.renderType,

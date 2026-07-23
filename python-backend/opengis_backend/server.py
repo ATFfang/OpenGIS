@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from opengis_backend.runtime.config import settings
 from opengis_backend.rpc.handler import RpcHandler
@@ -164,6 +165,36 @@ async def get_raster_tile(raster_id: str, z: int, x: int, y: int):
         content=tile,
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/api/assets/{asset_id}/{file_path:path}")
+async def get_asset_file(asset_id: str, file_path: str):
+    """Serve a file from a registered 3D Tiles set or point cloud.
+
+    The frontend's deck.gl renderer fetches tileset.json plus its child tiles
+    (b3dm/i3dm/pnts/glb) — or a .las/.laz point cloud — through this endpoint.
+    Files are resolved under the asset's registered root with a
+    directory-traversal guard.
+    """
+    from opengis_backend.integrations.gis.tiles3d_service import (
+        guess_media_type,
+        resolve_asset_file,
+    )
+
+    try:
+        target = resolve_asset_file(asset_id, file_path)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return FileResponse(
+        str(target),
+        media_type=guess_media_type(target),
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 

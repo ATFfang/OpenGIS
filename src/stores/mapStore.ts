@@ -287,6 +287,10 @@ function _releaseLayerResources(layer: MapLayerDefinition | undefined, replaceme
     releaseVectorGeoJSON(layer.data.dataHandle)
     return
   }
+  // tiles3d / pointcloud 由 deck.gl overlay 自管资源，无需在此释放缓冲/blob
+  if (layer.data.kind !== 'raster') {
+    return
+  }
   if (
     layer.data.sourceBufferId
     && replacement?.data.kind === 'raster'

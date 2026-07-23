@@ -27,6 +27,7 @@ import {
   type RendererContext,
   renderLayerId,
   sourceIdFor,
+  deckOverlay,
 } from '../renderers'
 import { compileLayerFilter } from '../renderers/styleExpressions'
 
@@ -468,8 +469,11 @@ export class MapEngine {
     const ctx = this.buildRendererContext()
 
     // vector 类 renderer（fill/line/circle/heatmap/graduated/categorized/extrusion）
-    // 共用 geojson source；cluster/raster 的 source 由 renderer 自己管理
-    const managesOwnSource = ['cluster', 'raster'].includes(layer.style.renderType)
+    // 共用 geojson source；cluster/raster 的 source 由 renderer 自己管理；
+    // tiles3d/pointcloud 完全不走 MapLibre source（由 deck.gl overlay 渲染）
+    const managesOwnSource = ['cluster', 'raster', 'tiles3d', 'pointcloud'].includes(
+      layer.style.renderType,
+    )
 
     if (!managesOwnSource && layer.data.kind === 'vector') {
       this.ensureGeoJSONSource(layer)
@@ -516,6 +520,9 @@ export class MapEngine {
       this.map.removeSource(sourceId)
     }
     this.managedSourceIds.delete(sourceId)
+
+    // tiles3d / pointcloud 图层不在 MapLibre 图层体系内，交给 deck overlay 移除
+    deckOverlay.remove(layerId)
   }
 
   /**
@@ -559,6 +566,9 @@ export class MapEngine {
         }
       }
     }
+
+    // deck.gl 叠加图层（tiles3d / pointcloud）不在 managedLayerIds 内，单独切换
+    deckOverlay.setVisibility(layerId, visible)
   }
 
   /**

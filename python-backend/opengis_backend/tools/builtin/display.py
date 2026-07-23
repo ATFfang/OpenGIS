@@ -1794,6 +1794,188 @@ def add_raster(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────
+# add_3dtiles_layer  (OGC 3D Tiles)
+# ──────────────────────────────────────────────────────────────────────
+@tool(
+    name="add_3dtiles_layer",
+    display_name="Add 3D Tiles Layer",
+    description=(
+        "Add an OGC 3D Tiles dataset (tileset.json + b3dm/i3dm/pnts + glTF) to "
+        "the map. Point at either the tileset.json file OR the directory that "
+        "contains it; the backend spins up a static file endpoint and the "
+        "frontend renders it with deck.gl (shares the MapLibre camera). Works "
+        "for photogrammetry meshes, BIM/CityGML tiles, and pnts point clouds "
+        "that are already tiled. Returns a dict with layer_id."
+    ),
+    category="visualization",
+    params=[
+        {"name": "path", "type": "string", "required": True,
+         "description": "Path to tileset.json OR the directory containing it."},
+        {"name": "name", "type": "string", "required": False,
+         "description": "Display name in the layer panel. Defaults to folder/file stem."},
+        {"name": "point_size", "type": "number", "required": False,
+         "description": "Point size (px) for pnts point-cloud tiles. Default 1.5."},
+        {"name": "color", "type": "string", "required": False,
+         "description": "Hex tint color, e.g. #ff8800. Omit to keep tile colors."},
+        {"name": "max_screen_space_error", "type": "number", "required": False,
+         "description": "LOD detail threshold. Larger = faster/coarser. Default 16."},
+    ],
+    returns="dict with keys: layer_id (str), name (str), tileset_url (str), asset_id (str).",
+    examples=[
+        "Load the 3D Tiles model at C:/data/mesh/tileset.json",
+        "Add the photogrammetry tileset folder to the map",
+    ],
+    tags=["map", "3dtiles", "visualization", "3d"],
+    needs_context=True,
+)
+def add_3dtiles_layer(
+    ctx: ToolContext,
+    path: str,
+    name: Optional[str] = None,
+    point_size: Optional[float] = None,
+    color: Optional[str] = None,
+    max_screen_space_error: Optional[float] = None,
+) -> dict:
+    from opengis_backend.integrations.gis.tiles3d_service import register_tileset
+
+    if not path:
+        raise ValueError("add_3dtiles_layer requires a path to tileset.json or its directory")
+    resolved = _resolve_workspace_path(ctx, path)
+    p = Path(resolved)
+    if not p.exists():
+        raise FileNotFoundError(f"3D Tiles path not found: {resolved}")
+    if not name:
+        name = p.stem if p.is_file() else p.name
+
+    registration = register_tileset(str(p.resolve()))
+    tileset_url = f"{_backend_http_base()}/api/assets/{registration.asset_id}/{registration.entry}"
+
+    payload: dict = {
+        "tileset_url": tileset_url,
+        "name": name,
+    }
+    if point_size is not None:
+        payload["point_size"] = float(point_size)
+    if color:
+        payload["color"] = color
+    if max_screen_space_error is not None:
+        payload["max_screen_space_error"] = float(max_screen_space_error)
+
+    result = run_async_from_sync(ctx.request("rpc.ui.map.add_tiles3d", payload))
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "layer_id": result.get("layer_id"),
+        "name": result.get("name", name),
+        "tileset_url": tileset_url,
+        "asset_id": registration.asset_id,
+        "kind": "3dtiles",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# add_point_cloud_layer  (bare .las / .laz)
+# ──────────────────────────────────────────────────────────────────────
+@tool(
+    name="add_point_cloud_layer",
+    display_name="Add Point Cloud Layer",
+    description=(
+        "Add a bare point cloud (.las/.laz) to the map. The backend serves the "
+        "file over HTTP and the frontend renders it with deck.gl's "
+        "PointCloudLayer (loaders.gl LASLoader). If the points are already in "
+        "lon/lat use coordinate='lnglat' (default); if they are in projected "
+        "meters, pass coordinate='meter-offset' with an origin [lng, lat] anchor. "
+        "For very large clouds, consider tiling to 3D Tiles (pnts) and using "
+        "add_3dtiles_layer instead. Returns a dict with layer_id."
+    ),
+    category="visualization",
+    params=[
+        {"name": "path", "type": "string", "required": True,
+         "description": "Path to a .las or .laz file on disk."},
+        {"name": "name", "type": "string", "required": False,
+         "description": "Display name in the layer panel. Defaults to file stem."},
+        {"name": "coordinate", "type": "string", "required": False,
+         "description": "'lnglat' (default) if points are WGS84 lon/lat, or 'meter-offset' if points are meter offsets from an origin anchor."},
+        {"name": "origin", "type": "array", "required": False,
+         "description": "Anchor [lng, lat] (optional altitude) used when coordinate='meter-offset'."},
+        {"name": "point_size", "type": "number", "required": False,
+         "description": "Point size in pixels. Default 1.5."},
+        {"name": "color", "type": "string", "required": False,
+         "description": "Hex color, e.g. #00ff88. Omit to use per-point colors or white."},
+    ],
+    returns="dict with keys: layer_id (str), name (str), url (str), asset_id (str), format (str).",
+    examples=[
+        "Load the point cloud at C:/data/scan.laz",
+        "Add scan.las to the map anchored at 116.39, 39.9",
+    ],
+    tags=["map", "pointcloud", "visualization", "3d", "las", "laz"],
+    needs_context=True,
+)
+def add_point_cloud_layer(
+    ctx: ToolContext,
+    path: str,
+    name: Optional[str] = None,
+    coordinate: Optional[str] = None,
+    origin: Any = None,
+    point_size: Optional[float] = None,
+    color: Optional[str] = None,
+) -> dict:
+    from opengis_backend.integrations.gis.tiles3d_service import register_point_cloud
+
+    if not path:
+        raise ValueError("add_point_cloud_layer requires a path to a .las/.laz file")
+    resolved = _resolve_workspace_path(ctx, path)
+    p = Path(resolved)
+    if not p.exists() or not p.is_file():
+        raise FileNotFoundError(f"Point cloud file not found: {resolved}")
+    ext = p.suffix.lower()
+    if ext not in {".las", ".laz"}:
+        raise ValueError("add_point_cloud_layer only supports .las or .laz files")
+    if not name:
+        name = p.stem
+
+    coord = (coordinate or "").strip().lower() or None
+    if coord and coord not in {"lnglat", "meter-offset"}:
+        raise ValueError("coordinate must be 'lnglat' or 'meter-offset'")
+
+    origin_list = None
+    if origin is not None:
+        origin_list = _coerce_jsonish(origin)
+        if not isinstance(origin_list, (list, tuple)) or len(origin_list) < 2:
+            raise ValueError("origin must be a [lng, lat] (optionally with altitude) array")
+        origin_list = [float(v) for v in origin_list]
+
+    registration = register_point_cloud(str(p.resolve()))
+    url = f"{_backend_http_base()}/api/assets/{registration.asset_id}/{registration.entry}"
+
+    payload: dict = {
+        "url": url,
+        "name": name,
+        "format": ext.lstrip("."),
+    }
+    if coord:
+        payload["coordinate"] = coord
+    if origin_list is not None:
+        payload["origin"] = origin_list
+    if point_size is not None:
+        payload["point_size"] = float(point_size)
+    if color:
+        payload["color"] = color
+
+    result = run_async_from_sync(ctx.request("rpc.ui.map.add_pointcloud", payload))
+    if not isinstance(result, dict):
+        result = {}
+    return {
+        "layer_id": result.get("layer_id"),
+        "name": result.get("name", name),
+        "url": url,
+        "asset_id": registration.asset_id,
+        "format": ext.lstrip("."),
+        "kind": "pointcloud",
+    }
+
+
 def _raster_cache_dir(ctx: ToolContext) -> str:
     workspace = ctx.meta.get("workspace_path") if isinstance(ctx.meta, dict) else None
     base = Path(str(workspace)).expanduser() if workspace else Path.cwd()

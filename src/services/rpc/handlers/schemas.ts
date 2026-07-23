@@ -110,6 +110,38 @@ export const AddRasterFromFileSchema = z.object({
   raster: z.any().optional(),
 });
 
+/**
+ * 加载 3D Tiles（OGC tileset.json）。tileset_url 通常由后端文件服务端点提供
+ * （见 python-backend server.py 的 /api/assets/... 端点）。
+ */
+export const AddTiles3DSchema = z.object({
+  tileset_url: z.string().min(1),
+  name: z.string().min(1),
+  layer_id: z.string().min(1).optional(),
+  visible: z.boolean().optional(),
+  bbox: BBoxSchema.optional(),
+  point_size: z.number().positive().optional(),
+  color: z.string().optional(),
+  max_screen_space_error: z.number().positive().optional(),
+  model_matrix: z.array(z.number()).length(16).optional(),
+});
+
+/**
+ * 加载裸点云（.las / .laz）。url 由后端文件服务端点提供。
+ */
+export const AddPointCloudSchema = z.object({
+  url: z.string().min(1),
+  name: z.string().min(1),
+  format: z.enum(['las', 'laz']).optional(),
+  layer_id: z.string().min(1).optional(),
+  visible: z.boolean().optional(),
+  bbox: BBoxSchema.optional(),
+  coordinate: z.enum(['lnglat', 'meter-offset']).optional(),
+  origin: z.array(z.number()).min(2).max(3).optional(),
+  point_size: z.number().positive().optional(),
+  color: z.string().optional(),
+});
+
 /** 分级专题 / 分类专题 / 热力图 / 聚合 / 3D 拔起 的配置 —— 与 LayerStyle 对应字段一致 */
 const GraduatedSchema = z.object({
   field: z.string().min(1),
