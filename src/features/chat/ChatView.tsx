@@ -16,6 +16,32 @@ import type { ChatMessage } from '@/types/chat'
 import { groupMessages } from './groupMessages'
 import { messagePartsForRender } from '@/services/chatMessageParts'
 
+function hasExternalFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes('Files')
+}
+
+function hasChatDroppablePath(e: React.DragEvent): boolean {
+  const types = Array.from(e.dataTransfer.types)
+  return types.includes('Files') || types.includes('application/x-opengis-path')
+}
+
+function filePathToAttachment(path: string): ChatAttachment {
+  const name = path.split(/[\\/]/).pop() || path
+  const isWorkflow = name.endsWith('.flow.json')
+  return { name, path, type: isWorkflow ? 'workflow' : 'file' }
+}
+
+function extractFilePathsFromText(text: string): string[] {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const pathRegex = /^"?([A-Za-z]:\\[^"]+|\\\\[^"]+|\/[^"]+)"?$/
+  const filePaths: string[] = []
+  for (const line of lines) {
+    const match = line.match(pathRegex)
+    if (match) filePaths.push(match[1])
+  }
+  return filePaths.length > 0 && filePaths.length === lines.length ? filePaths : []
+}
+
 // Stable empty reference so the `messages` selector fallback doesn't create a
 // new array each render (which would defeat memoization downstream).
 const EMPTY_MESSAGES: ChatMessage[] = []
@@ -39,6 +65,8 @@ export function ChatView({
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [showAttachPanel, setShowAttachPanel] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [isComposerDragOver, setIsComposerDragOver] = useState(false)
+  const [composerDragHint, setComposerDragHint] = useState<string | null>(null)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editingTitle, setEditingTitle] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -301,6 +329,36 @@ export function ChatView({
     setAttachments((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
+  const appendPathAttachments = useCallback((paths: string[], insertInline = true) => {
+    if (paths.length === 0) return
+
+    const newAttachments = paths.map(filePathToAttachment)
+    setAttachments((prev) => [...prev, ...newAttachments])
+
+    if (!insertInline) return
+
+    const inlineNames = newAttachments.map((attachment) => `📎${attachment.name}`)
+    const ta = textAreaRef.current
+    if (!ta) return
+
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const before = inputValue.slice(0, start)
+    const after = inputValue.slice(end)
+    const spaceBefore = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n') ? ' ' : ''
+    const spaceAfter = after.length > 0 && !after.startsWith(' ') && !after.startsWith('\n') ? ' ' : ''
+    const inlineText = inlineNames.join(' ')
+    const newValue = before + spaceBefore + inlineText + spaceAfter + after
+    setInputValue(newValue)
+
+    requestAnimationFrame(() => {
+      const cursorPos = (before + spaceBefore + inlineText + spaceAfter).length
+      ta.selectionStart = cursorPos
+      ta.selectionEnd = cursorPos
+      adjustTextareaHeight()
+    })
+  }, [inputValue, adjustTextareaHeight])
+
   /**
    * Paste handler: detect file paths copied from file explorer.
    * Patterns matched:
@@ -318,62 +376,61 @@ export function ChatView({
     const text = e.clipboardData.getData('text/plain')?.trim()
     if (!text) return
 
-    // Split by newlines and filter empty lines
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-
-    // Regex: Windows drive path, UNC path, or Unix absolute path
-    // Also strip surrounding quotes (common when copying from explorer address bar)
-    const pathRegex = /^"?([A-Za-z]:\\[^"]+|\\\\[^"]+|\/[^"]+)"?$/
-
-    const filePaths: string[] = []
-    for (const line of lines) {
-      const m = line.match(pathRegex)
-      if (m) {
-        filePaths.push(m[1])
-      }
-    }
-
-    // Only intercept if ALL lines are file paths (avoid false positives)
-    if (filePaths.length === 0 || filePaths.length !== lines.length) return
+    const filePaths = extractFilePathsFromText(text)
+    if (filePaths.length === 0) return
 
     e.preventDefault()
+    appendPathAttachments(filePaths, true)
+  }, [appendPathAttachments])
 
-    // Build inline text snippet and attachment entries
-    const newAttachments: ChatAttachment[] = []
-    const inlineNames: string[] = []
+  const handleComposerDragEnter = useCallback((e: React.DragEvent) => {
+    if (!hasChatDroppablePath(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setIsComposerDragOver(true)
+    setComposerDragHint(t.chat.dropToAttachHint)
+  }, [t])
 
-    for (const fp of filePaths) {
-      const name = fp.split(/[\\/]/).pop() ?? fp
-      const isWorkflow = name.endsWith('.flow.json')
-      newAttachments.push({ name, path: fp, type: isWorkflow ? 'workflow' : 'file' })
-      inlineNames.push(`📎${name}`)
+  const handleComposerDragOver = useCallback((e: React.DragEvent) => {
+    if (!hasChatDroppablePath(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+    setIsComposerDragOver(true)
+  }, [])
+
+  const handleComposerDragLeave = useCallback((e: React.DragEvent) => {
+    if (!hasChatDroppablePath(e)) return
+    const nextTarget = e.relatedTarget as Node | null
+    if (nextTarget && e.currentTarget.contains(nextTarget)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setIsComposerDragOver(false)
+    setComposerDragHint(null)
+  }, [])
+
+  const handleComposerDrop = useCallback((e: React.DragEvent) => {
+    const hasFiles = hasExternalFiles(e)
+    const hasText = e.dataTransfer.types.includes('application/x-opengis-path')
+    if (!hasFiles && !hasText) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const files = Array.from(e.dataTransfer.files)
+      .map((file) => window.electronAPI?.getPathForFile?.(file) || (file as any).path || '')
+      .filter((path): path is string => Boolean(path))
+
+    const text = e.dataTransfer.getData('text/plain')?.trim() || ''
+    const textPaths = text ? extractFilePathsFromText(text) : []
+    const paths = files.length > 0 ? files : textPaths
+
+    if (paths.length > 0) {
+      appendPathAttachments(paths, true)
     }
 
-    // Insert inline references at the current cursor position in the textarea
-    const ta = textAreaRef.current
-    if (ta) {
-      const start = ta.selectionStart
-      const end = ta.selectionEnd
-      const before = inputValue.slice(0, start)
-      const after = inputValue.slice(end)
-      // Add a space before/after the inline reference for readability
-      const spaceBefore = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n') ? ' ' : ''
-      const spaceAfter = after.length > 0 && !after.startsWith(' ') && !after.startsWith('\n') ? ' ' : ''
-      const inlineText = inlineNames.join(' ')
-      const newValue = before + spaceBefore + inlineText + spaceAfter + after
-      setInputValue(newValue)
-
-      // Move cursor to after the inserted text
-      requestAnimationFrame(() => {
-        const cursorPos = (before + spaceBefore + inlineText + spaceAfter).length
-        ta.selectionStart = cursorPos
-        ta.selectionEnd = cursorPos
-        adjustTextareaHeight()
-      })
-    }
-
-    setAttachments((prev) => [...prev, ...newAttachments])
-  }, [inputValue, adjustTextareaHeight])
+    setIsComposerDragOver(false)
+    setComposerDragHint(null)
+  }, [appendPathAttachments])
 
   const handleSuggestionClick = useCallback(async (text: string) => {
     if (isBusy) return
@@ -503,7 +560,12 @@ export function ChatView({
       variant === 'floating'
         ? 'rounded-2xl shadow-2xl'
         : ''
-    }`}>
+    }`}
+      onDragEnter={handleComposerDragEnter}
+      onDragOver={handleComposerDragOver}
+      onDragLeave={handleComposerDragLeave}
+      onDrop={handleComposerDrop}
+    >
       <ChatHeader
         variant={variant}
         hasTask={hasTask}
@@ -620,6 +682,8 @@ export function ChatView({
           inputValue={inputValue}
           attachments={attachments}
           showAttachPanel={showAttachPanel}
+          isDragOver={isComposerDragOver}
+          dragHint={composerDragHint}
           isBusy={isBusy}
           isCancelling={isCancelling}
           textAreaRef={textAreaRef}

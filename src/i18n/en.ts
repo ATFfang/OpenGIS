@@ -106,6 +106,8 @@ export const en = {
     attachFile: 'Attach file',
     attachWorkflow: 'Attach workflow',
     browseFiles: 'Browse files',
+    dropToAttach: 'Drop to attach to chat',
+    dropToAttachHint: 'Files and layers will be added as path attachments',
     emptyState: {
       title: 'OpenGIS Agent',
       subtitle: 'Your AI-powered GIS assistant',
@@ -475,6 +477,15 @@ export const en = {
     loadingFiles: 'Loading files...',
     failedToLoad: 'Failed to load',
     noFilesMatching: 'No files matching',
+    dropToImport: 'Drop to copy into workspace',
+    dropToImportHint: 'Files and folders are supported; originals stay in place',
+    importingFiles: 'Copying files',
+    scanningImport: 'Scanning files...',
+    importComplete: 'Copy complete',
+    importFailed: 'Copy failed',
+    importPartialFailed: 'Some files failed to copy',
+    importedFiles: 'Copied {done}/{total} files',
+    importDestination: 'Copying to current workspace',
   },
 
   // ─── Skills Panel ────────────────────────────────────────────

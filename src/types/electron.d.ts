@@ -38,6 +38,28 @@ interface Window {
     writeFileBinary: (path: string, buffer: ArrayBuffer) => Promise<{ success: boolean; error?: string }>
     getFileInfo: (path: string) => Promise<{ success: boolean; info?: any; error?: string }>
     readDirectory: (path: string) => Promise<{ success: boolean; entries?: any[]; error?: string }>
+    getPathForFile: (file: File) => string
+    importPaths: (sources: string[], destinationDir: string, workspaceRoot: string) => Promise<{
+      success: boolean
+      id?: string
+      imported?: Array<{ source: string; destination: string; isDirectory: boolean }>
+      totalBytes?: number
+      copiedBytes?: number
+      totalFiles?: number
+      copiedFiles?: number
+      errors?: string[]
+      error?: string
+    }>
+    onFileImportProgress: (callback: (progress: {
+      id: string
+      phase: 'scanning' | 'copying' | 'done' | 'error'
+      currentName?: string
+      copiedBytes: number
+      totalBytes: number
+      copiedFiles: number
+      totalFiles: number
+      errors?: string[]
+    }) => void) => () => void
     openFolderDialog: () => Promise<string | null>
     deleteFile: (path: string) => Promise<{ success: boolean; error?: string }>
     renameFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>
