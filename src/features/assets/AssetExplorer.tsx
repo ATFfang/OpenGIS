@@ -36,6 +36,9 @@ import {
   ScrollText,
   Loader2,
   BarChart3,
+  UploadCloud,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 import { useAssetStore, type FileNode, type SortMode } from '@/stores/assetStore'
@@ -58,6 +61,47 @@ const TEXT_EXTS = new Set(['.json', '.yaml', '.yml', '.toml', '.xml', '.html', '
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.svg', '.gif', '.bmp', '.webp'])
 const CSV_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
 const LARGE_LAYER_THRESHOLD_BYTES = 20 * 1024 * 1024
+
+interface FileImportProgress {
+  id: string
+  phase: 'scanning' | 'copying' | 'done' | 'error'
+  currentName?: string
+  copiedBytes: number
+  totalBytes: number
+  copiedFiles: number
+  totalFiles: number
+  errors?: string[]
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
+}
+
+function hasExternalFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes('Files')
+}
+
+function directoryEntriesToNodes(entries: any[], depth: number): FileNode[] {
+  return entries.map((entry: any) => ({
+    path: entry.path,
+    name: entry.name,
+    type: entry.isDirectory ? 'directory' : 'file',
+    extension: entry.extension || '',
+    size: entry.size,
+    modifiedTime: entry.modifiedTime,
+    children: entry.isDirectory ? [] : undefined,
+    childrenLoaded: false,
+    depth,
+  }))
+}
 
 /**
  * Extensions that are openable in the tab viewer in addition to code/text:
@@ -100,7 +144,12 @@ export function AssetExplorer() {
 
   const [showSearch, setShowSearch] = useState(false)
   const [showSortMenu, setShowSortMenu] = useState(false)
+  const [isFileDragOver, setIsFileDragOver] = useState(false)
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [importProgress, setImportProgress] = useState<FileImportProgress | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const dragDepthRef = useRef(0)
+  const clearImportProgressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ─── Load workspace directory ─────────────────────────────────
 
@@ -114,18 +163,7 @@ export function AssetExplorer() {
       try {
         const result = await window.electronAPI.readDirectory(dirPath)
         if (result.success && result.entries) {
-          const nodes: FileNode[] = result.entries.map((entry: any) => ({
-            path: entry.path,
-            name: entry.name,
-            type: entry.isDirectory ? 'directory' : 'file',
-            extension: entry.extension || '',
-            size: entry.size,
-            modifiedTime: entry.modifiedTime,
-            children: entry.isDirectory ? [] : undefined,
-            childrenLoaded: false,
-            depth: 0,
-          }))
-          setRootNodes(nodes)
+          setRootNodes(directoryEntriesToNodes(result.entries, 0))
         } else {
           setError(result.error || 'Failed to read directory')
         }
@@ -136,6 +174,24 @@ export function AssetExplorer() {
       }
     },
     [setRootNodes, setLoading, setError]
+  )
+
+  const refreshDirectory = useCallback(
+    async (dirPath: string, depth = 0) => {
+      if (!window.electronAPI?.readDirectory) return
+      if (workspacePath && dirPath === workspacePath) {
+        await loadDirectory(workspacePath)
+        return
+      }
+
+      const result = await window.electronAPI.readDirectory(dirPath)
+      if (result.success && result.entries) {
+        useAssetStore
+          .getState()
+          .updateDirectoryChildren(dirPath, directoryEntriesToNodes(result.entries, depth + 1))
+      }
+    },
+    [workspacePath, loadDirectory]
   )
 
   // Auto-load when workspace path changes
@@ -185,6 +241,34 @@ export function AssetExplorer() {
     return () => window.removeEventListener('opengis:assets-refresh', onAssetsRefresh)
   }, [workspacePath, loadDirectory])
 
+  useEffect(() => {
+    if (!window.electronAPI?.onFileImportProgress) return
+
+    return window.electronAPI.onFileImportProgress((progress) => {
+      if (clearImportProgressRef.current) {
+        clearTimeout(clearImportProgressRef.current)
+        clearImportProgressRef.current = null
+      }
+
+      setImportProgress(progress)
+
+      if (progress.phase === 'done' || progress.phase === 'error') {
+        clearImportProgressRef.current = setTimeout(() => {
+          setImportProgress(null)
+          clearImportProgressRef.current = null
+        }, progress.phase === 'done' ? 3500 : 6500)
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (clearImportProgressRef.current) {
+        clearTimeout(clearImportProgressRef.current)
+      }
+    }
+  }, [])
+
   // ─── Toggle search ────────────────────────────────────────────
 
   const handleToggleSearch = useCallback(() => {
@@ -222,6 +306,105 @@ export function AssetExplorer() {
     }
   }, [])
 
+  // ─── Import dropped files/folders into workspace ─────────────
+
+  const isImporting = importProgress?.phase === 'scanning' || importProgress?.phase === 'copying'
+
+  const handleAssetDragEnter = useCallback((e: React.DragEvent) => {
+    if (!hasExternalFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current += 1
+    setIsFileDragOver(true)
+  }, [])
+
+  const handleAssetDragOver = useCallback((e: React.DragEvent) => {
+    if (!hasExternalFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = workspacePath && !isImporting ? 'copy' : 'none'
+    setIsFileDragOver(true)
+  }, [workspacePath, isImporting])
+
+  const handleAssetDragLeave = useCallback((e: React.DragEvent) => {
+    if (!hasExternalFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) {
+      setIsFileDragOver(false)
+      setDropTargetPath(null)
+    }
+  }, [])
+
+  const importDroppedFiles = useCallback(
+    async (e: React.DragEvent, destinationOverride?: string, destinationDepth = 0) => {
+      if (!hasExternalFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      dragDepthRef.current = 0
+      setIsFileDragOver(false)
+      setDropTargetPath(null)
+
+      if (!workspacePath || isImporting || !window.electronAPI?.importPaths) return
+
+      const api = window.electronAPI
+      const destinationDir = destinationOverride || dropTargetPath || workspacePath
+      const sources = Array.from(e.dataTransfer.files)
+        .map((file) => api.getPathForFile?.(file) || (file as any).path || '')
+        .filter((path): path is string => Boolean(path))
+
+      if (sources.length === 0) {
+        setImportProgress({
+          id: `import_error_${Date.now()}`,
+          phase: 'error',
+          copiedBytes: 0,
+          totalBytes: 0,
+          copiedFiles: 0,
+          totalFiles: 0,
+          errors: ['Could not resolve dropped file paths.'],
+        })
+        return
+      }
+
+      try {
+        const result = await api.importPaths(sources, destinationDir, workspacePath)
+        if (result.success || result.imported?.length) {
+          await refreshDirectory(destinationDir, destinationDepth)
+        }
+        if (!result.success && result.error && !importProgress) {
+          setImportProgress({
+            id: result.id || `import_error_${Date.now()}`,
+            phase: 'error',
+            copiedBytes: result.copiedBytes || 0,
+            totalBytes: result.totalBytes || 0,
+            copiedFiles: result.copiedFiles || 0,
+            totalFiles: result.totalFiles || 0,
+            errors: result.errors || [result.error],
+          })
+        }
+      } catch (err) {
+        setImportProgress({
+          id: `import_error_${Date.now()}`,
+          phase: 'error',
+          copiedBytes: 0,
+          totalBytes: 0,
+          copiedFiles: 0,
+          totalFiles: 0,
+          errors: [String(err)],
+        })
+      }
+    },
+    [workspacePath, isImporting, dropTargetPath, refreshDirectory, importProgress]
+  )
+
+  const handleAssetDrop = useCallback(
+    (e: React.DragEvent) => {
+      importDroppedFiles(e)
+    },
+    [importDroppedFiles]
+  )
+
   // ─── Render ───────────────────────────────────────────────────
 
   const filteredNodes = getFilteredNodes()
@@ -230,7 +413,13 @@ export function AssetExplorer() {
     : null
 
   return (
-    <div className="w-full h-full flex flex-col bg-bg-primary overflow-hidden select-none">
+    <div
+      className="relative w-full h-full flex flex-col bg-bg-primary overflow-hidden select-none"
+      onDragEnter={handleAssetDragEnter}
+      onDragOver={handleAssetDragOver}
+      onDragLeave={handleAssetDragLeave}
+      onDrop={handleAssetDrop}
+    >
       {/* Header */}
       <div className="h-9 border-b border-border flex items-center px-3 shrink-0 gap-1">
         <span className="text-xs font-semibold text-text-secondary flex-1 truncate">
@@ -334,6 +523,10 @@ export function AssetExplorer() {
         </div>
       )}
 
+      {importProgress && (
+        <ImportProgressBar progress={importProgress} />
+      )}
+
       {/* File tree */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {openingFolder ? (
@@ -353,11 +546,108 @@ export function AssetExplorer() {
         ) : (
           <div className="py-1">
             {filteredNodes.map((node) => (
-              <FileTreeNode key={node.path} node={node} depth={0} />
+              <FileTreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                isImporting={isImporting}
+                dropTargetPath={dropTargetPath}
+                setDropTargetPath={setDropTargetPath}
+                importDroppedFiles={importDroppedFiles}
+                refreshDirectory={refreshDirectory}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {isFileDragOver && !dropTargetPath && (
+        <div className="absolute inset-2 z-50 rounded-lg border border-dashed border-accent-primary/60 bg-bg-primary/85 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col items-center text-center px-4">
+            <div className="w-10 h-10 rounded-lg bg-accent-primary/12 flex items-center justify-center mb-2">
+              <UploadCloud className="w-5 h-5 text-accent-primary" />
+            </div>
+            <div className="text-xs font-semibold text-text-primary">
+              {workspacePath ? t.assets.dropToImport : t.assets.openWorkspace}
+            </div>
+            <div className="text-2xs text-text-muted mt-1 max-w-[220px]">
+              {workspacePath ? t.assets.dropToImportHint : t.assets.openWorkspaceHint}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ImportProgressBar({ progress }: { progress: FileImportProgress }) {
+  const t = useT()
+  const byteRatio = progress.totalBytes > 0 ? progress.copiedBytes / progress.totalBytes : 0
+  const fileRatio = progress.totalFiles > 0 ? progress.copiedFiles / progress.totalFiles : 0
+  const ratio = Math.max(0, Math.min(1, progress.totalBytes > 0 ? byteRatio : fileRatio))
+  const isDone = progress.phase === 'done'
+  const isError = progress.phase === 'error'
+  const title = progress.phase === 'scanning'
+    ? t.assets.scanningImport
+    : isDone
+      ? t.assets.importComplete
+      : isError
+        ? progress.copiedFiles > 0
+          ? t.assets.importPartialFailed
+          : t.assets.importFailed
+        : t.assets.importingFiles
+  const detail = progress.phase === 'scanning'
+    ? t.assets.importDestination
+    : t.assets.importedFiles
+      .replace('{done}', String(progress.copiedFiles))
+      .replace('{total}', String(progress.totalFiles || progress.copiedFiles))
+
+  return (
+    <div className="shrink-0 px-2 py-1.5 border-b border-border bg-bg-secondary/70">
+      <div className="flex items-center gap-2">
+        <div className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
+          isError
+            ? 'bg-accent-danger/12 text-accent-danger'
+            : isDone
+              ? 'bg-accent-geo/12 text-accent-geo'
+              : 'bg-accent-primary/12 text-accent-primary'
+        }`}>
+          {isError ? (
+            <AlertTriangle className="w-3.5 h-3.5" />
+          ) : isDone ? (
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          ) : (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs font-medium text-text-primary truncate">{title}</span>
+            <span className="text-2xs text-text-muted shrink-0">
+              {formatBytes(progress.copiedBytes)} / {formatBytes(progress.totalBytes)}
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 rounded-full bg-bg-tertiary overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-150 ${
+                isError ? 'bg-accent-danger' : isDone ? 'bg-accent-geo' : 'bg-accent-primary'
+              }`}
+              style={{ width: `${isDone ? 100 : ratio * 100}%` }}
+            />
+          </div>
+          <div className="mt-1 flex items-center justify-between gap-2 text-2xs text-text-muted">
+            <span className="truncate">{progress.currentName || detail}</span>
+            {progress.phase !== 'scanning' && (
+              <span className="shrink-0">{detail}</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {isError && progress.errors?.[0] && (
+        <div className="mt-1 pl-7 text-2xs text-accent-danger/90 truncate" title={progress.errors.join('\n')}>
+          {progress.errors[0]}
+        </div>
+      )}
     </div>
   )
 }
@@ -367,12 +657,26 @@ export function AssetExplorer() {
 interface FileTreeNodeProps {
   node: FileNode
   depth: number
+  isImporting: boolean
+  dropTargetPath: string | null
+  setDropTargetPath: (path: string | null) => void
+  importDroppedFiles: (e: React.DragEvent, destinationOverride?: string, destinationDepth?: number) => Promise<void>
+  refreshDirectory: (dirPath: string, depth?: number) => Promise<void>
 }
 
-function FileTreeNode({ node, depth }: FileTreeNodeProps) {
+function FileTreeNode({
+  node,
+  depth,
+  isImporting,
+  dropTargetPath,
+  setDropTargetPath,
+  importDroppedFiles,
+  refreshDirectory,
+}: FileTreeNodeProps) {
   const t = useT()
   const isExpanded = useAssetStore((s) => s.isExpanded(node.path))
   const toggleExpanded = useAssetStore((s) => s.toggleExpanded)
+  const setExpanded = useAssetStore((s) => s.setExpanded)
   const selectedPath = useAssetStore((s) => s.selectedPath)
   const setSelectedPath = useAssetStore((s) => s.setSelectedPath)
   const updateDirectoryChildren = useAssetStore((s) => s.updateDirectoryChildren)
@@ -389,6 +693,7 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
 
   const isSelected = selectedPath === node.path
   const isDirectory = node.type === 'directory'
+  const isDropTarget = isDirectory && dropTargetPath === node.path
   const isGisFile = isSupportedExtension(node.name)
   const canPivot = canPivotFile(node)
   // Defensive: agent-created layers may lack `meta`.
@@ -471,6 +776,42 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
     }
   }, [isDirectory, isGisFile, isLoadingToMap, node, addLayers, alert])
 
+  // ─── Drop into directory ─────────────────────────────────────
+
+  const handleDirectoryDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!isDirectory || !hasExternalFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = isImporting ? 'none' : 'copy'
+      if (!isImporting) {
+        setDropTargetPath(node.path)
+      }
+    },
+    [isDirectory, isImporting, node.path, setDropTargetPath]
+  )
+
+  const handleDirectoryDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (!isDirectory || !hasExternalFiles(e)) return
+      const nextTarget = e.relatedTarget as Node | null
+      if (nextTarget && e.currentTarget.contains(nextTarget)) return
+      e.preventDefault()
+      e.stopPropagation()
+      setDropTargetPath(null)
+    },
+    [isDirectory, setDropTargetPath]
+  )
+
+  const handleDirectoryDrop = useCallback(
+    async (e: React.DragEvent) => {
+      if (!isDirectory || !hasExternalFiles(e)) return
+      setExpanded(node.path, true)
+      await importDroppedFiles(e, node.path, depth)
+    },
+    [isDirectory, setExpanded, node.path, importDroppedFiles, depth]
+  )
+
   // ─── Context menu ─────────────────────────────────────────────
 
   const handleContextMenu = useCallback(
@@ -482,6 +823,12 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
     },
     [node.path, setSelectedPath]
   )
+
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = 'copy'
+    e.dataTransfer.setData('text/plain', node.path)
+    e.dataTransfer.setData('application/x-opengis-path', node.path)
+  }, [node.path])
 
   // ─── Rename ───────────────────────────────────────────────────
 
@@ -548,12 +895,21 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
         className={`
           group relative flex items-center gap-1 pr-2 py-[3px] cursor-pointer
           transition-colors duration-75
-          ${isSelected ? 'bg-accent-primary/12 text-text-primary' : 'hover:bg-bg-hover text-text-secondary'}
+          ${isDropTarget
+            ? 'bg-accent-primary/16 text-text-primary ring-1 ring-inset ring-accent-primary/35'
+            : isSelected
+              ? 'bg-accent-primary/12 text-text-primary'
+              : 'hover:bg-bg-hover text-text-secondary'}
         `}
         style={{ paddingLeft }}
+        draggable={true}
+        onDragStart={handleDragStart}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
+        onDragOver={handleDirectoryDragOver}
+        onDragLeave={handleDirectoryDragLeave}
+        onDrop={handleDirectoryDrop}
         title={node.path}
       >
         {/* Expand/collapse arrow (directories only) */}
@@ -629,7 +985,16 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
       {isDirectory && isExpanded && node.children && (
         <div className="animate-slide-up">
           {node.children.map((child) => (
-            <FileTreeNode key={child.path} node={child} depth={depth + 1} />
+            <FileTreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              isImporting={isImporting}
+              dropTargetPath={dropTargetPath}
+              setDropTargetPath={setDropTargetPath}
+              importDroppedFiles={importDroppedFiles}
+              refreshDirectory={refreshDirectory}
+            />
           ))}
           {node.children.length === 0 && node.childrenLoaded && (
             <div

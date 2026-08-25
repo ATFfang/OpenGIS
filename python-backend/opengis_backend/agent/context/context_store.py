@@ -10,6 +10,7 @@ from opengis_backend.agent.context.context_persistence import load_context, save
 from opengis_backend.agent.context.knowledge_extractor import KnowledgeExtractor
 from opengis_backend.agent.workflow.workflow_model import WorkflowDocument
 from opengis_backend.runs import RunArchive
+from opengis_backend.workspace.evolution_pipeline import EvolutionPipeline
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,12 @@ class AgentContextStore:
             KnowledgeExtractor(workspace).extract_run(
                 user_message=user_message,
                 final_answer=final_answer,
+                run_archive=run_archive,
+                workflow=workflow.to_dict() if workflow is not None else None,
+            )
+            EvolutionPipeline(workspace).process_run(
+                user_message=user_message,
+                final_answer=str(final_answer),
                 run_archive=run_archive,
                 workflow=workflow.to_dict() if workflow is not None else None,
             )

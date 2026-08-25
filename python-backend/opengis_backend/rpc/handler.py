@@ -31,6 +31,8 @@ from opengis_backend.runtime.constants import (  # noqa: E402 module-level impor
     TITLE_GEN_TIMEOUT,
 )
 from opengis_backend.runs import RunArchive
+from opengis_backend.workspace.evolution_asset_registry import EvolutionAssetRegistry
+from opengis_backend.workspace.evolution_report import EvolutionReporter
 from opengis_backend.sandbox.script_runner import ScriptRunner
 from opengis_backend.tools.context import ToolContext
 from opengis_backend.skills.discovery import UserSkillDiscovery, add_source_path
@@ -85,6 +87,43 @@ def _normalise_workspace(path: str | None) -> str:
         return str(Path(path).expanduser().resolve()).replace("\\", "/")
     except Exception:
         return str(path).replace("\\", "/")
+
+
+def _coerce_agent_feature_flags(raw: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist and clamp user-controlled agent runtime feature flags."""
+    out: dict[str, Any] = {}
+    if "enable_3d" in raw:
+        out["enable_3d"] = bool(raw.get("enable_3d"))
+    int_ranges = {
+        "capability_router_max_skills": (0, 12),
+        "capability_router_max_operations": (0, 12),
+        "capability_router_max_assets": (0, 12),
+    }
+    for key, (minimum, maximum) in int_ranges.items():
+        value = _coerce_number(raw.get(key), minimum=minimum, maximum=maximum)
+        if value is not None:
+            out[key] = int(value)
+    float_ranges = {
+        "capability_router_min_score": (0.0, 20.0),
+        "capability_router_cache_ttl_seconds": (0.0, 300.0),
+    }
+    for key, (minimum, maximum) in float_ranges.items():
+        value = _coerce_number(raw.get(key), minimum=minimum, maximum=maximum)
+        if value is not None:
+            out[key] = float(value)
+    return out
+
+
+def _coerce_number(value: Any, *, minimum: float, maximum: float) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return min(max(parsed, minimum), maximum)
 
 
 _TITLED_FILE = ".opengis/titled_conversations.json"
@@ -250,6 +289,11 @@ class RpcHandler:
             "rpc.runs.list": self._handle_runs_list,
             "rpc.runs.get": self._handle_runs_get,
             "rpc.runs.replay": self._handle_runs_replay,
+            "rpc.evolution.report": self._handle_evolution_report,
+            "rpc.evolution.assets.list": self._handle_evolution_assets_list,
+            "rpc.evolution.assets.set_state": self._handle_evolution_assets_set_state,
+            "rpc.evolution.assets.rollback": self._handle_evolution_assets_rollback,
+            "rpc.evolution.assets.archive_unloadable": self._handle_evolution_assets_archive_unloadable,
             "rpc.agent.profiles.list": self._handle_agent_profiles_list,
             "rpc.agent.profiles.install_defaults": self._handle_agent_profiles_install_defaults,
             "rpc.agent.sessions.list": self._handle_agent_sessions_list,
@@ -775,11 +819,7 @@ class RpcHandler:
         user_instructions = params.get("user_instructions") or None
         raw_feature_flags = params.get("feature_flags")
         feature_flags = (
-            {
-                str(key): bool(value)
-                for key, value in raw_feature_flags.items()
-                if str(key) in {"enable_3d"}
-            }
+            _coerce_agent_feature_flags(raw_feature_flags)
             if isinstance(raw_feature_flags, dict)
             else {}
         )
@@ -1336,21 +1376,121 @@ class RpcHandler:
             "llm_usage": ra.read_llm_usage(),
         }
 
+    async def _handle_evolution_report(self, params: dict) -> Any:
+        workspace = params.get("workspace_path") or None
+        limit = int(params.get("limit", 12))
+        report = EvolutionReporter(workspace).build(limit=limit)
+        return {
+            "status": "ok",
+            "report": report.to_dict(),
+        }
+
+    async def _handle_evolution_assets_list(self, params: dict) -> Any:
+        workspace = params.get("workspace_path") or None
+        kind = str(params.get("kind") or "").strip() or None
+        state = str(params.get("state") or "").strip() or None
+        limit = int(params.get("limit") or 100)
+        assets = EvolutionAssetRegistry(workspace).list(kind=kind, state=state, limit=limit)
+        return {
+            "status": "ok",
+            "assets": [item.to_dict() for item in assets],
+        }
+
+    async def _handle_evolution_assets_set_state(self, params: dict) -> Any:
+        workspace = params.get("workspace_path") or None
+        asset_id = str(params.get("asset_id") or "").strip()
+        state = str(params.get("state") or "").strip()
+        reason = str(params.get("reason") or "").strip()
+        if not asset_id:
+            raise ValueError("Missing required parameter: asset_id")
+        if not state:
+            raise ValueError("Missing required parameter: state")
+        asset = EvolutionAssetRegistry(workspace).set_state(asset_id, state, reason=reason)
+        report = EvolutionReporter(workspace).build(limit=int(params.get("limit") or 12))
+        return {
+            "status": "ok",
+            "asset": asset.to_dict(),
+            "report": report.to_dict(),
+        }
+
+    async def _handle_evolution_assets_rollback(self, params: dict) -> Any:
+        workspace = params.get("workspace_path") or None
+        asset_id = str(params.get("asset_id") or "").strip()
+        reason = str(params.get("reason") or "").strip()
+        if not asset_id:
+            raise ValueError("Missing required parameter: asset_id")
+        asset = EvolutionAssetRegistry(workspace).rollback(asset_id, reason=reason)
+        report = EvolutionReporter(workspace).build(limit=int(params.get("limit") or 12))
+        return {
+            "status": "ok",
+            "asset": asset.to_dict(),
+            "report": report.to_dict(),
+        }
+
+    async def _handle_evolution_assets_archive_unloadable(self, params: dict) -> Any:
+        workspace = params.get("workspace_path") or None
+        reason = str(params.get("reason") or "settings panel archived unloadable assets").strip()
+        archived = EvolutionAssetRegistry(workspace).archive_unloadable(reason=reason)
+        report = EvolutionReporter(workspace).build(limit=int(params.get("limit") or 12))
+        return {
+            "status": "ok",
+            "archived": [item.to_dict() for item in archived],
+            "report": report.to_dict(),
+        }
+
     def _operation_store(self, params: dict) -> OperationStore:
         workspace = params.get("workspace_path")
         if not workspace:
             raise ValueError("Missing required parameter: workspace_path")
         return OperationStore.from_workspace(workspace)
 
+    def _filter_enabled_evolution_operations(self, workspace: str, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        registry = EvolutionAssetRegistry(workspace)
+        registry_assets = {record.name: record for record in registry.list(kind="operation", limit=1000)}
+        out: list[dict[str, Any]] = []
+        for operation in operations:
+            operation_id = str(operation.get("id") or "").strip()
+            asset = registry_assets.get(operation_id)
+            state = asset.state if asset is not None else None
+            if state is not None and state != "enabled":
+                continue
+            if asset is not None and not registry.inspect(asset).get("loadable"):
+                continue
+            row = dict(operation)
+            if state is not None:
+                row["evolution_asset_state"] = state
+            out.append(row)
+        return out
+
+    def _ensure_enabled_evolution_operation(self, workspace: str, operation_id: str) -> None:
+        registry = EvolutionAssetRegistry(workspace)
+        asset = registry.find("operation", operation_id)
+        if asset is None:
+            return
+        if asset.state != "enabled":
+            raise ValueError(
+                f"operation '{operation_id}' is an evolution asset in state '{asset.state}'. "
+                "Enable it in Settings > Evolution before running it."
+            )
+        health = registry.inspect(asset)
+        if not health.get("loadable"):
+            issues = ", ".join(str(item) for item in health.get("issues") or []) or "not loadable"
+            raise ValueError(f"operation '{operation_id}' is enabled but not loadable: {issues}")
+
     async def _handle_operations_list(self, params: dict) -> Any:
         store = self._operation_store(params)
         query = str(params.get("query") or "")
         limit = int(params.get("limit") or 50)
+        workspace = str(params.get("workspace_path") or "")
+        operations = self._filter_enabled_evolution_operations(
+            workspace,
+            store.list(query=query, limit=limit),
+        )
         return {
             "status": "ok",
             "operation_root": str(store.root),
             "operation_roots": store.roots,
-            "operations": store.list(query=query, limit=limit),
+            "operations": operations,
         }
 
     async def _handle_operations_get(self, params: dict) -> Any:
@@ -1358,6 +1498,7 @@ class RpcHandler:
         if not operation_id:
             raise ValueError("Missing required parameter: operation_id")
         store = self._operation_store(params)
+        self._ensure_enabled_evolution_operation(str(params.get("workspace_path") or ""), operation_id)
         operation = store.load(
             operation_id,
             include_readme=bool(params.get("include_readme", True)),
@@ -1374,6 +1515,7 @@ class RpcHandler:
         if not isinstance(run_params, dict):
             raise ValueError("params must be a JSON object")
         timeout_seconds = int(params.get("timeout_seconds") or 600)
+        self._ensure_enabled_evolution_operation(str(params.get("workspace_path") or ""), operation_id)
         record = self._operation_store(params).run(
             operation_id,
             run_params,

@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from opengis_backend.agent.context.context_projector import ContextProjector
 from opengis_backend.agent.context.request_budget import RequestBudgetManager
+from opengis_backend.agent.execution.capability_router import skill_loading_policy_prompt
 from opengis_backend.agent.execution.executor_factory import build_subprocess_executor
 from opengis_backend.agent.execution.tool_capabilities import format_capability_manifest
 from opengis_backend.agent.execution.tool_output import ToolOutputRuntime
@@ -19,7 +20,7 @@ from opengis_backend.agent.llm import LLMConfig, build_llm_caller
 from opengis_backend.agent.prompts import OPENGIS_SYSTEM_PROMPT, build_tool_catalog_summary
 from opengis_backend.agent.telemetry.event_log import MessagePart
 from opengis_backend.agent.tools import build_tool_callables, filter_agent_tools
-from opengis_backend.skills.discovery import UserSkillDiscovery, format_available_skills
+from opengis_backend.skills.discovery import UserSkillDiscovery
 from opengis_backend.tools.context import ToolContext, run_async_from_sync
 from opengis_backend.tools.registry import ToolRegistry
 
@@ -59,10 +60,9 @@ def compose_system_prompt(
     :func:`project_run_memory` and placed in the dynamic tail by the loops.
     """
     workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
-    user_skills = UserSkillDiscovery(workspace_path=workspace).list()
     prompt = OPENGIS_SYSTEM_PROMPT.format(
         tool_signatures=build_tool_catalog_summary(registered_tools),
-        available_skills=format_available_skills(user_skills),
+        available_skills=skill_loading_policy_prompt(len(UserSkillDiscovery(workspace_path=workspace).list()) if workspace else 0),
     )
     # Stable capability manifest: domain-level "what this platform can do".
     # Deterministic from the profile tool set, so it rides the cache prefix and

@@ -8,6 +8,7 @@ from typing import Any, Optional
 from opengis_backend.operations import OperationStore
 from opengis_backend.tools.context import ToolContext
 from opengis_backend.tools.registry import tool
+from opengis_backend.workspace.evolution_asset_registry import EvolutionAssetRegistry
 
 
 def _store(ctx: ToolContext) -> OperationStore:
@@ -15,6 +16,48 @@ def _store(ctx: ToolContext) -> OperationStore:
     if not workspace:
         raise RuntimeError("A workspace is required to use reusable operations.")
     return OperationStore.from_workspace(workspace)
+
+
+def _workspace(ctx: ToolContext) -> str:
+    workspace = (getattr(ctx, "meta", None) or {}).get("workspace_path")
+    if not workspace:
+        raise RuntimeError("A workspace is required to use reusable operations.")
+    return str(workspace)
+
+
+def _filter_enabled_evolution_operations(workspace: str, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    registry = EvolutionAssetRegistry(workspace)
+    registry_assets = {record.name: record for record in registry.list(kind="operation", limit=1000)}
+    out: list[dict[str, Any]] = []
+    for operation in operations:
+        op_id = str(operation.get("id") or "").strip()
+        asset = registry_assets.get(op_id)
+        state = asset.state if asset is not None else None
+        if state is not None and state != "enabled":
+            continue
+        if asset is not None and not registry.inspect(asset).get("loadable"):
+            continue
+        row = dict(operation)
+        if state is not None:
+            row["evolution_asset_state"] = state
+        out.append(row)
+    return out
+
+
+def _ensure_enabled_evolution_operation(workspace: str, operation_id: str) -> None:
+    registry = EvolutionAssetRegistry(workspace)
+    asset = registry.find("operation", operation_id)
+    if asset is None:
+        return
+    if asset.state != "enabled":
+        raise RuntimeError(
+            f"operation '{operation_id}' is an evolution asset in state '{asset.state}'. "
+            "Enable it in Settings > Evolution before running it."
+        )
+    health = registry.inspect(asset)
+    if not health.get("loadable"):
+        issues = ", ".join(str(item) for item in health.get("issues") or []) or "not loadable"
+        raise RuntimeError(f"operation '{operation_id}' is enabled but not loadable: {issues}")
 
 
 def _json_obj(value: Any, *, default: Optional[dict[str, Any]] = None, name: str = "value") -> dict[str, Any]:
@@ -67,11 +110,15 @@ def _string_list(value: Any) -> list[str]:
 )
 def list_operations(ctx: ToolContext, query: str = "", limit: int | float = 50) -> dict[str, Any]:
     store = _store(ctx)
+    operations = _filter_enabled_evolution_operations(
+        _workspace(ctx),
+        store.list(query=str(query or ""), limit=int(limit or 50)),
+    )
     return {
         "success": True,
         "operation_root": str(store.root),
         "operation_roots": store.roots,
-        "operations": store.list(query=str(query or ""), limit=int(limit or 50)),
+        "operations": operations,
     }
 
 
@@ -96,6 +143,7 @@ def get_operation(
     include_code: bool = False,
     max_code_chars: int | float = 40000,
 ) -> dict[str, Any]:
+    _ensure_enabled_evolution_operation(_workspace(ctx), operation_id)
     operation = _store(ctx).load(
         operation_id,
         include_readme=True,
@@ -156,6 +204,7 @@ def validate_operation(
     params: Any = None,
 ) -> dict[str, Any]:
     parsed_params = _json_obj(params, name="params") if params is not None else None
+    _ensure_enabled_evolution_operation(_workspace(ctx), operation_id)
     return _store(ctx).validate_contract(operation_id, params=parsed_params)
 
 
@@ -185,6 +234,7 @@ def run_operation(
     timeout_seconds: int | float = 600,
 ) -> dict[str, Any]:
     parsed_params = _json_obj(params, name="params")
+    _ensure_enabled_evolution_operation(_workspace(ctx), operation_id)
     record = _store(ctx).run(operation_id, parsed_params, timeout_seconds=int(timeout_seconds or 600))
     return {"success": True, **record}
 

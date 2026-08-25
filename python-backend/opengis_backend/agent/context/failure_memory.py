@@ -214,7 +214,7 @@ def _lesson_content(
         lines.append("Verified fix path: " + " -> ".join(repair_tools + [str(success.get("name") or signature.tool_name)]))
     else:
         lines.append(f"Verified fix path: retry {success.get('name') or signature.tool_name} with corrected inputs.")
-    lines.append("Avoid: retrying the same failed call unchanged or bypassing the target object before repair.")
+    lines.append("Avoid: retrying the same failed call unchanged or switching away from the target object before repair.")
     if final_answer:
         lines.append(f"Outcome: {final_answer.strip()[:360]}")
     raw_error = _call_error(failure)

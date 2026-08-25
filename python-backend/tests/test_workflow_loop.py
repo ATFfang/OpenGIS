@@ -54,7 +54,10 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         )
 
         self.assertEqual(outcome.response_text, "done")
-        self.assertIn("Active Function Tools For This Agent Profile", captured["messages"][1]["content"])
+        self.assertTrue(any(
+            "Active Function Tools For This Agent Profile" in str(message.get("content") or "")
+            for message in captured["messages"]
+        ))
         tool_names = [item["function"]["name"] for item in captured["tools"]]
         self.assertIn("start_worker", tool_names)
         self.assertIn("execute_code", tool_names)
@@ -98,6 +101,19 @@ class WorkflowLoopFunctionCallTests(unittest.TestCase):
         self.assertEqual(materialized.selected_names, [item["function"]["name"] for item in schemas])
         self.assertIn("execute_code", materialized.selected_names)
         self.assertIn("run_script_file", materialized.selected_names)
+
+    def test_tool_materializer_does_not_force_code_into_unrelated_pack(self) -> None:
+        schemas = [
+            {"type": "function", "function": {"name": "list_layers", "description": "List layers", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "execute_code", "description": "Run Python", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "run_script_file", "description": "Run saved script", "parameters": {"type": "object", "properties": {}}}},
+        ]
+
+        materialized = ToolMaterializer(schemas).materialize(selected_packs={"core", "map"})
+
+        self.assertEqual(materialized.selected_names, ["list_layers"])
+        self.assertNotIn("execute_code", materialized.selected_names)
+        self.assertNotIn("run_script_file", materialized.selected_names)
 
     def test_tool_materializer_keeps_operation_tools_in_profile_surface(self) -> None:
         schemas = [

@@ -15,8 +15,8 @@ from typing import Any
 
 from opengis_backend.agent.context.failure_memory import FailureMemoryProjector
 from opengis_backend.agent.context.pending_intent import PendingIntent
+from opengis_backend.agent.execution.capability_router import CapabilityRouter, CapabilitySelection
 from opengis_backend.agent.execution.tool_capabilities import capability_for, tools_with_side_effect
-from opengis_backend.agent.execution.tool_packs import infer_tool_packs_for_text
 from opengis_backend.agent.loop.turn_runner import ToolSettlement
 
 
@@ -198,15 +198,55 @@ class RuntimeControl:
             )
         return "\n\n".join(parts)
 
-    def tool_packs(self) -> set[str]:
-        text_parts = [self.objective.user_request]
-        if self.pending_intent:
-            text_parts.append(self.pending_intent.resolved_objective)
-        text_parts.extend(self.recent_failures[-2:])
-        packs = infer_tool_packs_for_text(
-            "\n".join(text_parts),
-            allow_3d=bool(self.feature_flags.get("enable_3d")),
+    def capability_selection(self) -> CapabilitySelection:
+        router = CapabilityRouter(
+            workspace_path=self.workspace_path,
+            max_skills=_feature_int(self.feature_flags, "capability_router_max_skills", 4),
+            max_operations=_feature_int(self.feature_flags, "capability_router_max_operations", 4),
+            max_evolution_assets=_feature_int(self.feature_flags, "capability_router_max_assets", 4),
+            min_score=_feature_float(self.feature_flags, "capability_router_min_score", 2.0),
+            cache_ttl_seconds=_feature_float(self.feature_flags, "capability_router_cache_ttl_seconds", 5.0),
         )
+        base_packs = self.base_tool_packs()
+        query = "\n".join(
+            item for item in [
+                self.objective.user_request,
+                self.pending_intent.resolved_objective if self.pending_intent else "",
+                *self.recent_failures[-3:],
+            ]
+            if item
+        )
+        return router.select(
+            query,
+            base_tool_packs=base_packs,
+            allow_3d=bool(self.feature_flags.get("enable_3d")),
+            force_tool_packs=self._forced_tool_packs(),
+        )
+
+    def tool_packs(self) -> set[str]:
+        return set(self.capability_selection().tool_packs)
+
+    def base_tool_packs(self) -> set[str]:
+        # Keep profile-owned control tools available while the router adds
+        # only task-relevant domain packs.
+        packs: set[str] = {"core", "skill"}
+        mode = self.objective.mode
+        if mode is TaskMode.MAP_RENDERING:
+            packs.update({"map", "style"})
+        elif mode is TaskMode.DATA_ANALYSIS:
+            packs.update({"data", "code"})
+        elif mode is TaskMode.OPERATION_REPAIR:
+            packs.update({"operation", "file", "code"})
+        elif mode is TaskMode.OPERATION_RUN:
+            packs.update({"operation", "file"})
+        elif mode is TaskMode.WORKFLOW:
+            packs.update({"workflow", "file", "code"})
+        elif mode is TaskMode.WORKER:
+            packs.update({"worker", "file"})
+        return packs
+
+    def _forced_tool_packs(self) -> set[str]:
+        packs: set[str] = set()
         if self.objective.mode is TaskMode.OPERATION_REPAIR:
             packs.add("operation")
         elif self.objective.mode is TaskMode.OPERATION_RUN:
@@ -459,6 +499,24 @@ def _compact_text(text: str, max_chars: int) -> str:
     head = max(40, max_chars // 2)
     tail = max(0, max_chars - head - 22)
     return compact[:head].rstrip() + " ... " + compact[-tail:].lstrip()
+
+
+def _feature_int(flags: dict[str, Any], key: str, default: int) -> int:
+    if key not in flags:
+        return default
+    try:
+        return int(flags[key])
+    except (TypeError, ValueError):
+        return default
+
+
+def _feature_float(flags: dict[str, Any], key: str, default: float) -> float:
+    if key not in flags:
+        return default
+    try:
+        return float(flags[key])
+    except (TypeError, ValueError):
+        return default
 
 
 def _structured_tool_failure(content: str) -> dict[str, Any]:

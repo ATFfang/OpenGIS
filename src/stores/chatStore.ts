@@ -796,6 +796,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           user_instructions: userInstructions,
           feature_flags: {
             enable_3d: THREE_D_MODE_AVAILABLE && Boolean(settings.appearance.enable3DMode),
+            capability_router_max_skills: settings.agent.capabilityRouterMaxSkills,
+            capability_router_max_operations: settings.agent.capabilityRouterMaxOperations,
+            capability_router_max_assets: settings.agent.capabilityRouterMaxAssets,
+            capability_router_min_score: settings.agent.capabilityRouterMinScore,
+            capability_router_cache_ttl_seconds: settings.agent.capabilityRouterCacheTtlSeconds,
           },
         })
       } catch (error: any) {

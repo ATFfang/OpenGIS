@@ -122,6 +122,8 @@ export interface RunDetail extends RunSummary {
   tool_call_events?: RunToolCall[]
   artifacts?: RunArtifact[]
   llm_usage?: RunLLMUsageRecord[]
+  events?: Array<Record<string, unknown>>
+  message_parts?: Array<Record<string, unknown>>
   session?: RunSession | null
   stdout?: string
   final_answer?: string | null
@@ -163,6 +165,8 @@ function normalizeRunDetail(raw: RunDetailResponse | RunDetail | null | undefine
     artifacts: Array.isArray((raw as RunDetailResponse).artifacts)
       ? (raw as RunDetailResponse).artifacts
       : [],
+    events: Array.isArray((raw as any).events) ? (raw as any).events : [],
+    message_parts: Array.isArray((raw as any).message_parts) ? (raw as any).message_parts : [],
     llm_usage: Array.isArray((raw as RunDetailResponse).llm_usage)
       ? (raw as RunDetailResponse).llm_usage
       : Array.isArray((meta as any).llm_usage)

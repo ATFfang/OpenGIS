@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from opengis_backend.agent.context.context_manager import ContextManager
+from opengis_backend.agent.execution.capability_router import CapabilityRouter, CapabilitySelection
 from opengis_backend.agent.loop.loop_kernel import LoopKernel, LoopKernelHooks, LoopTurnRequest
 from opengis_backend.agent.loop.retry_policy import (
     LLM_BASE_DELAY,
@@ -190,12 +191,19 @@ class WorkflowLoop:
                 predecessor_outputs=pred_outputs,
                 workflow_name=self.workflow.name,
             )
+            capability_selection = self._select_capabilities(
+                user_message=user_message,
+                node=node,
+                step_prompt=step_prompt,
+                predecessor_outputs=pred_outputs,
+            )
 
             # Execute this node (with retries).
             node_result = self._execute_node(
                 node=node,
                 step_index=step_index,
                 step_prompt=step_prompt,
+                capability_selection=capability_selection,
             )
             if self._interrupted:
                 logger.info("Workflow loop interrupted after node %s returned.", node.id)
@@ -256,6 +264,7 @@ class WorkflowLoop:
         node: WorkflowNode,
         step_index: int,
         step_prompt: str,
+        capability_selection: CapabilitySelection,
     ) -> str:
         """Execute a single workflow node with a mini function-call loop.
 
@@ -277,6 +286,10 @@ class WorkflowLoop:
         if self.tool_materializer is None and self.tool_schemas:
             self.tool_materializer = ToolMaterializer(self.tool_schemas)
         state = RunnerState()
+        capability_prompt = capability_selection.to_prompt()
+        extra_system_messages = [self.project_memory] if self.project_memory else []
+        if capability_prompt:
+            extra_system_messages.append(capability_prompt)
         kernel = LoopKernel(
             llm_call=self.llm_call,
             context=self.context,
@@ -331,7 +344,9 @@ class WorkflowLoop:
                     tool_result_scope_kind="workflow_tool_result",
                     tool_progress_label=f"Step {step_index}: {node.title}",
                     force_all_tools=state.force_all_tools_once,
-                    extra_system_messages=[self.project_memory] if self.project_memory else None,
+                    extra_system_messages=extra_system_messages or None,
+                    capability_telemetry=capability_selection.to_telemetry(),
+                    materialization_options={"selected_packs": sorted(capability_selection.tool_packs)},
                 )
             )
             state.reset_force_all_tools()
@@ -615,6 +630,39 @@ class WorkflowLoop:
                 f"Workflow '{self.workflow.name}' completed all {len(execution_order)} steps. "
                 "Unable to generate summary due to an error."
             )
+
+    def _select_capabilities(
+        self,
+        *,
+        user_message: str,
+        node: WorkflowNode,
+        step_prompt: str,
+        predecessor_outputs: dict[str, str],
+    ) -> CapabilitySelection:
+        router = CapabilityRouter(
+            workspace_path=self.workspace or None,
+            max_skills=3,
+            max_operations=3,
+            max_evolution_assets=3,
+            min_score=2.0,
+            cache_ttl_seconds=5.0,
+        )
+        query = "\n".join(
+            item for item in [
+                user_message,
+                node.title,
+                node.description,
+                step_prompt,
+                *predecessor_outputs.values(),
+            ]
+            if item
+        )
+        return router.select(
+            query,
+            base_tool_packs={"workflow", "file", "code", "skill"},
+            allow_3d=False,
+            force_tool_packs={"workflow"},
+        )
 
 __all__ = [
     "WorkflowLoop",

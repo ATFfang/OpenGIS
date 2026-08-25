@@ -16,6 +16,7 @@ import { ScriptRunnerView } from '@/features/script-runner/ScriptRunnerView'
 import { WorkflowsPanel } from '@/features/workflows/WorkflowsPanel'
 import { WorkflowEditorView } from '@/features/workflows/WorkflowEditorView'
 import { RunsPanel } from '@/features/runs/RunsPanel'
+import { HarnessTerminalPanel } from '@/features/harness/HarnessTerminalPanel'
 import { ToolAndSkillPanel } from '@/features/tool-catalog/ToolAndSkillPanel'
 import { WorkersPanel } from '@/features/workers/WorkersPanel'
 import { OperationsPanel } from '@/features/operations/OperationsPanel'
@@ -135,7 +136,7 @@ export function MainLayout() {
   }
 
   // Determine if sidebar content panel should be shown
-  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs' || activeSidebarTab === 'operations')
+  const showSidebarContent = sidebarContentVisible && !isSettingsView && !isCanvasView && !isWorkersView && (activeSidebarTab === 'layers' || activeSidebarTab === 'files' || activeSidebarTab === 'tools' || activeSidebarTab === 'workflows' || activeSidebarTab === 'runs' || activeSidebarTab === 'operations' || activeSidebarTab === 'terminal')
 
   return (
     <div className="relative h-screen w-screen overflow-hidden select-none">
@@ -158,7 +159,13 @@ export function MainLayout() {
 
       {/* Sidebar content panel (layers, files, tools, workflows, runs) */}
       {showSidebarContent && (
-        <ResizableSidebarPanel activeTab={activeSidebarTab} />
+        <ResizableSidebarPanel
+          activeTab={activeSidebarTab}
+          onOpenRuns={() => {
+            setActiveSidebarTab('runs')
+            setSidebarContentVisible(true)
+          }}
+        />
       )}
 
       {/* Main content area */}
@@ -339,7 +346,13 @@ function BoardModeShell({
  * Resizable sidebar content panel with drag handle.
  * Min width: 150px, max width: 400px, default: 200px.
  */
-function ResizableSidebarPanel({ activeTab }: { activeTab: string }) {
+function ResizableSidebarPanel({
+  activeTab,
+  onOpenRuns,
+}: {
+  activeTab: string
+  onOpenRuns: () => void
+}) {
   const [width, setWidth] = useState(200)
   const [isDragging, setIsDragging] = useState(false)
   const dragStartX = useRef(0)
@@ -371,7 +384,7 @@ function ResizableSidebarPanel({ activeTab }: { activeTab: string }) {
   return (
     <div className="h-full border-r border-border shrink-0 relative flex" style={{ width }}>
       <div className="flex-1 overflow-hidden">
-        <SidebarContent activeTab={activeTab} />
+        <SidebarContent activeTab={activeTab} onOpenRuns={onOpenRuns} />
       </div>
       {/* Drag handle */}
       <div
@@ -387,7 +400,13 @@ function ResizableSidebarPanel({ activeTab }: { activeTab: string }) {
 /**
  * Sidebar content panel — renders the appropriate panel based on active tab.
  */
-function SidebarContent({ activeTab }: { activeTab: string }) {
+function SidebarContent({
+  activeTab,
+  onOpenRuns,
+}: {
+  activeTab: string
+  onOpenRuns: () => void
+}) {
   switch (activeTab) {
     case 'layers':
       return <LayerPanel />
@@ -397,6 +416,8 @@ function SidebarContent({ activeTab }: { activeTab: string }) {
       return <WorkflowsPanel />
     case 'runs':
       return <RunsPanel />
+    case 'terminal':
+      return <HarnessTerminalPanel onOpenRuns={onOpenRuns} />
     case 'operations':
       return <OperationsPanel />
     case 'workers':

@@ -11,6 +11,7 @@ import {
   Monitor,
   Activity,
   PackageOpen,
+  Terminal,
 } from 'lucide-react'
 import { useT } from '@/i18n'
 
@@ -47,6 +48,7 @@ export function Sidebar({
     { id: 'operations', icon: PackageOpen, label: t.sidebar.operations },
     { id: 'workflows', icon: GitBranch, label: t.sidebar.workflows },
     { id: 'runs', icon: ListRestart, label: t.sidebar.runs },
+    { id: 'terminal', icon: Terminal, label: t.sidebar.terminal },
     { id: 'tools', icon: Wrench, label: t.sidebar.tools },
     { id: 'settings', icon: Settings, label: t.sidebar.settings },
   ]

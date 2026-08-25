@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-
 class OperationError(RuntimeError):
     """Raised for invalid operation definitions or failed operation runs."""
 
@@ -220,8 +219,9 @@ class OperationStore:
         include_code: bool = False,
         max_code_chars: int = 40000,
     ) -> dict[str, Any]:
+        location = self._operation_location(operation_id)
         return self._load_from_location(
-            self._operation_location(operation_id),
+            location,
             include_readme=include_readme,
             include_code=include_code,
             max_code_chars=max_code_chars,

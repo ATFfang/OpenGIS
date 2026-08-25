@@ -450,7 +450,7 @@ print("上海饮品店")
         result = loop.run("把红绿蓝分类一下")
 
         self.assertIn("颜色", result)
-        self.assertIn("execute_code", calls[0])
+        self.assertNotIn("execute_code", calls[0])
         self.assertNotIn("create_workflow", calls[0])
         self.assertNotIn("start_subagent", calls[0])
         self.assertEqual(len(calls), 1)

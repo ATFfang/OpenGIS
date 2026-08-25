@@ -32,6 +32,11 @@ dependencies = [
     "matplotlib>=3.8.0",
 ]
 
+[project.scripts]
+opengis-agent = "opengis_backend.cli.agent_run:main"
+opengis-bench = "opengis_backend.cli.bench_run:main"
+opengis-harness = "opengis_backend.cli.main:main"
+
 [project.optional-dependencies]
 full = [
     "whitebox>=2.3.0",

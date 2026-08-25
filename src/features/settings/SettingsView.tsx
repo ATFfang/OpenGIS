@@ -7,6 +7,7 @@ import {
   Terminal,
   Cpu,
   Gauge,
+  Activity,
   ChevronDown,
   RotateCcw,
   CheckCircle2,
@@ -17,6 +18,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { useT } from '@/i18n'
+import { useAssetStore } from '@/stores/assetStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useRunsStore } from '@/stores/runsStore'
 import { THREE_D_MODE_AVAILABLE } from '@/stores/settingsStore'
@@ -65,6 +67,7 @@ export function SettingsView() {
     { id: 'model', label: t.settings.model, icon: Bot, keywords: ['llm', 'api', 'key', 'protocol', 'model', 'temperature', 'token'] },
     { id: 'agent', label: t.settings.agent, icon: Cpu, keywords: ['agent', 'iteration', 'confirmation', 'timeout', 'instructions'] },
     { id: 'promptCache', label: t.settings.promptCacheTest, icon: Gauge, keywords: ['cache', 'prompt cache', 'deepseek', 'usage', 'token', 'section', 'llm'] },
+    { id: 'evolution', label: t.settings.evolution, icon: RotateCcw, keywords: ['evolution', 'memory', 'candidate', 'replay', 'promotion', 'report'] },
     { id: 'appearance', label: t.settings.appearance, icon: Palette, keywords: ['theme', 'font', 'language', 'map', 'dark', 'light'] },
     { id: 'python', label: t.settings.python, icon: Terminal, keywords: ['python', 'path', 'environment', 'interpreter'] },
   ]
@@ -101,6 +104,11 @@ export function SettingsView() {
       return 0
     }
   })
+  const [evolutionReport, setEvolutionReport] = useState<any>(null)
+  const [evolutionReportLoading, setEvolutionReportLoading] = useState(false)
+  const [evolutionReportError, setEvolutionReportError] = useState('')
+  const [evolutionAssetUpdating, setEvolutionAssetUpdating] = useState<string | null>(null)
+  const [expandedEvolutionAssetId, setExpandedEvolutionAssetId] = useState<string | null>(null)
 
   const contentRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -128,6 +136,7 @@ export function SettingsView() {
   const refreshRuns = useRunsStore((s) => s.refresh)
   const getRunDetail = useRunsStore((s) => s.getDetail)
   const runDetails = useRunsStore((s) => s.details)
+  const workspacePath = useAssetStore((s) => s.workspacePath)
 
   // Load settings on mount
   useEffect(() => {
@@ -166,6 +175,89 @@ export function SettingsView() {
     }, 10000)
     return () => window.clearInterval(timer)
   }, [promptCacheTestEnabled, refreshRuns])
+
+  const refreshEvolutionReport = useCallback(async () => {
+    if (!workspacePath) {
+      setEvolutionReport(null)
+      setEvolutionReportError('')
+      return
+    }
+    setEvolutionReportLoading(true)
+    setEvolutionReportError('')
+    try {
+      const result = await pythonClient.send<{ report?: any }>('rpc.evolution.report', {
+        workspace_path: workspacePath,
+        limit: 10,
+      })
+      setEvolutionReport(result?.report || null)
+    } catch (err: any) {
+      setEvolutionReport(null)
+      setEvolutionReportError(err?.message || String(err))
+    } finally {
+      setEvolutionReportLoading(false)
+    }
+  }, [workspacePath])
+
+  const setEvolutionAssetState = useCallback(async (assetId: string, state: string) => {
+    if (!workspacePath || !assetId) return
+    setEvolutionAssetUpdating(assetId)
+    setEvolutionReportError('')
+    try {
+      const result = await pythonClient.send<{ report?: any }>('rpc.evolution.assets.set_state', {
+        workspace_path: workspacePath,
+        asset_id: assetId,
+        state,
+        reason: `settings panel changed asset state to ${state}`,
+        limit: 10,
+      })
+      setEvolutionReport(result?.report || null)
+    } catch (err: any) {
+      setEvolutionReportError(err?.message || String(err))
+    } finally {
+      setEvolutionAssetUpdating(null)
+    }
+  }, [workspacePath])
+
+  const rollbackEvolutionAsset = useCallback(async (assetId: string) => {
+    if (!workspacePath || !assetId) return
+    setEvolutionAssetUpdating(assetId)
+    setEvolutionReportError('')
+    try {
+      const result = await pythonClient.send<{ report?: any }>('rpc.evolution.assets.rollback', {
+        workspace_path: workspacePath,
+        asset_id: assetId,
+        reason: 'settings panel rollback',
+        limit: 10,
+      })
+      setEvolutionReport(result?.report || null)
+    } catch (err: any) {
+      setEvolutionReportError(err?.message || String(err))
+    } finally {
+      setEvolutionAssetUpdating(null)
+    }
+  }, [workspacePath])
+
+  const archiveBrokenEvolutionAssets = useCallback(async () => {
+    if (!workspacePath) return
+    setEvolutionReportLoading(true)
+    setEvolutionReportError('')
+    try {
+      const result = await pythonClient.send<{ report?: any }>('rpc.evolution.assets.archive_unloadable', {
+        workspace_path: workspacePath,
+        reason: 'settings panel archived unloadable assets',
+        limit: 10,
+      })
+      setEvolutionReport(result?.report || null)
+    } catch (err: any) {
+      setEvolutionReportError(err?.message || String(err))
+    } finally {
+      setEvolutionReportLoading(false)
+    }
+  }, [workspacePath])
+
+  useEffect(() => {
+    refreshEvolutionReport().catch(() => {})
+  }, [refreshEvolutionReport])
 
   // Initialize selectedProviderId from current baseURL
   useEffect(() => {
@@ -1145,6 +1237,83 @@ export function SettingsView() {
                   </SettingItem>
                 </SettingSection>
 
+                <SettingSection title={t.settings.capabilityRouter}>
+                  <SettingItem
+                    id="agent-router-max-skills"
+                    label={t.settings.capabilityRouterMaxSkills}
+                    description={t.settings.capabilityRouterMaxSkillsDesc}
+                  >
+                    <SettingNumber
+                      id="agent-router-max-skills"
+                      value={agent.capabilityRouterMaxSkills}
+                      onChange={(v) => setAgent({ capabilityRouterMaxSkills: Math.max(0, Math.min(12, Math.round(v))) })}
+                      min={0}
+                      max={12}
+                      step={1}
+                    />
+                  </SettingItem>
+
+                  <SettingItem
+                    id="agent-router-max-operations"
+                    label={t.settings.capabilityRouterMaxOperations}
+                    description={t.settings.capabilityRouterMaxOperationsDesc}
+                  >
+                    <SettingNumber
+                      id="agent-router-max-operations"
+                      value={agent.capabilityRouterMaxOperations}
+                      onChange={(v) => setAgent({ capabilityRouterMaxOperations: Math.max(0, Math.min(12, Math.round(v))) })}
+                      min={0}
+                      max={12}
+                      step={1}
+                    />
+                  </SettingItem>
+
+                  <SettingItem
+                    id="agent-router-max-assets"
+                    label={t.settings.capabilityRouterMaxAssets}
+                    description={t.settings.capabilityRouterMaxAssetsDesc}
+                  >
+                    <SettingNumber
+                      id="agent-router-max-assets"
+                      value={agent.capabilityRouterMaxAssets}
+                      onChange={(v) => setAgent({ capabilityRouterMaxAssets: Math.max(0, Math.min(12, Math.round(v))) })}
+                      min={0}
+                      max={12}
+                      step={1}
+                    />
+                  </SettingItem>
+
+                  <SettingItem
+                    id="agent-router-min-score"
+                    label={t.settings.capabilityRouterMinScore}
+                    description={t.settings.capabilityRouterMinScoreDesc}
+                  >
+                    <SettingNumber
+                      id="agent-router-min-score"
+                      value={agent.capabilityRouterMinScore}
+                      onChange={(v) => setAgent({ capabilityRouterMinScore: Math.max(0, Math.min(20, v)) })}
+                      min={0}
+                      max={20}
+                      step={0.5}
+                    />
+                  </SettingItem>
+
+                  <SettingItem
+                    id="agent-router-cache-ttl"
+                    label={t.settings.capabilityRouterCacheTtl}
+                    description={t.settings.capabilityRouterCacheTtlDesc}
+                  >
+                    <SettingNumber
+                      id="agent-router-cache-ttl"
+                      value={agent.capabilityRouterCacheTtlSeconds}
+                      onChange={(v) => setAgent({ capabilityRouterCacheTtlSeconds: Math.max(0, Math.min(300, v)) })}
+                      min={0}
+                      max={300}
+                      step={1}
+                    />
+                  </SettingItem>
+                </SettingSection>
+
                 <SettingSection title={t.settings.customInstructions}>
                   {/* Custom Instructions */}
                   <SettingItem
@@ -1266,6 +1435,25 @@ export function SettingsView() {
                                     <span className="italic">+{(latestRunUsage.prompt_cache?.sections?.length || 0) - 3} {t.runs.more}</span>
                                   )}
                                 </div>
+                                {latestRunUsage.telemetry?.tool_pack_count != null && (
+                                  <div className="rounded border border-border/60 bg-bg-secondary/40 px-2 py-1.5 space-y-1">
+                                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                                      <span className="text-text-muted/90">{t.settings.promptCacheCapabilityRouting}</span>
+                                      <span className="font-mono text-text-secondary">
+                                        {String(latestRunUsage.telemetry.tool_pack_count || 0)} packs · {String(latestRunUsage.telemetry.selected_skill_count || 0)} skills · {String(latestRunUsage.telemetry.selected_operation_count || 0)} ops
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-muted/80">
+                                      <span>{t.settings.promptCacheSelectedPacks}: <span className="font-mono text-text-secondary">{(latestRunUsage.telemetry.selected_tool_packs || []).slice(0, 4).join(', ') || '—'}</span></span>
+                                      <span>{t.settings.promptCacheSelectedSkills}: <span className="font-mono text-text-secondary">{(latestRunUsage.telemetry.selected_skill_names || []).slice(0, 3).join(', ') || '—'}</span></span>
+                                      <span>{t.settings.promptCacheSelectedOperations}: <span className="font-mono text-text-secondary">{(latestRunUsage.telemetry.selected_operation_names || []).slice(0, 3).join(', ') || '—'}</span></span>
+                                      <span>{t.settings.promptCacheSelectedAssets}: <span className="font-mono text-text-secondary">{(latestRunUsage.telemetry.selected_evolution_asset_names || []).slice(0, 3).join(', ') || '—'}</span></span>
+                                    </div>
+                                    <div className="text-[10px] text-text-muted/70">
+                                      {t.settings.promptCacheCapabilityPool}: skills {latestRunUsage.telemetry.total_skill_count ?? 0}, ops {latestRunUsage.telemetry.total_operation_count ?? 0}, assets {latestRunUsage.telemetry.total_evolution_asset_count ?? 0}
+                                    </div>
+                                  </div>
+                                )}
                                 {promptCacheStats.hasSegmentHash && (
                                   <div className="rounded border border-border/60 bg-bg-secondary/40 px-2 py-1.5 space-y-1">
                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
@@ -1328,6 +1516,185 @@ export function SettingsView() {
                               <div className="text-xs text-text-muted/70">{t.settings.promptCacheNoDisplayHistory}</div>
                             )}
                           </div>
+                        </div>
+                      )}
+                    </div>
+                  </SettingItem>
+                </SettingSection>
+              </div>
+            )}
+
+            {/* Evolution report */}
+            {filteredSections.some((s) => s.id === 'evolution') && (
+              <div
+                id="section-evolution"
+                ref={(el) => { sectionRefs.current['evolution'] = el }}
+              >
+                <SettingSection title={t.settings.evolution}>
+                  <SettingItem
+                    id="evolution-report"
+                    label={t.settings.evolutionSummary}
+                    description={t.settings.evolutionSummary}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => refreshEvolutionReport().catch(() => {})}
+                          disabled={evolutionReportLoading || !workspacePath}
+                          className="
+                            inline-flex h-7 items-center gap-1.5 rounded-md border border-border
+                            bg-bg-tertiary px-2 text-xs text-text-secondary
+                            hover:bg-bg-hover disabled:opacity-45 disabled:hover:bg-bg-tertiary
+                          "
+                        >
+                          <RotateCcw className={`h-3.5 w-3.5 ${evolutionReportLoading ? 'animate-spin' : ''}`} />
+                          {evolutionReportLoading ? t.settings.evolutionRefreshing : t.settings.evolutionRefresh}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => archiveBrokenEvolutionAssets().catch(() => {})}
+                          disabled={evolutionReportLoading || !workspacePath}
+                          className="
+                            inline-flex h-7 items-center gap-1.5 rounded-md border border-border
+                            bg-bg-tertiary px-2 text-xs text-text-secondary
+                            hover:bg-bg-hover disabled:opacity-45 disabled:hover:bg-bg-tertiary
+                          "
+                        >
+                          {t.settings.evolutionArchiveBroken}
+                        </button>
+                        <span className="text-[11px] text-text-muted">
+                          {workspacePath ? workspacePath : t.settings.evolutionOpenWorkspace}
+                        </span>
+                      </div>
+
+                      {evolutionReportError && (
+                        <div className="rounded-md border border-accent-danger/30 bg-accent-danger/10 px-3 py-2 text-xs text-accent-danger break-all">
+                          {evolutionReportError}
+                        </div>
+                      )}
+
+                      {evolutionReport ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                            <MiniStat label={t.settings.evolutionCandidates} value={String(evolutionReport.candidate_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionEvaluations} value={String(evolutionReport.evaluation_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionReplayCases} value={String(evolutionReport.replay_case_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionMaterialized} value={String(evolutionReport.materialization_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionTraces} value={String(evolutionReport.trace_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionAvgConfidence} value={formatPercent(evolutionReport.average_candidate_confidence)} />
+                            <MiniStat label={t.settings.evolutionWeaknesses} value={String(evolutionReport.weakness_cluster_count ?? 0)} />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                            <MiniStat label={t.settings.evolutionPromoted} value={String(evolutionReport.promoted_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionReviewed} value={String(evolutionReport.review_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionRejected} value={String(evolutionReport.rejected_count ?? 0)} />
+                            <MiniStat label={t.settings.evolutionAvgScore} value={formatPercent(evolutionReport.average_evaluation_score)} />
+                            <MiniStat label={t.settings.evolutionHeldIn} value={formatPercent(evolutionReport.average_held_in_score)} />
+                            <MiniStat label={t.settings.evolutionHeldOut} value={formatPercent(evolutionReport.average_held_out_score)} />
+                            <MiniStat label={t.settings.evolutionRegressions} value={String(evolutionReport.heldout_regression_count ?? 0)} />
+                          </div>
+
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <EvolutionStatBlock
+                              labels={t.settings}
+                              title={t.settings.evolutionCandidateKinds}
+                              rows={evolutionReport.candidate_kind_counts}
+                            />
+                            <EvolutionStatBlock
+                              labels={t.settings}
+                              title={t.settings.evolutionDecisionCounts}
+                              rows={evolutionReport.evaluation_decision_counts}
+                            />
+                          </div>
+
+                          <EvolutionStatBlock
+                            labels={t.settings}
+                            title={t.settings.evolutionMaterializedKinds}
+                            rows={evolutionReport.materialization_kind_counts}
+                          />
+
+                          <EvolutionStatBlock
+                            labels={t.settings}
+                            title={t.settings.evolutionAssetStates}
+                            rows={evolutionReport.asset_state_counts}
+                          />
+
+                          {Array.isArray(evolutionReport.notes) && evolutionReport.notes.length > 0 && (
+                            <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2 text-xs text-text-secondary">
+                              <div className="mb-1 text-[11px] font-medium text-text-muted uppercase tracking-wider">{t.settings.evolutionNotes}</div>
+                              <ul className="space-y-1">
+                                {evolutionReport.notes.map((note: string) => (
+                                  <li key={note}>• {note}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <EvolutionListBlock
+                              labels={t.settings}
+                              title={t.settings.evolutionRecentCandidates}
+                              rows={(evolutionReport.active_candidates || []).slice(0, 4).map((item: any) => ({
+                                title: `${item.kind} · ${item.status}`,
+                                body: item.summary || item.title || item.target_component || '—',
+                              }))}
+                            />
+                            <EvolutionListBlock
+                              labels={t.settings}
+                              title={t.settings.evolutionRecentEvaluations}
+                              rows={(evolutionReport.recent_evaluations || []).slice(0, 4).map((item: any) => ({
+                                title: `${item.candidate_kind} · ${formatPercent(item.score)}`,
+                                body: `${item.decision} · in ${formatPercent(item.held_in_score)} · out ${formatPercent(item.held_out_score)}${item.risks?.length ? ` · ${item.risks[0]}` : ''}`,
+                              }))}
+                            />
+                            <EvolutionListBlock
+                              labels={t.settings}
+                              title={t.settings.evolutionRecentReplayCases}
+                              rows={(evolutionReport.recent_cases || []).slice(0, 4).map((item: any) => ({
+                                title: `${item.candidate_kind} · ${formatPercent(item.score)}`,
+                                body: item.expected_signal || item.prompt || '—',
+                              }))}
+                            />
+                          </div>
+
+                          <EvolutionListBlock
+                            labels={t.settings}
+                            title={t.settings.evolutionRecentMaterializations}
+                            rows={(evolutionReport.recent_materializations || []).slice(0, 4).map((item: any) => ({
+                              title: `${item.target_kind} · ${item.materialization_mode}`,
+                              body: `${item.asset_name || item.asset_id || '—'}${item.status ? ` · ${item.status}` : ''}`,
+                            }))}
+                          />
+
+                          <EvolutionAssetBlock
+                            labels={t.settings}
+                            assets={(evolutionReport.assets || []).slice(0, 8)}
+                            updatingId={evolutionAssetUpdating}
+                            expandedId={expandedEvolutionAssetId}
+                            onToggleExpand={(assetId) => setExpandedEvolutionAssetId((current) => current === assetId ? null : assetId)}
+                            onSetState={setEvolutionAssetState}
+                            onRollback={rollbackEvolutionAsset}
+                          />
+
+                          <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                            <div className="space-y-2">
+                              <EvolutionTraceTrendBlock
+                                labels={t.settings}
+                                state={evolutionReport.health_state || 'unknown'}
+                                summary={Array.isArray(evolutionReport.health_summary) ? evolutionReport.health_summary : []}
+                                trend={evolutionReport.trace_trend || {}}
+                              />
+                              <EvolutionEfficiencyBlock labels={t.settings} metrics={evolutionReport.efficiency_metrics || {}} />
+                              <EvolutionHealthBlock labels={t.settings} metrics={evolutionReport.chain_health || {}} />
+                            </div>
+                            <EvolutionTraceBlock labels={t.settings} traces={(evolutionReport.recent_traces || []).slice(0, 6)} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-text-muted/70">
+                          {workspacePath ? t.settings.evolutionNoReport : t.settings.evolutionOpenWorkspace}
                         </div>
                       )}
                     </div>
@@ -1593,6 +1960,494 @@ function MiniStat({ label, value }: { label: string; value: string }) {
       <div className="mt-0.5 text-sm text-text-primary truncate">{value}</div>
     </div>
   )
+}
+
+function EvolutionStatBlock({
+  labels,
+  title,
+  rows,
+}: {
+  labels: Record<string, string>
+  title: string
+  rows: Record<string, number> | null | undefined
+}) {
+  const entries = Object.entries(rows || {})
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{title}</div>
+      {entries.length > 0 ? (
+        <div className="space-y-1 text-xs text-text-secondary">
+          {entries.slice(0, 6).map(([key, value]) => (
+            <div key={key} className="flex items-center justify-between gap-3">
+              <span className="truncate">{key}</span>
+              <span className="font-mono text-text-primary">{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-text-muted/70">{labels.evolutionNoData}</div>
+      )}
+    </div>
+  )
+}
+
+function EvolutionListBlock({
+  labels,
+  title,
+  rows,
+}: {
+  labels: Record<string, string>
+  title: string
+  rows: Array<{ title: string; body: string }>
+}) {
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{title}</div>
+      {rows.length > 0 ? (
+        <div className="space-y-2">
+          {rows.map((row, index) => (
+            <div key={`${row.title}-${index}`} className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+              <div className="text-[11px] font-medium text-text-primary truncate">{row.title}</div>
+              <div className="text-[11px] text-text-muted leading-snug line-clamp-2">{row.body}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-text-muted/70">{labels.evolutionNoData}</div>
+      )}
+    </div>
+  )
+}
+
+function EvolutionAssetBlock({
+  labels,
+  assets,
+  updatingId,
+  expandedId,
+  onToggleExpand,
+  onSetState,
+  onRollback,
+}: {
+  labels: Record<string, string>
+  assets: Array<{
+    id: string
+    kind: string
+    name: string
+    path: string
+    state: string
+    revision?: number
+    source_candidate_id?: string
+    source_materialization_id?: string
+    source_run_id?: string
+    candidate?: any
+    evaluation?: any
+    materialization?: any
+    health?: any
+    history?: any[]
+  }>
+  updatingId: string | null
+  expandedId: string | null
+  onToggleExpand: (assetId: string) => void
+  onSetState: (assetId: string, state: string) => void
+  onRollback: (assetId: string) => void
+}) {
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{labels.evolutionActivationRegistry}</div>
+      {assets.length > 0 ? (
+        <div className="space-y-2">
+          {assets.map((asset) => {
+            const isUpdating = updatingId === asset.id
+            const expanded = expandedId === asset.id
+            const candidate = asset.candidate || null
+            const evaluation = asset.evaluation || null
+            const materialization = asset.materialization || null
+            const health = asset.health || null
+            const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []
+            const strengths = Array.isArray(evaluation?.strengths) ? evaluation.strengths : []
+            const risks = Array.isArray(evaluation?.risks) ? evaluation.risks : []
+            const history = Array.isArray(asset.history) ? asset.history : []
+            return (
+              <div key={asset.id} className="rounded bg-bg-tertiary/70 px-2 py-2">
+                <div className="flex items-start gap-2 justify-between">
+                  <button
+                    type="button"
+                    onClick={() => onToggleExpand(asset.id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="flex items-center gap-2 text-[11px] font-medium text-text-primary">
+                      <span className="truncate">{asset.kind} · {asset.name}</span>
+                      <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase ${
+                        asset.state === 'enabled'
+                          ? 'bg-accent-success/15 text-accent-success'
+                          : asset.state === 'rejected'
+                            ? 'bg-accent-danger/15 text-accent-danger'
+                            : 'bg-bg-secondary text-text-muted'
+                      }`}>
+                        {asset.state}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-text-muted truncate">
+                      v{asset.revision || 1} · {health?.loadable === false ? labels.evolutionNotLoadable : labels.evolutionLoadable} · {evaluation?.decision || labels.evolutionNoEvaluation} · {asset.source_run_id || asset.source_candidate_id || '—'}
+                    </div>
+                    <div className="text-[10px] text-text-muted/70 truncate">{candidate?.summary || asset.path || '—'}</div>
+                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      disabled={isUpdating || asset.state === 'enabled'}
+                      onClick={() => onSetState(asset.id, 'enabled')}
+                      className="rounded border border-border bg-bg-secondary px-2 py-1 text-[10px] text-text-secondary disabled:opacity-50"
+                    >
+                      {isUpdating && asset.state !== 'enabled' ? '...' : labels.evolutionEnable}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isUpdating || asset.state === 'archived'}
+                      onClick={() => onSetState(asset.id, 'archived')}
+                      className="rounded border border-border bg-bg-secondary px-2 py-1 text-[10px] text-text-secondary disabled:opacity-50"
+                    >
+                      {labels.evolutionArchive}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isUpdating || asset.state === 'rejected'}
+                      onClick={() => onSetState(asset.id, 'rejected')}
+                      className="rounded border border-border bg-bg-secondary px-2 py-1 text-[10px] text-text-secondary disabled:opacity-50"
+                    >
+                      {labels.evolutionReject}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isUpdating || history.length < 2}
+                      onClick={() => onRollback(asset.id)}
+                      className="rounded border border-border bg-bg-secondary px-2 py-1 text-[10px] text-text-secondary disabled:opacity-50"
+                    >
+                      {labels.evolutionRollback}
+                    </button>
+                  </div>
+                </div>
+
+                {expanded && (
+                  <div className="mt-2 grid gap-2 text-[11px] md:grid-cols-2">
+                    <div className="rounded bg-bg-secondary/70 px-2 py-1.5">
+                      <div className="mb-1 font-medium text-text-primary">{labels.evolutionCandidate}</div>
+                      <div className="text-text-muted leading-snug">
+                        {candidate?.proposed_change || candidate?.summary || labels.evolutionNoData}
+                      </div>
+                      {evidence.length > 0 && (
+                        <div className="mt-1.5 space-y-1">
+                          {evidence.slice(0, 4).map((item: string, index: number) => (
+                            <div key={`${asset.id}-evidence-${index}`} className="text-text-secondary truncate">• {item}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded bg-bg-secondary/70 px-2 py-1.5">
+                      <div className="mb-1 font-medium text-text-primary">{labels.evolutionEvaluation}</div>
+                      <div className="text-text-muted">
+                        {evaluation
+                          ? `${evaluation.decision} · score ${formatPercent(evaluation.score)} · held-in ${formatPercent(evaluation.metrics?.held_in_score)} · held-out ${formatPercent(evaluation.metrics?.held_out_score)}`
+                          : labels.evolutionNoData}
+                      </div>
+                      {[...strengths.slice(0, 2), ...risks.slice(0, 2)].map((item: string, index: number) => (
+                        <div key={`${asset.id}-eval-${index}`} className="mt-1 text-text-secondary truncate">• {item}</div>
+                      ))}
+                    </div>
+
+                    <div className="rounded bg-bg-secondary/70 px-2 py-1.5">
+                      <div className="mb-1 font-medium text-text-primary">{labels.evolutionMaterialization}</div>
+                      <div className="text-text-muted leading-snug">
+                        {materialization
+                          ? `${materialization.target_kind} · ${materialization.materialization_mode} · ${materialization.status}`
+                          : labels.evolutionNoData}
+                      </div>
+                      <div className="mt-1 text-text-muted/70 truncate">{asset.path || '—'}</div>
+                      {Array.isArray(health?.issues) && health.issues.length > 0 && (
+                        <div className="mt-1.5 space-y-1">
+                          {health.issues.slice(0, 3).map((item: string, index: number) => (
+                            <div key={`${asset.id}-health-${index}`} className="text-accent-danger truncate">• {item}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded bg-bg-secondary/70 px-2 py-1.5">
+                      <div className="mb-1 font-medium text-text-primary">{labels.evolutionHistory}</div>
+                      {history.length > 0 ? (
+                        <div className="space-y-1">
+                          {history.slice(0, 4).map((event: any) => (
+                            <div key={event.id} className="text-text-secondary truncate">
+                              {event.event_type} · {event.from_state || '—'} → {event.to_state || '—'}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-text-muted">{labels.evolutionNoData}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="text-xs text-text-muted/70">{labels.evolutionNoData}</div>
+      )}
+    </div>
+  )
+}
+
+function EvolutionHealthBlock({ labels, metrics }: { labels: Record<string, string>, metrics: Record<string, any> }) {
+  const items: Array<[string, string]> = [
+    [labels.evolutionEvalCoverage, formatPercent(metrics.candidate_to_evaluation_coverage)],
+    [labels.evolutionMaterializeCoverage, formatPercent(metrics.candidate_to_materialization_coverage)],
+    [labels.evolutionAssetLinkRate, formatPercent(metrics.materialization_to_asset_coverage)],
+    [labels.evolutionActivationRate, formatPercent(metrics.activation_rate)],
+    [labels.evolutionPromotionRate, formatPercent(metrics.evaluation_to_promotion_rate)],
+    [labels.evolutionBrokenAssets, String(metrics.broken_asset_count ?? 0)],
+    [labels.evolutionOrphanCandidates, String(metrics.orphan_candidate_count ?? 0)],
+    [labels.evolutionOrphanMaterializations, String(metrics.orphan_materialization_count ?? 0)],
+    [labels.evolutionClosedTraces, String(metrics.closed_loop_trace_count ?? 0)],
+  ]
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{labels.evolutionChainHealth}</div>
+      <div className="grid grid-cols-2 gap-2 text-xs text-text-secondary">
+        {items.map(([label, value]) => (
+          <div key={label} className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+            <div className="text-[10px] text-text-muted truncate">{label}</div>
+            <div className="mt-0.5 font-mono text-text-primary truncate">{value}</div>
+          </div>
+        ))}
+      </div>
+      {Array.isArray(metrics.orphan_candidates) && metrics.orphan_candidates.length > 0 && (
+        <div className="mt-2 text-[10px] text-text-muted">
+          {labels.evolutionOrphanCandidateIds || 'Orphan candidate ids'}: {metrics.orphan_candidates.slice(0, 4).join(', ')}
+        </div>
+      )}
+      {Array.isArray(metrics.orphan_materializations) && metrics.orphan_materializations.length > 0 && (
+        <div className="mt-1 text-[10px] text-text-muted">
+          {labels.evolutionOrphanMaterializationIds || 'Orphan materialization ids'}: {metrics.orphan_materializations.slice(0, 4).join(', ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EvolutionEfficiencyBlock({ labels, metrics }: { labels: Record<string, string>, metrics: Record<string, any> }) {
+  const items: Array<[string, string, string]> = [
+    [labels.evolutionClosed, formatPercent(metrics.closed_loop_rate), labels.evolutionClosedLoopHint],
+    [labels.evolutionPromoted, formatPercent(metrics.promotion_rate), labels.evolutionPromotionHint],
+    [labels.evolutionHeldOutLift, formatPercent(metrics.heldout_lift), labels.evolutionHeldOutLiftHint],
+    [labels.evolutionRegressions, formatPercent(metrics.regression_rate), labels.evolutionRegressionHint],
+    [labels.evolutionPromotionLag, metrics.avg_time_to_promotion_ms == null ? '—' : `${Math.round(Number(metrics.avg_time_to_promotion_ms))}ms`, labels.evolutionPromotionLagHint],
+    [labels.evolutionWaste, formatPercent(metrics.waste_rate), labels.evolutionWasteHint],
+  ]
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{labels.evolutionEfficiencyMetrics}</div>
+      <div className="grid grid-cols-2 gap-2 text-xs text-text-secondary">
+        {items.map(([label, value, hint]) => (
+          <div key={label} className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+            <div className="text-[10px] text-text-muted truncate">{label}</div>
+            <div className="mt-0.5 font-mono text-text-primary truncate">{value}</div>
+            <div className="mt-0.5 text-[10px] text-text-muted/70 truncate">{hint}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function EvolutionTraceTrendBlock({
+  labels,
+  state,
+  summary,
+  trend,
+}: {
+  labels: Record<string, string>
+  state: string
+  summary: string[]
+  trend: Record<string, any>
+}) {
+  const series = Array.isArray(trend.series) ? trend.series : []
+  const closedRate = trend.closed_loop_count && series.length ? trend.closed_loop_count / series.length : 0
+  const failedCount = Number((trend.status_counts && trend.status_counts.failed) || 0)
+  const degradedCount = Number((trend.status_counts && trend.status_counts.degraded) || 0)
+  const averageDuration = Number(trend.average_duration_ms || 0)
+  const localizedSummary = buildEvolutionTraceSummary({
+    labels,
+    seriesLength: series.length,
+    closedRate,
+    failedCount,
+    degradedCount,
+    issueCount: Number(trend.issue_count || 0),
+    averageDuration,
+    fallback: summary,
+  })
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Activity className="h-3.5 w-3.5 text-text-muted" />
+          <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider">{labels.evolutionTraceHealth}</div>
+        </div>
+        <div className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase ${
+          state === 'critical'
+            ? 'bg-accent-danger/15 text-accent-danger'
+            : state === 'degraded'
+              ? 'bg-accent-warning/15 text-accent-warning'
+              : state === 'healthy'
+                ? 'bg-accent-success/15 text-accent-success'
+                : 'bg-bg-secondary text-text-muted'
+        }`}>
+          {state === 'critical'
+            ? labels.evolutionCritical
+            : state === 'degraded'
+              ? labels.evolutionDegraded
+              : state === 'healthy'
+                ? labels.evolutionHealthy
+                : labels.evolutionIdle}
+        </div>
+      </div>
+      <div className="space-y-1 text-[11px] text-text-secondary">
+        {localizedSummary.length > 0 ? localizedSummary.slice(0, 3).map((item) => (
+          <div key={item} className="truncate">• {item}</div>
+        )) : (
+          <div className="text-text-muted/70">{labels.evolutionNoTraceSummary}</div>
+        )}
+      </div>
+      <div className="mt-2 grid grid-cols-4 gap-2 text-[11px] text-text-secondary">
+        <div className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+          <div className="text-[10px] text-text-muted truncate">{labels.evolutionClosed}</div>
+          <div className="mt-0.5 font-mono text-text-primary truncate">{series.length ? `${Math.round(closedRate * 1000) / 10}%` : '—'}</div>
+        </div>
+        <div className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+          <div className="text-[10px] text-text-muted truncate">{labels.evolutionFailed}</div>
+          <div className="mt-0.5 font-mono text-text-primary truncate">{String(failedCount)}</div>
+        </div>
+        <div className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+          <div className="text-[10px] text-text-muted truncate">{labels.evolutionDegraded}</div>
+          <div className="mt-0.5 font-mono text-text-primary truncate">{String(degradedCount)}</div>
+        </div>
+        <div className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+          <div className="text-[10px] text-text-muted truncate">{labels.evolutionAvgMs}</div>
+          <div className="mt-0.5 font-mono text-text-primary truncate">{averageDuration ? Math.round(averageDuration) : '—'}</div>
+        </div>
+      </div>
+      <div className="mt-2 flex h-3 gap-1 overflow-hidden">
+        {series.length > 0 ? series.slice(-12).map((item: any) => (
+          <div
+            key={item.run_id}
+            title={`${item.run_id}\n${item.status || 'unknown'}\nissues ${item.issue_count ?? 0} · ${Math.round(Number(item.total_duration_ms || 0))}ms`}
+            className={`flex-1 rounded-full ${
+              item.status === 'failed'
+                ? 'bg-accent-danger/75'
+                : item.status === 'degraded'
+                  ? 'bg-accent-warning/70'
+                  : item.closed_loop
+                    ? 'bg-accent-success/75'
+                    : 'bg-bg-tertiary'
+            }`}
+          />
+        )) : (
+          <div className="h-3 w-full rounded-full bg-bg-tertiary" />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function buildEvolutionTraceSummary({
+  labels,
+  seriesLength,
+  closedRate,
+  failedCount,
+  degradedCount,
+  issueCount,
+  averageDuration,
+  fallback,
+}: {
+  labels: Record<string, string>
+  seriesLength: number
+  closedRate: number
+  failedCount: number
+  degradedCount: number
+  issueCount: number
+  averageDuration: number
+  fallback: string[]
+}) {
+  if (seriesLength <= 0) return [labels.evolutionRecentWindowEmpty]
+  const out: string[] = []
+  if (failedCount > 0) {
+    out.push(`${failedCount} ${labels.evolutionRecentFailed}`)
+  } else if (degradedCount > 0 || issueCount > 0) {
+    out.push(`${degradedCount} ${labels.evolutionRecentDegraded} · ${issueCount} ${labels.evolutionRecentIssues}`)
+  } else if (closedRate >= 0.5) {
+    out.push(`${labels.evolutionClosedLoopRateIs}: ${Math.round(closedRate * 1000) / 10}%`)
+  } else {
+    out.push(labels.evolutionMostlyOpen)
+  }
+  if (averageDuration > 0) {
+    out.push(`${labels.evolutionAverageDuration}: ${Math.round(averageDuration)}ms`)
+  }
+  return out.length > 0 ? out : fallback
+}
+
+function EvolutionTraceBlock({ labels, traces }: { labels: Record<string, string>, traces: Array<Record<string, any>> }) {
+  return (
+    <div className="rounded-md border border-border bg-bg-secondary/60 px-3 py-2">
+      <div className="mb-2 text-[11px] font-medium text-text-muted uppercase tracking-wider">{labels.evolutionRecentTraces}</div>
+      {traces.length > 0 ? (
+        <div className="space-y-2">
+          {traces.map((trace) => {
+            const statuses = trace.stage_statuses || {}
+            const durations = trace.stage_durations_ms || {}
+            const statusText = Object.entries(statuses).map(([key, value]) => `${key}:${value}`).join(' · ')
+            const durationText = Object.entries(durations).map(([key, value]) => `${key} ${Math.round(Number(value) || 0)}ms`).join(' · ')
+            return (
+              <div key={trace.run_id} className="rounded bg-bg-tertiary/70 px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-text-primary truncate">{trace.run_id}</div>
+                    <div className="text-[10px] text-text-muted truncate">
+                      candidates {trace.candidate_count ?? 0} · eval {trace.evaluation_attempt_count ?? 0} · promoted {trace.promoted_count ?? 0} · materialized {trace.materialized_count ?? 0}
+                    </div>
+                  </div>
+                  <div className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase ${
+                    trace.closed_loop
+                      ? 'bg-accent-success/15 text-accent-success'
+                      : 'bg-bg-secondary text-text-muted'
+                  }`}>
+                    {trace.closed_loop ? labels.evolutionClosed : labels.evolutionOpen}
+                  </div>
+                </div>
+                <div className="mt-1 text-[10px] text-text-muted truncate">{statusText || 'No stage statuses.'}</div>
+                <div className="text-[10px] text-text-muted/70 truncate">{durationText || 'No stage durations.'}</div>
+                {Array.isArray(trace.issues) && trace.issues.length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {trace.issues.slice(0, 2).map((issue: string, index: number) => (
+                      <div key={`${trace.run_id}-issue-${index}`} className="text-accent-danger truncate">• {issue}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="text-xs text-text-muted/70">{labels.evolutionNoTracesYet}</div>
+      )}
+    </div>
+  )
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${Math.round(Number(value) * 1000) / 10}%`
 }
 
 interface PromptCacheLoopPoint {

@@ -189,9 +189,10 @@ parameters come only from the provider tool schemas for the current turn.
 {available_skills}
 
 Skills are loadable instruction/resource bundles, not executable actions.
-When the user task matches an available skill description, call
-`load_skill(name=...)` before acting. After loading a skill, follow its
-instructions and resolve any relative paths against the skill base directory.
+The stable prompt does not enumerate all skills. When the current turn's
+Relevant Capabilities section lists a skill, call `load_skill(name=...)`
+before acting. After loading a skill, follow its instructions and resolve any
+relative paths against the skill base directory.
 
 For complex analysis that requires custom Python code (pandas, geopandas,
 matplotlib, spatial analysis, etc.), use the `execute_code` tool. The

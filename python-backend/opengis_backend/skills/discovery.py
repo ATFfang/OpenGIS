@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from opengis_backend.workspace.evolution_asset_registry import EvolutionAssetRegistry
+
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<meta>.*?)\n---\s*\n?", re.DOTALL)
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -31,6 +33,7 @@ class UserSkillInfo:
     source: str
     tags: list[str] = field(default_factory=list)
     version: str | None = None
+    evolution_asset_state: str | None = None
 
     @property
     def directory(self) -> str:
@@ -45,6 +48,7 @@ class UserSkillInfo:
             "source": self.source,
             "tags": self.tags,
             "version": self.version,
+            "evolution_asset_state": self.evolution_asset_state,
         }
         if include_content:
             data["content"] = self.content
@@ -59,11 +63,23 @@ class UserSkillDiscovery:
 
     def list(self) -> list[UserSkillInfo]:
         skills: dict[str, UserSkillInfo] = {}
+        registry = EvolutionAssetRegistry(self.workspace_path)
+        registry_assets = {
+            record.name: record
+            for record in registry.list(kind="skill", limit=1000)
+        } if self.workspace_path else {}
         for root, source in self._roots():
             for match in self._scan_root(root):
                 info = self._load(match, source)
                 if info is None:
                     continue
+                asset = registry_assets.get(info.name)
+                state = asset.state if asset is not None else None
+                if state is not None and state != "enabled":
+                    continue
+                if asset is not None and not registry.inspect(asset).get("loadable"):
+                    continue
+                info.evolution_asset_state = state
                 # Later roots intentionally override earlier roots. That lets
                 # workspace skills shadow global defaults.
                 skills[info.name] = info

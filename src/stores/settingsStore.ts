@@ -49,6 +49,11 @@ interface SettingsState {
     useAutoCondense: boolean
     customInstructions: string
     debugMode: boolean
+    capabilityRouterMaxSkills: number
+    capabilityRouterMaxOperations: number
+    capabilityRouterMaxAssets: number
+    capabilityRouterMinScore: number
+    capabilityRouterCacheTtlSeconds: number
   }
 
   // 操作方法
@@ -93,6 +98,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     useAutoCondense: true,
     customInstructions: '',
     debugMode: false,
+    capabilityRouterMaxSkills: 4,
+    capabilityRouterMaxOperations: 4,
+    capabilityRouterMaxAssets: 4,
+    capabilityRouterMinScore: 2,
+    capabilityRouterCacheTtlSeconds: 5,
   },
 
   // 操作方法

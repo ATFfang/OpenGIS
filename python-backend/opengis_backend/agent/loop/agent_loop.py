@@ -209,9 +209,13 @@ class AgentLoop:
             # changes per run) so it never breaks the cacheable stable prefix.
             if self.project_memory:
                 system_inserts.append(self.project_memory)
+            capability_selection = runtime_control.capability_selection()
+            capability_prompt = capability_selection.to_prompt()
+            if capability_prompt:
+                system_inserts.append(capability_prompt)
             system_inserts.append(runtime_control.system_prompt())
             materialization_options = policy.materialization_options()
-            materialization_options.setdefault("selected_packs", sorted(runtime_control.tool_packs()))
+            materialization_options.setdefault("selected_packs", sorted(capability_selection.tool_packs))
             outcome = kernel.run_turn(
                 LoopTurnRequest(
                     iteration=current_iteration,
@@ -231,6 +235,7 @@ class AgentLoop:
                     disabled_tools_reason=policy_decision.reason,
                     materialization_options=materialization_options,
                     extra_system_messages=system_inserts,
+                    capability_telemetry=capability_selection.to_telemetry(),
                     tool_call_guard=runtime_control.guard_tool_calls,
                 )
             )

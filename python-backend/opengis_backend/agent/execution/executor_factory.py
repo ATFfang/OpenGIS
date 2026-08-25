@@ -24,6 +24,9 @@ contract independently of LLM/tool/prompt plumbing.
 from __future__ import annotations
 
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import Callable, Optional
 
 from opengis_backend.tools.context import ToolContext
@@ -109,16 +112,31 @@ def build_subprocess_executor(
     )
 
     listener = stdout_listener if stdout_listener is not None else _default_stdout_listener
+    env = _subprocess_env()
 
     return SubprocessPythonExecutor(
         config=SubprocessExecutorConfig(
             working_dir=resolve_working_dir(ctx),
+            env=env,
             exec_timeout=exec_timeout,
         ),
         stdout_listener=listener,
         risky_op_listener=risky_op_listener,
         plot_saved_listener=plot_saved_listener,
     )
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Keep source-checkout CLI subprocesses able to import opengis_backend."""
+    env: dict[str, str] = {}
+    backend_root = str(Path(__file__).resolve().parents[3])
+    paths = [backend_root, *sys.path]
+    existing = os.environ.get("PYTHONPATH")
+    if existing:
+        paths.append(existing)
+    deduped = list(dict.fromkeys(str(item) for item in paths if item))
+    env["PYTHONPATH"] = os.pathsep.join(deduped)
+    return env
 
 
 __all__ = [

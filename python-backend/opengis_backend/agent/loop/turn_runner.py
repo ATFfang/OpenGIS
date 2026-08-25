@@ -178,6 +178,18 @@ class LoopTurnTelemetry:
     cached_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    tool_pack_count: int = 0
+    selected_skill_count: int = 0
+    selected_operation_count: int = 0
+    selected_evolution_asset_count: int = 0
+    total_skill_count: int = 0
+    total_operation_count: int = 0
+    total_evolution_asset_count: int = 0
+    capability_reason: str = ""
+    selected_tool_packs: list[str] = field(default_factory=list)
+    selected_skill_names: list[str] = field(default_factory=list)
+    selected_operation_names: list[str] = field(default_factory=list)
+    selected_evolution_asset_names: list[str] = field(default_factory=list)
 
     @property
     def cache_hit_rate(self) -> float:
@@ -192,7 +204,7 @@ class LoopTurnTelemetry:
             "messages=%d est_request_tokens=%d tools=%d/%d tool_reason=%s "
             "context_build=%.0fms llm=%.0fms tool=%.0fms "
             "response_chars=%d tool_calls=%d pressure=%s "
-            "prompt_tokens=%d cached_tokens=%d cache_write=%d cache_hit=%.1f%% continuation=%s",
+            "prompt_tokens=%d cached_tokens=%d cache_write=%d cache_hit=%.1f%% capability=%d packs/%d skills/%d ops continuation=%s",
             self.iteration,
             self.code_steps,
             self.tool_steps,
@@ -211,6 +223,9 @@ class LoopTurnTelemetry:
             self.cached_tokens,
             self.cache_creation_tokens,
             self.cache_hit_rate * 100.0,
+            self.tool_pack_count,
+            self.selected_skill_count,
+            self.selected_operation_count,
             self.continuation or "-",
         )
 

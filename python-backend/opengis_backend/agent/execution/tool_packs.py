@@ -14,7 +14,10 @@ from opengis_backend.tools.registry import RegisteredTool
 
 AGENT_EXCLUDED_PACKS = {"layout", "report"}
 DEFAULT_AGENT_PACKS = {"skill", "file", "code", "map"}
-ALWAYS_AVAILABLE_SCHEMA_NAMES = {"execute_code", "run_script_file"}
+# Code execution is a normal capability pack. It is intentionally not forced
+# into every turn: exposing it globally makes simple map/style requests pay for
+# a large schema and encourages one-off Python detours.
+ALWAYS_AVAILABLE_SCHEMA_NAMES: set[str] = set()
 
 _PREFIX_PACKS: tuple[tuple[str, str], ...] = (
     ("layout_", "layout"),
@@ -47,6 +50,8 @@ _NAME_PACKS: dict[str, str] = {
     "copy_file": "file",
     "list_scripts": "code",
     "read_script": "code",
+    "execute_code": "code",
+    "run_script_file": "code",
     "bash": "system",
     # Map basics.
     "list_layers": "map",
@@ -96,6 +101,7 @@ _NAME_PACKS: dict[str, str] = {
     # Orchestration.
     "update_plan": "orchestration",
     "create_workflow": "workflow",
+    "start_subagent": "subagent",
     "run_subagent": "subagent",
     "run_subagents": "subagent",
     # Workers.

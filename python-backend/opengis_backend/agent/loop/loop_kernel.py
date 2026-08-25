@@ -35,6 +35,23 @@ from opengis_backend.agent.loop.turn_runner import (
 logger = logging.getLogger(__name__)
 
 
+def _apply_capability_telemetry(telemetry: LoopTurnTelemetry, capability_telemetry: dict[str, Any] | None) -> None:
+    if not isinstance(capability_telemetry, dict):
+        return
+    telemetry.tool_pack_count = len(capability_telemetry.get("tool_packs") or [])
+    telemetry.selected_skill_count = int(capability_telemetry.get("skill_count") or 0)
+    telemetry.selected_operation_count = int(capability_telemetry.get("operation_count") or 0)
+    telemetry.selected_evolution_asset_count = int(capability_telemetry.get("evolution_asset_count") or 0)
+    telemetry.total_skill_count = int(capability_telemetry.get("total_skills") or 0)
+    telemetry.total_operation_count = int(capability_telemetry.get("total_operations") or 0)
+    telemetry.total_evolution_asset_count = int(capability_telemetry.get("total_evolution_assets") or 0)
+    telemetry.capability_reason = str(capability_telemetry.get("reason") or "")
+    telemetry.selected_tool_packs = [str(item) for item in capability_telemetry.get("tool_packs") or [] if str(item)]
+    telemetry.selected_skill_names = [str(item) for item in capability_telemetry.get("skill_names") or [] if str(item)]
+    telemetry.selected_operation_names = [str(item) for item in capability_telemetry.get("operation_names") or [] if str(item)]
+    telemetry.selected_evolution_asset_names = [str(item) for item in capability_telemetry.get("evolution_asset_names") or [] if str(item)]
+
+
 @dataclass
 class LoopKernelHooks:
     on_thought_delta: Callable[[str], None] | None = None
@@ -70,6 +87,7 @@ class LoopTurnRequest:
     disabled_tools_reason: str = ""
     materialization_options: dict[str, Any] | None = None
     extra_system_messages: list[str] | None = None
+    capability_telemetry: dict[str, Any] | None = None
     tool_call_guard: Callable[[list[dict[str, Any]]], Any] | None = None
 
 
@@ -137,8 +155,9 @@ class LoopKernel:
             live_tokens=self.context.estimate_live_tokens(),
         )
 
-        # Materialize tools first: the active-tool hint is a STABLE prefix
-        # section, so it must be known before assembling the request.
+        # Materialize tools first. The active tool set is selected per turn,
+        # so its human-readable hint belongs in the dynamic tail. Provider
+        # tool schemas are passed separately and remain authoritative.
         materialization_options = dict(request.materialization_options or {})
         if request.disable_tools:
             materialization = ToolMaterialization(
@@ -161,20 +180,15 @@ class LoopKernel:
             if materialization is not None
             else self.tool_schemas
         )
-
-        # Split inserts by stability: active-tool hint is profile-stable and
-        # belongs in the cacheable prefix; runtime control messages (turn
-        # objective / final-turn instruction / deviation feedback) are
-        # turn-dynamic and belong in the DYNAMIC TAIL after history.
         active_tool_prompt = format_active_tool_prompt(materialization)
         stable_system_sections: list[tuple[str, str]] = []
-        if active_tool_prompt:
-            stable_system_sections.append(("system.active_tools", active_tool_prompt))
         dynamic_tail_sections: list[tuple[str, str]] = [
             (f"runtime.control_{index + 1}", content)
             for index, content in enumerate(request.extra_system_messages or [])
             if content
         ]
+        if active_tool_prompt:
+            dynamic_tail_sections.insert(0, ("runtime.active_tools", active_tool_prompt))
 
         def _assemble(limits: Any) -> tuple[ProviderRequest, list[dict[str, Any]]]:
             provider_request = self.context.build_provider_request(
@@ -227,6 +241,7 @@ class LoopKernel:
             request_pressure=budget_report.pressure,
             context_build_ms=context_build_ms,
         )
+        _apply_capability_telemetry(telemetry, request.capability_telemetry)
 
         if self.progress_callback:
             try:
