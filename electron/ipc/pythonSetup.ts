@@ -48,7 +48,7 @@ export async function ensurePythonEnv(
   onProgress({ phase: 'checking', detail: 'Checking Python environment...' })
   if (existsSync(venvPython)) {
     try {
-      const ver = execSync(`"${venvPython}" --version`, { encoding: 'utf-8', timeout: 5000 })
+      const ver = execFileSync(venvPython, ['--version'], { encoding: 'utf-8', timeout: 5000 })
       if (ver.includes('Python 3')) {
         // Check if venv is from a different app version
         if (appVersion) {
@@ -135,7 +135,10 @@ async function findSystemPython(): Promise<string | null> {
       } catch { /* use original */ }
       if (resolved.includes('.venv') || resolved.includes('site-packages')) continue
 
-      const ver = execSync(`"${cmd}" --version`, { encoding: 'utf-8', timeout: 5000 })
+      // Avoid cmd.exe here. Apart from quoting problems, shell diagnostics use the
+      // active Windows code page and become mojibake when Electron decodes them.
+      const executable = existsSync(resolved) ? resolved : cmd
+      const ver = execFileSync(executable, ['--version'], { encoding: 'utf-8', timeout: 5000 })
       const match = ver.match(/Python (\d+)\.(\d+)/)
       if (match) {
         const major = parseInt(match[1], 10)
@@ -174,7 +177,9 @@ async function downloadPythonBuildStandalone(
 
   // Use cpython-3.12 (stable, widely compatible)
   const version = '3.12.8'
-  const osTag = isWin ? 'windows-mswin' : isMac ? 'apple-darwin' : 'unknown-linux-gnu'
+  // python-build-standalone archive names use Rust-style target triples.
+  // In particular, Windows is `*-pc-windows-msvc`, not `*-windows-mswin`.
+  const osTag = isWin ? 'pc-windows-msvc' : isMac ? 'apple-darwin' : 'unknown-linux-gnu'
   const fileName = `cpython-${version}+20241219-${archSuffix}-${osTag}-install_only_stripped.tar.gz`
 
   const tag = '20241219'
@@ -199,7 +204,7 @@ async function downloadPythonBuildStandalone(
 
   if (existsSync(pythonBin)) {
     try {
-      execSync(`"${pythonBin}" --version`, { encoding: 'utf-8', timeout: 5000 })
+      execFileSync(pythonBin, ['--version'], { encoding: 'utf-8', timeout: 5000 })
       console.log(`[setup] Using cached python-build-standalone: ${pythonBin}`)
       return pythonBin
     } catch {
@@ -254,7 +259,7 @@ async function downloadPythonBuildStandalone(
 async function createVenv(pythonPath: string, venvPath: string): Promise<void> {
   console.log(`[setup] Creating venv at ${venvPath}`)
   mkdirSync(venvPath, { recursive: true })
-  execSync(`"${pythonPath}" -m venv "${venvPath}"`, {
+  execFileSync(pythonPath, ['-m', 'venv', venvPath], {
     stdio: 'pipe',
     timeout: 60_000,
   })

@@ -144,11 +144,28 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // Load the renderer
+  // Load the renderer. In development ELECTRON_RENDERER_URL can outlive the
+  // Vite server (for example when Electron is restarted on its own). Falling
+  // back to the last built renderer keeps the project-opening handshake alive
+  // instead of leaving the loading window waiting forever.
   if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    const rendererUrl = process.env.ELECTRON_RENDERER_URL
+    void mainWindow.loadURL(rendererUrl).catch(async (error) => {
+      console.error(`[main] Failed to load dev renderer at ${rendererUrl}:`, error)
+      const fallbackPath = join(__dirname, '../renderer/index.html')
+      if (!existsSync(fallbackPath) || !mainWindow || mainWindow.isDestroyed()) {
+        console.error(`[main] Built renderer fallback is unavailable: ${fallbackPath}`)
+        return
+      }
+      console.warn(`[main] Falling back to built renderer: ${fallbackPath}`)
+      try {
+        await mainWindow.loadFile(fallbackPath)
+      } catch (fallbackError) {
+        console.error('[main] Failed to load built renderer fallback:', fallbackError)
+      }
+    })
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
   // Open DevTools in development
@@ -400,14 +417,21 @@ app.whenReady().then(async () => {
   }
 
   {
-    const runSetup = async (): Promise<void> => {
+    let setupAttempt: Promise<void> | null = null
+    const runSetup = (): Promise<void> => {
+      // The retry button can emit more than once before the UI is repainted.
+      // Share the active attempt so downloads and venv creation never overlap.
+      if (setupAttempt) return setupAttempt
       const backendPath = tempManager.getBackendPath()
       const venvPath = tempManager.getVenvPath()
-      await ensurePythonEnv(backendPath, venvPath, (progress) => {
+      setupAttempt = ensurePythonEnv(backendPath, venvPath, (progress) => {
         if (needsSetup) {
           loadingWindow?.webContents.send('loading:install-progress', progress)
         }
-      }, app.getVersion())
+      }, app.getVersion()).finally(() => {
+        setupAttempt = null
+      })
+      return setupAttempt
     }
 
     try {
