@@ -3,6 +3,11 @@
  */
 export { loadGeoFile, loadGeoFiles, isSupportedExtension, getSupportedExtensions } from './GeoFileService'
 export { getDefaultStyle, getNextLayerColor, resetLayerColorIndex } from './defaultStyles'
+export {
+  normalizeLayerDefinitionColors,
+  normalizeLayerStyleColors,
+  normalizeMapColor,
+} from './styleNormalization'
 export { detectGeometryType, summarizeGeometryTypes } from './geometry'
 export type { GeometryTypeSummary } from './geometry'
 export {

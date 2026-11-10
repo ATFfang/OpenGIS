@@ -477,17 +477,17 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
         self.assertEqual(requests[0][0], "rpc.ui.map.set_raster_style")
 
     def test_update_layer_style_uses_layer_geometry_for_point_paint(self) -> None:
-        notifications: list[tuple[str, dict]] = []
+        requests: list[tuple[str, dict]] = []
 
         async def request(method: str, params: dict):
-            self.assertEqual(method, "rpc.ui.map.get_layer")
-            self.assertEqual(params, {"layer_id": "poi"})
-            return {"geometry_type": "Point"}
+            requests.append((method, params))
+            if method == "rpc.ui.map.get_layer":
+                return {"geometry_type": "Point"}
+            if method == "rpc.ui.map.set_layer_style":
+                return {"layer_id": "poi", "applied": True}
+            raise AssertionError(f"Unexpected request: {method}")
 
-        async def notify(method: str, params: dict):
-            notifications.append((method, params))
-
-        ctx = ToolContext(request_fn=request, notify_fn=notify)
+        ctx = ToolContext(request_fn=request)
 
         result = update_layer_style(
             ctx,
@@ -498,15 +498,16 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
         )
 
         self.assertTrue(result["success"], result)
-        self.assertEqual(notifications[0][0], "rpc.ui.map.set_layer_style")
+        self.assertEqual(requests[1][0], "rpc.ui.map.set_layer_style")
         self.assertEqual(
-            notifications[0][1]["style"]["paint"],
+            requests[1][1]["style"]["paint"],
             {
                 "circle-color": "#ff0000",
                 "circle-radius": 7.0,
                 "circle-opacity": 0.4,
             },
         )
+        self.assertEqual(result["style"], {"layer_id": "poi", "applied": True})
 
     def test_set_categorized_style_sends_explicit_categories_and_colors(self) -> None:
         requests_seen: list[tuple[str, dict]] = []
@@ -566,6 +567,48 @@ Path(args.output).write_text(json.dumps({"success": True, "input_path": input_pa
         self.assertTrue(all(color.startswith("#") for color in graduated["palette"]))
         self.assertEqual(graduated["palette"][0], "#f3e8ff")
         self.assertEqual(graduated["palette"][-1], "#581c87")
+
+    def test_set_graduated_style_accepts_spectrum_palette_alias(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"renderer": "graduated", **params}
+
+        ctx = ToolContext(request_fn=request)
+        result = set_graduated_style(
+            ctx,
+            "districts",
+            "population",
+            classes=6,
+            palette="Spectrum",
+        )
+
+        palette = requests_seen[0][1]["graduated"]["palette"]
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(palette), 6)
+        self.assertEqual(palette[0], "#9e0142")
+        self.assertEqual(palette[-1], "#5e4fa2")
+
+    def test_set_graduated_style_falls_back_for_unknown_ramp_name(self) -> None:
+        requests_seen: list[tuple[str, dict]] = []
+
+        async def request(method: str, params: dict):
+            requests_seen.append((method, params))
+            return {"renderer": "graduated", **params}
+
+        ctx = ToolContext(request_fn=request)
+        set_graduated_style(
+            ctx,
+            "districts",
+            "population",
+            classes=4,
+            palette="unknown model-created ramp name",
+        )
+
+        palette = requests_seen[0][1]["graduated"]["palette"]
+        self.assertEqual(len(palette), 4)
+        self.assertTrue(all(color.startswith("#") for color in palette))
 
     def test_set_extrusion_style_sets_renderer_without_camera_by_default(self) -> None:
         requests_seen: list[tuple[str, dict]] = []

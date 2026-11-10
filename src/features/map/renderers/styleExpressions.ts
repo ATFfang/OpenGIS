@@ -149,6 +149,8 @@ function sampleNumericField(def: MapLayerDefinition, field: string): number[] {
   const out: number[] = []
   for (const feature of fc.features) {
     const raw = (feature.properties ?? {})[field]
+    if (raw === null || raw === undefined) continue
+    if (typeof raw === 'string' && raw.trim() === '') continue
     const value = typeof raw === 'number' ? raw : Number(raw)
     if (Number.isFinite(value)) out.push(value)
   }

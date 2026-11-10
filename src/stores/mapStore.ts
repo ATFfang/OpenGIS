@@ -8,7 +8,12 @@
  */
 import { create } from 'zustand'
 import type { MapLayerDefinition, LayerStyle, BasemapSource } from '@/services/geo'
-import { BUILTIN_BASEMAPS, resetLayerColorIndex } from '@/services/geo'
+import {
+  BUILTIN_BASEMAPS,
+  normalizeLayerDefinitionColors,
+  normalizeLayerStyleColors,
+  resetLayerColorIndex,
+} from '@/services/geo'
 import type { FeatureInfo } from '@/features/map/identify/FeatureAttributePanel'
 import type { BoxSelectFeatureInfo } from '@/features/map/identify/BoxSelectResultPanel'
 import type { PinnedImage } from '@/features/map/PinnedImagePanel'
@@ -110,15 +115,16 @@ export const useMapStore = create<MapStore>((set, get) => ({
 
   addLayer: (layer) =>
     set((state) => {
+      const normalizedLayer = normalizeLayerDefinitionColors(layer)
       const idx = state.layers.findIndex((l) => l.id === layer.id)
       if (idx !== -1) {
         // Replace existing entry with same ID
         const layers = [...state.layers]
-        if (layers[idx] !== layer) _releaseLayerResources(layers[idx], layer)
-        layers[idx] = layer
+        if (layers[idx] !== layer) _releaseLayerResources(layers[idx], normalizedLayer)
+        layers[idx] = normalizedLayer
         return { layers, activeLayerId: layer.id }
       }
-      return { layers: [...state.layers, layer], activeLayerId: layer.id }
+      return { layers: [...state.layers, normalizedLayer], activeLayerId: layer.id }
     }),
 
   addLayers: (incoming) =>
@@ -128,12 +134,13 @@ export const useMapStore = create<MapStore>((set, get) => ({
       // MapView 的 diff（基于 Set）和 removeLayer 的 filter 行为错乱。
       const layers = [...state.layers]
       for (const layer of incoming) {
+        const normalizedLayer = normalizeLayerDefinitionColors(layer)
         const idx = layers.findIndex((l) => l.id === layer.id)
         if (idx !== -1) {
-          if (layers[idx] !== layer) _releaseLayerResources(layers[idx], layer)
-          layers[idx] = layer
+          if (layers[idx] !== layer) _releaseLayerResources(layers[idx], normalizedLayer)
+          layers[idx] = normalizedLayer
         } else {
-          layers.push(layer)
+          layers.push(normalizedLayer)
         }
       }
       return {
@@ -170,7 +177,9 @@ export const useMapStore = create<MapStore>((set, get) => ({
   updateLayerStyle: (id, styleUpdates) =>
     set((state) => ({
       layers: state.layers.map((l) =>
-        l.id === id ? { ...l, style: { ...l.style, ...styleUpdates } } : l
+        l.id === id
+          ? { ...l, style: normalizeLayerStyleColors({ ...l.style, ...styleUpdates }) }
+          : l
       ),
     })),
 
@@ -284,6 +293,13 @@ let _isApplyingPersistedView = false
 function _releaseLayerResources(layer: MapLayerDefinition | undefined, replacement?: MapLayerDefinition) {
   if (!layer) return
   if (layer.data.kind === 'vector') {
+    if (
+      layer.data.dataHandle
+      && replacement?.data.kind === 'vector'
+      && replacement.data.dataHandle === layer.data.dataHandle
+    ) {
+      return
+    }
     releaseVectorGeoJSON(layer.data.dataHandle)
     return
   }
@@ -317,9 +333,11 @@ function _releaseLayerResources(layer: MapLayerDefinition | undefined, replaceme
 }
 
 function _applyLoadedLayers(layers: MapLayerDefinition[]) {
+  const normalizedLayers = layers.map(normalizeLayerDefinitionColors)
   useMapStore.setState({
-    layers,
-    activeLayerId: layers.length > 0 ? layers[layers.length - 1].id : null,
+    layers: normalizedLayers,
+    activeLayerId:
+      normalizedLayers.length > 0 ? normalizedLayers[normalizedLayers.length - 1].id : null,
   })
 }
 

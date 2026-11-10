@@ -850,6 +850,71 @@ describe('rpc.ui.map.set_layer_style', () => {
     expect(layer.style.strokeOpacity).toBe(0.55);
   });
 
+  it('canonicalizes generated color shorthand before storing render state', async () => {
+    const d = makeDispatcher();
+    await addL(d, 'L1');
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_layer_style', {
+        layer_id: 'L1',
+        style: {
+          type: 'circle',
+          paint: {
+            'circle-color': 'AABBCC',
+            'circle-stroke-color': 'cccccc',
+          },
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({
+      result: {
+        applied: { color: '#aabbcc', strokeColor: '#cccccc' },
+      },
+    });
+    expect(useMapStore.getState().getLayerById('L1')!.style).toMatchObject({
+      color: '#aabbcc',
+      strokeColor: '#cccccc',
+    });
+  });
+
+  it('maps none to a valid transparent MapLibre color', async () => {
+    const d = makeDispatcher();
+    await addL(d, 'L1');
+
+    await d.handleRequest(
+      req('rpc.ui.map.set_layer_style', {
+        layer_id: 'L1',
+        style: {
+          type: 'circle',
+          paint: { 'circle-stroke-color': 'none' },
+        },
+      }),
+    );
+
+    expect(useMapStore.getState().getLayerById('L1')!.style.strokeColor)
+      .toBe('transparent');
+  });
+
+  it('rejects invalid colors instead of persisting an unrenderable layer style', async () => {
+    const d = makeDispatcher();
+    await addL(d, 'L1');
+    const before = useMapStore.getState().getLayerById('L1')!.style.strokeColor;
+
+    const resp = await d.handleRequest(
+      req('rpc.ui.map.set_layer_style', {
+        layer_id: 'L1',
+        style: {
+          type: 'circle',
+          paint: { 'circle-stroke-color': 'definitely-not-a-color' },
+        },
+      }),
+    );
+
+    expect(resp).toMatchObject({ error: { code: -32602 } });
+    expect(useMapStore.getState().getLayerById('L1')!.style.strokeColor).toBe(before);
+  });
+
   it('maps line-dasharray into layer style', async () => {
     const d = makeDispatcher();
     await addL(d, 'L1');
@@ -938,6 +1003,92 @@ describe('rpc.ui.map semantic layer styling', () => {
       breaks: [1, 2, 3],
       palette: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'],
     });
+  });
+
+  it('does not infer a numeric field from naming conventions', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.add_layer_from_geojson', {
+        layer_id: 'shops',
+        name: 'shops',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.4, 31.2] },
+              properties: { price: '25/person', price_num: 25 },
+            },
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.5, 31.3] },
+              properties: { price: '', price_num: 40 },
+            },
+          ],
+        },
+      }),
+    );
+
+    const response = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'shops',
+        renderer: 'graduated',
+        graduated: {
+          field: 'price',
+          method: 'equal-interval',
+          classes: 4,
+          palette: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'],
+        },
+      }),
+    );
+
+    expect(response).toMatchObject({
+      error: {
+        code: -32602,
+        data: { field: 'price', numeric_fields: ['price_num'] },
+      },
+    });
+    expect(useMapStore.getState().getLayerById('shops')!.style.renderType).toBe('circle');
+  });
+
+  it('rejects a non-numeric graduated field before replacing the renderer', async () => {
+    const d = makeDispatcher();
+    await d.handleRequest(
+      req('rpc.ui.map.add_layer_from_geojson', {
+        layer_id: 'shops',
+        name: 'shops',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.4, 31.2] },
+              properties: { price: '25/person' },
+            },
+            {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [121.5, 31.3] },
+              properties: { price: '' },
+            },
+          ],
+        },
+      }),
+    );
+
+    const response = await d.handleRequest(
+      req('rpc.ui.map.set_layer_renderer', {
+        layer_id: 'shops',
+        renderer: 'graduated',
+        graduated: {
+          field: 'price',
+          method: 'equal-interval',
+          classes: 4,
+        },
+      }),
+    );
+
+    expect(response).toMatchObject({ error: { code: -32602 } });
+    expect(useMapStore.getState().getLayerById('shops')!.style.renderType).toBe('circle');
   });
 
   it('stores extrusion renderer and returns extrusion config', async () => {
