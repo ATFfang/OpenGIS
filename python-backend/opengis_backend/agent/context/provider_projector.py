@@ -82,7 +82,12 @@ class ProviderContextProjector:
             if exclude_workflow_context and self.is_workflow_context_message(msg):
                 continue
             result.append(self.message_for_provider(msg, project=False))
-        return self.ensure_tool_protocol(result)
+        result = self.ensure_tool_protocol(result)
+        return self.ensure_user_query(
+            result,
+            messages,
+            exclude_workflow_context=exclude_workflow_context,
+        )
 
     def build_recent_user_anchor(
         self,
@@ -126,12 +131,71 @@ class ProviderContextProjector:
     def is_real_user_message(self, msg: dict) -> bool:
         if msg.get("role") != "user":
             return False
+        if not str(msg.get("content") or "").strip():
+            return False
         meta = msg.get("_meta")
         if isinstance(meta, dict):
             kind = str(meta.get("kind") or "")
             if kind == "tool_result" or kind.startswith("workflow"):
                 return False
         return True
+
+    def ensure_user_query(
+        self,
+        projected: list[dict[str, Any]],
+        messages: list[dict],
+        *,
+        exclude_workflow_context: bool,
+    ) -> list[dict[str, Any]]:
+        """Keep the latest real user query in every provider request.
+
+        A message-count sliding window can contain only an assistant/tool
+        transaction after a long turn. The user request is then represented by
+        the system ``Recent User Requests`` anchor, which is useful for model
+        context but is not a provider-level user query. Some OpenAI-compatible
+        gateways reject such requests with ``No user query found``. Reinsert
+        the latest real user message before the projected assistant/tool
+        history when the window removed it.
+        """
+        latest_user: dict[str, Any] | None = None
+        latest_provider_user: dict[str, Any] | None = None
+        # Search the raw transcript, not only messages after summary_cutoff.
+        # During a long tool-heavy turn, compression may advance the cutoff
+        # past the initiating user request while retaining it in raw storage.
+        for index in range(len(messages) - 1, -1, -1):
+            candidate = messages[index]
+            if exclude_workflow_context and self.is_workflow_context_message(candidate):
+                continue
+            if latest_provider_user is None and self.is_provider_user_message(candidate):
+                latest_provider_user = candidate
+            if self.is_real_user_message(candidate):
+                latest_user = candidate
+                break
+        latest_user = latest_user or latest_provider_user
+        if latest_user is None:
+            return projected
+
+        latest_content = str(latest_user.get("content") or "")
+        if any(
+            message.get("role") == "user"
+            and str(message.get("content") or "") == latest_content
+            for message in projected
+        ):
+            return projected
+
+        user_message = self.message_for_provider(latest_user, project=False)
+        insert_at = 0
+        while insert_at < len(projected) and projected[insert_at].get("role") == "system":
+            insert_at += 1
+        projected.insert(insert_at, user_message)
+        return projected
+
+    def is_provider_user_message(self, msg: dict) -> bool:
+        """Return whether a message can serve as a provider user query."""
+        if msg.get("role") != "user" or not str(msg.get("content") or "").strip():
+            return False
+        meta = msg.get("_meta")
+        return not (isinstance(meta, dict) and meta.get("kind") == "tool_result")
 
     def message_for_provider(self, msg: dict, *, project: bool) -> dict[str, Any]:
         out: dict[str, Any] = {
