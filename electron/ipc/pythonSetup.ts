@@ -47,25 +47,21 @@ export async function ensurePythonEnv(
   // ── 1. Check existing venv ──
   onProgress({ phase: 'checking', detail: 'Checking Python environment...' })
   if (existsSync(venvPython)) {
+    let version = ''
     try {
-      const ver = execFileSync(venvPython, ['--version'], { encoding: 'utf-8', timeout: 5000 })
-      if (ver.includes('Python 3')) {
-        // Check if venv is from a different app version
-        if (appVersion) {
-          const needsUpgrade = checkVersionMismatch(versionFile, appVersion)
-          if (needsUpgrade) {
-            console.log(`[setup] App version changed, upgrading dependencies...`)
-            onProgress({ phase: 'installing', detail: 'Updating dependencies for new version...' })
-            await pipInstall(venvPython, backendPath, onProgress)
-            writeVersionFile(versionFile, appVersion)
-          }
-        }
-        console.log(`[setup] Existing venv OK: ${venvPython} (${ver.trim()})`)
-        onProgress({ phase: 'done', detail: 'Python environment ready' })
-        return venvPython
-      }
+      version = execFileSync(venvPython, ['--version'], { encoding: 'utf-8', timeout: 5000 })
     } catch {
       // venv exists but broken — fall through to recreate
+    }
+    if (version.includes('Python 3')) {
+      const needsUpgrade = appVersion && checkVersionMismatch(versionFile, appVersion)
+      if (needsUpgrade || !canImportMcp(venvPython)) {
+        await pipInstall(venvPython, backendPath, onProgress)
+        if (appVersion) writeVersionFile(versionFile, appVersion)
+      }
+      console.log(`[setup] Existing venv OK: ${venvPython} (${version.trim()})`)
+      onProgress({ phase: 'done', detail: 'Python environment ready' })
+      return venvPython
     }
   }
 
@@ -302,6 +298,15 @@ async function selectPipMirror(): Promise<string | null> {
 
 const PIP_STALL_TIMEOUT_MS = 90_000  // 90s no output = stalled
 
+function canImportMcp(venvPython: string): boolean {
+  try {
+    execFileSync(venvPython, ['-I', '-c', 'import mcp'], { stdio: 'pipe', timeout: 10_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function pipInstall(
   venvPython: string,
   backendPath: string,
@@ -328,7 +333,7 @@ async function pipInstall(
   // Install project dependencies
   onProgress({ phase: 'installing', percent: 3, detail: `安装依赖 (${mirrorLabel})...` })
 
-  return new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const args = ['-m', 'pip', 'install', '-e', backendPath, ...mirrorArgs]
     const proc = spawn(venvPython, args, {
       cwd: backendPath,
@@ -442,6 +447,9 @@ async function pipInstall(
       reject(new Error(`无法启动 pip: ${err.message}\n\n请确保 Python 环境完整。`))
     })
   })
+  if (!canImportMcp(venvPython)) {
+    throw new Error('Python 依赖安装后仍无法导入 mcp，请重试。')
+  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────

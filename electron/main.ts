@@ -405,15 +405,16 @@ app.whenReady().then(async () => {
   // Register IPC handlers early so the renderer can call them during setup
   registerPythonIpcHandlers()
 
-  // Always run ensurePythonEnv — it checks version and upgrades deps if needed
+  // Always check the environment so existing installs can repair missing dependencies.
   const tempManager = new PythonManager()
   const needsSetup = !tempManager.hasVenv()
+  let showInstallProgress = needsSetup
 
   if (needsSetup) {
     console.log('[loading] No .venv found — running first-launch setup')
     loadingWindow?.webContents.send('loading:install-start', {})
   } else {
-    console.log('[loading] .venv exists — checking version')
+    console.log('[loading] .venv exists — checking dependencies')
   }
 
   {
@@ -425,7 +426,11 @@ app.whenReady().then(async () => {
       const backendPath = tempManager.getBackendPath()
       const venvPath = tempManager.getVenvPath()
       setupAttempt = ensurePythonEnv(backendPath, venvPath, (progress) => {
-        if (needsSetup) {
+        if (progress.phase === 'installing' && !showInstallProgress) {
+          showInstallProgress = true
+          loadingWindow?.webContents.send('loading:install-start', {})
+        }
+        if (showInstallProgress) {
           loadingWindow?.webContents.send('loading:install-progress', progress)
         }
       }, app.getVersion()).finally(() => {
@@ -436,14 +441,14 @@ app.whenReady().then(async () => {
 
     try {
       await runSetup()
-      if (needsSetup) {
+      if (showInstallProgress) {
         loadingWindow?.webContents.send('loading:install-done', {})
       }
       console.log('[loading] Python env ready')
     } catch (err) {
       console.error('[loading] Python env setup failed:', err)
-      // Show install UI on error even if it wasn't shown before (version upgrade case)
-      if (!needsSetup) {
+      if (!showInstallProgress) {
+        showInstallProgress = true
         loadingWindow?.webContents.send('loading:install-start', {})
       }
       loadingWindow?.webContents.send('loading:install-error', { error: String(err) })
