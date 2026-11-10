@@ -1,6 +1,6 @@
 import { bboxToTupleOrNull, computeBBox } from '../_map_util';
 import { useMapStore } from '@/stores/mapStore';
-import { hasVectorGeoJSON, makeHandledVectorData, shouldHandleLayer, type GeoJSONFeature, type GeoJSONFeatureCollection, type GeometryType, type LayerStyle, type MapLayerDefinition, type ParsedVectorData } from '@/services/geo';
+import { hasVectorGeoJSON, makeHandledVectorData, normalizeMapColor, shouldHandleLayer, type GeoJSONFeature, type GeoJSONFeatureCollection, type GeometryType, type LayerStyle, type MapLayerDefinition, type ParsedVectorData } from '@/services/geo';
 import { parseCSV, parseGeoJSON } from '@/services/geo/parsers';
 
 export async function getFileInfo(
@@ -193,7 +193,7 @@ function firstDefinedPaintValue(
 ): any | null {
   for (const k of keys) {
     const v = obj[k];
-    if (typeof v === 'string' && v) return v;
+    if (typeof v === 'string' && v) return normalizeMapColor(v);
     if (Array.isArray(v) && v.length > 0) return v;
   }
   return null;

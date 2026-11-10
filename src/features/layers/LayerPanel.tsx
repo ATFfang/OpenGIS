@@ -320,16 +320,34 @@ function LayerItem({
   // Geometry flags consumed by style controls.
   const isPointLayer = layer.style.renderType === 'circle' || layer.style.renderType === 'symbol'
   const isFillLayer = layer.style.renderType === 'fill'
+  const sourcePath = layer.meta.filePath ?? (layer.data.kind === 'raster' ? layer.data.sourcePath : undefined) ?? null
+
+  const handlePathDragStart = useCallback(
+    (e: React.DragEvent) => {
+      if (!sourcePath) return
+      e.dataTransfer.effectAllowed = 'copy'
+      e.dataTransfer.setData('text/plain', sourcePath)
+      e.dataTransfer.setData('application/x-opengis-path', sourcePath)
+    },
+    [sourcePath]
+  )
 
   const handleRowDragStart = useCallback(
     (e: React.DragEvent) => {
       // Use a custom mime type so the panel-level file-drop handler can
       // distinguish internal reorders from OS file drops.
+      e.stopPropagation()
       e.dataTransfer.setData('text/layer-id', layer.id)
-      e.dataTransfer.effectAllowed = 'move'
+      if (sourcePath) {
+        e.dataTransfer.setData('text/plain', sourcePath)
+        e.dataTransfer.setData('application/x-opengis-path', sourcePath)
+        e.dataTransfer.effectAllowed = 'copyMove'
+      } else {
+        e.dataTransfer.effectAllowed = 'move'
+      }
       onDragStart()
     },
-    [layer.id, onDragStart]
+    [layer.id, onDragStart, sourcePath]
   )
 
   const handleRowDragOver = useCallback(
@@ -361,7 +379,9 @@ function LayerItem({
 
   return (
     <div
+      draggable={Boolean(sourcePath)}
       onDragEnd={onDragEnd}
+      onDragStart={sourcePath ? handlePathDragStart : undefined}
       onDragOver={handleRowDragOver}
       onDrop={handleRowDrop}
       onContextMenu={handleContextMenu}

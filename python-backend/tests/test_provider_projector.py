@@ -199,6 +199,110 @@ class ProviderContextProjectorTests(unittest.TestCase):
         self.assertTrue(any(isinstance(message.get("tool_calls"), list) for message in projected))
         self.assertTrue(any(message.get("role") == "tool" for message in projected))
 
+    def test_reinserts_latest_user_query_when_tool_window_drops_it(self) -> None:
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(
+                raw_recent=1,
+                collapse_old_messages=True,
+                recent_user_turns=4,
+            ),
+            is_tool_result=is_tool_result,
+            make_pruned_placeholder=placeholder,
+            is_workflow_context_message=lambda msg: False,
+        )
+        messages = [
+            {"role": "user", "content": "请把上海饮品店按价格分层设色"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-style",
+                    "type": "function",
+                    "function": {
+                        "name": "set_categorized_style",
+                        "arguments": '{"layer_id":"drinks"}',
+                    },
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-style",
+                "name": "set_categorized_style",
+                "content": '{"success":true}',
+                "_meta": {"kind": "tool_result", "tool_name": "set_categorized_style"},
+            },
+        ]
+
+        projected = projector.project_live_messages(
+            messages,
+            summary_cutoff=0,
+            exclude_workflow_context=False,
+        )
+
+        user_messages = [message for message in projected if message.get("role") == "user"]
+        self.assertEqual(len(user_messages), 1)
+        self.assertEqual(user_messages[0]["content"], "请把上海饮品店按价格分层设色")
+
+    def test_reinserts_workflow_step_as_provider_user_query(self) -> None:
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(raw_recent=1, collapse_old_messages=True),
+            is_tool_result=is_tool_result,
+            make_pruned_placeholder=placeholder,
+            is_workflow_context_message=lambda msg: (
+                isinstance(msg.get("_meta"), dict)
+                and msg["_meta"].get("scope") == "workflow"
+            ),
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": "执行空间连接步骤",
+                "_meta": {"kind": "workflow_step_prompt", "scope": "workflow"},
+            },
+            {"role": "assistant", "content": "步骤执行完成"},
+        ]
+
+        projected = projector.project_live_messages(
+            messages,
+            summary_cutoff=0,
+            exclude_workflow_context=False,
+        )
+
+        self.assertTrue(
+            any(
+                message.get("role") == "user"
+                and message.get("content") == "执行空间连接步骤"
+                for message in projected
+            )
+        )
+
+    def test_reinserts_user_query_from_before_summary_cutoff(self) -> None:
+        projector = ProviderContextProjector(
+            config=ProviderProjectionConfig(raw_recent=2, collapse_old_messages=True),
+            is_tool_result=is_tool_result,
+            make_pruned_placeholder=placeholder,
+            is_workflow_context_message=lambda msg: False,
+        )
+        messages = [
+            {"role": "user", "content": "分析这个图层并加载结果"},
+            {"role": "assistant", "content": "正在处理"},
+            {"role": "assistant", "content": "处理完成"},
+        ]
+
+        projected = projector.project_live_messages(
+            messages,
+            summary_cutoff=1,
+            exclude_workflow_context=False,
+        )
+
+        self.assertTrue(
+            any(
+                message.get("role") == "user"
+                and message.get("content") == "分析这个图层并加载结果"
+                for message in projected
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

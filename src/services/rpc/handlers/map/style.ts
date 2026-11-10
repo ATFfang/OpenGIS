@@ -2,7 +2,7 @@ import type { RpcHandler } from '../../registry';
 import { RpcError } from '../../errors';
 import { parseParams } from '../_util';
 import { hydrateMapLayersForRpc, useMapStore } from '@/stores/mapStore';
-import { getDefaultStyle, resolveVectorGeoJSON, type CategorizedClassification, type ExtrusionSettings, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData, type SortVisualVariable } from '@/services/geo';
+import { getDefaultStyle, normalizeMapColor, resolveVectorGeoJSON, type CategorizedClassification, type ExtrusionSettings, type GeoJSONFeature, type GraduatedClassification, type LayerStyle, type MapLayerDefinition, type NumericVisualVariable, type ParsedVectorData, type SortVisualVariable } from '@/services/geo';
 import { bboxToTuple, computeBBox, detectGeometryType } from '../_map_util';
 import { GetLegendSpecSchema, HighlightFeaturesSchema, SetLayerFilterSchema, SetLayerLabelSchema, SetLayerOrderSchema, SetLayerRendererSchema, SetLayerStyleSchema, SetLayerVisibilitySchema, UpdateLegendSpecSchema, UpdateVisualVariablesSchema } from '../schemas';
 import { applyPaintToLayerStyle, ensureFullVectorLayer, estimateGeoJSONBytes, matchesAttributes } from './shared';
@@ -129,6 +129,15 @@ export const styleHandlers: Record<string, RpcHandler> = {
       skipColor: isThematic,
       renderType: layer.style.renderType,
     });
+    if (typeof styleUpdates.color === 'string') {
+      styleUpdates.color = normalizeColor(styleUpdates.color, 'style.color');
+    }
+    if (typeof styleUpdates.strokeColor === 'string') {
+      styleUpdates.strokeColor = normalizeColor(
+        styleUpdates.strokeColor,
+        'style.strokeColor',
+      );
+    }
 
     if (Object.keys(styleUpdates).length > 0) {
       store.updateLayerStyle(parsed.layer_id, styleUpdates);
@@ -537,20 +546,37 @@ function ensureField(layer: MapLayerDefinition, field: string, label: string): v
 
 function ensureNumericField(layer: MapLayerDefinition, field: string, label: string): void {
   ensureField(layer, field, label);
-  if (layer.data.kind !== 'vector') return;
+  if (layer.data.kind !== 'vector' || isNumericField(layer, field)) return;
+
+  throw RpcError.invalidParams(
+    `set_layer_renderer: ${label} '${field}' is not numeric on layer '${layer.id}'`,
+    {
+      method: 'rpc.ui.map.set_layer_renderer',
+      layer_id: layer.id,
+      field,
+      numeric_fields: layer.data.fields
+        .filter((item) => item.type === 'number')
+        .map((item) => item.name),
+    },
+  );
+}
+
+function isNumericField(layer: MapLayerDefinition, field: string): boolean {
+  if (layer.data.kind !== 'vector') return false;
   const declared = layer.data.fields.find((item) => item.name === field);
-  const values = resolveVectorGeoJSON(layer.data).features
-    .map((feature) => {
-      const raw = (feature.properties ?? {})[field];
-      return typeof raw === 'number' ? raw : Number(raw);
-    })
-    .filter(Number.isFinite);
-  if (declared?.type !== 'number' && values.length === 0) {
-    throw RpcError.invalidParams(
-      `set_layer_renderer: ${label} '${field}' is not numeric on layer '${layer.id}'`,
-      { method: 'rpc.ui.map.set_layer_renderer', layer_id: layer.id, field },
-    );
+  if (declared) return declared.type === 'number';
+
+  let present = 0;
+  let numeric = 0;
+  for (const feature of resolveVectorGeoJSON(layer.data).features) {
+    const raw = (feature.properties ?? {})[field];
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw === 'string' && raw.trim() === '') continue;
+    present += 1;
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    if (Number.isFinite(value)) numeric += 1;
   }
+  return present > 0 && numeric === present;
 }
 
 function normalizePalette(
@@ -569,10 +595,11 @@ function normalizePalette(
 }
 
 function normalizeColor(color: string, label: string): string {
-  const raw = String(color ?? '').trim();
+  const raw = normalizeMapColor(String(color ?? '').trim());
   const named = NAMED_COLORS[raw] ?? NAMED_COLORS[raw.toLowerCase()];
   if (named) return named;
-  if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw)) return expandShortHex(raw);
+  if (raw === 'transparent') return raw;
+  if (/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw)) return expandShortHex(raw);
   if (/^(rgb|rgba|hsl|hsla)\(/i.test(raw)) return raw;
   throw RpcError.invalidParams(
     `set_layer_renderer: ${label} '${raw}' is not a supported color. Use hex colors like #8b5cf6 or common color names.`,
@@ -581,8 +608,12 @@ function normalizeColor(color: string, label: string): string {
 }
 
 function expandShortHex(color: string): string {
-  if (/^#[0-9a-f]{3}$/i.test(color)) {
-    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`.toLowerCase();
+  if (/^#[0-9a-f]{3,4}$/i.test(color)) {
+    return `#${color
+      .slice(1)
+      .split('')
+      .map((part) => `${part}${part}`)
+      .join('')}`.toLowerCase();
   }
   return color.toLowerCase();
 }

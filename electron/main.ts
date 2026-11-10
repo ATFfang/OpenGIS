@@ -144,11 +144,28 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // Load the renderer
+  // Load the renderer. In development ELECTRON_RENDERER_URL can outlive the
+  // Vite server (for example when Electron is restarted on its own). Falling
+  // back to the last built renderer keeps the project-opening handshake alive
+  // instead of leaving the loading window waiting forever.
   if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    const rendererUrl = process.env.ELECTRON_RENDERER_URL
+    void mainWindow.loadURL(rendererUrl).catch(async (error) => {
+      console.error(`[main] Failed to load dev renderer at ${rendererUrl}:`, error)
+      const fallbackPath = join(__dirname, '../renderer/index.html')
+      if (!existsSync(fallbackPath) || !mainWindow || mainWindow.isDestroyed()) {
+        console.error(`[main] Built renderer fallback is unavailable: ${fallbackPath}`)
+        return
+      }
+      console.warn(`[main] Falling back to built renderer: ${fallbackPath}`)
+      try {
+        await mainWindow.loadFile(fallbackPath)
+      } catch (fallbackError) {
+        console.error('[main] Failed to load built renderer fallback:', fallbackError)
+      }
+    })
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
   // Open DevTools in development
@@ -388,38 +405,50 @@ app.whenReady().then(async () => {
   // Register IPC handlers early so the renderer can call them during setup
   registerPythonIpcHandlers()
 
-  // Always run ensurePythonEnv — it checks version and upgrades deps if needed
+  // Always check the environment so existing installs can repair missing dependencies.
   const tempManager = new PythonManager()
   const needsSetup = !tempManager.hasVenv()
+  let showInstallProgress = needsSetup
 
   if (needsSetup) {
     console.log('[loading] No .venv found — running first-launch setup')
     loadingWindow?.webContents.send('loading:install-start', {})
   } else {
-    console.log('[loading] .venv exists — checking version')
+    console.log('[loading] .venv exists — checking dependencies')
   }
 
   {
-    const runSetup = async (): Promise<void> => {
+    let setupAttempt: Promise<void> | null = null
+    const runSetup = (): Promise<void> => {
+      // The retry button can emit more than once before the UI is repainted.
+      // Share the active attempt so downloads and venv creation never overlap.
+      if (setupAttempt) return setupAttempt
       const backendPath = tempManager.getBackendPath()
       const venvPath = tempManager.getVenvPath()
-      await ensurePythonEnv(backendPath, venvPath, (progress) => {
-        if (needsSetup) {
+      setupAttempt = ensurePythonEnv(backendPath, venvPath, (progress) => {
+        if (progress.phase === 'installing' && !showInstallProgress) {
+          showInstallProgress = true
+          loadingWindow?.webContents.send('loading:install-start', {})
+        }
+        if (showInstallProgress) {
           loadingWindow?.webContents.send('loading:install-progress', progress)
         }
-      }, app.getVersion())
+      }, app.getVersion()).finally(() => {
+        setupAttempt = null
+      })
+      return setupAttempt
     }
 
     try {
       await runSetup()
-      if (needsSetup) {
+      if (showInstallProgress) {
         loadingWindow?.webContents.send('loading:install-done', {})
       }
       console.log('[loading] Python env ready')
     } catch (err) {
       console.error('[loading] Python env setup failed:', err)
-      // Show install UI on error even if it wasn't shown before (version upgrade case)
-      if (!needsSetup) {
+      if (!showInstallProgress) {
+        showInstallProgress = true
         loadingWindow?.webContents.send('loading:install-start', {})
       }
       loadingWindow?.webContents.send('loading:install-error', { error: String(err) })

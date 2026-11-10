@@ -106,6 +106,8 @@ export const zh = {
     attachFile: '附加文件',
     attachWorkflow: '附加工作流',
     browseFiles: '浏览文件',
+    dropToAttach: '拖放以附加到对话',
+    dropToAttachHint: '文件和图层都会作为路径附件加入输入框',
     emptyState: {
       title: 'OpenGIS 智能助手',
       subtitle: 'AI 驱动的 GIS 助手',
@@ -474,6 +476,15 @@ export const zh = {
     loadingFiles: '加载文件...',
     failedToLoad: '加载失败',
     noFilesMatching: '没有匹配的文件',
+    dropToImport: '释放以复制到工作目录',
+    dropToImportHint: '支持文件和文件夹，原位置不会被移动',
+    importingFiles: '正在复制文件',
+    scanningImport: '正在扫描文件...',
+    importComplete: '复制完成',
+    importFailed: '复制失败',
+    importPartialFailed: '部分文件复制失败',
+    importedFiles: '已复制 {done}/{total} 个文件',
+    importDestination: '复制到当前工作目录',
   },
 
   // ─── Skills Panel ────────────────────────────────────────────

@@ -1062,18 +1062,25 @@ def update_layer_style(
 
     # Canonical v3.0: style and visibility go through different handlers.
     # Only send the canonical messages that have meaningful payload.
+    style_result: Any = None
+    visibility_result: Any = None
     if style is not None:
         style_payload: dict = {"layer_id": layer_id, "style": style}
-        run_async_from_sync(ctx.notify("rpc.ui.map.set_layer_style", style_payload))
+        style_result = run_async_from_sync(
+            ctx.request("rpc.ui.map.set_layer_style", style_payload)
+        )
     if visible is not None:
-        run_async_from_sync(
-            ctx.notify("rpc.ui.map.set_layer_visibility",
-                       {"layer_id": layer_id, "visible": bool(visible)})
+        visibility_result = run_async_from_sync(
+            ctx.request(
+                "rpc.ui.map.set_layer_visibility",
+                {"layer_id": layer_id, "visible": bool(visible)},
+            )
         )
     return {
         "success": True,
         "layer_id": layer_id,
-        "note": "Style update sent to map. Verify visually that the change took effect.",
+        "style": style_result,
+        "visibility": visibility_result,
     }
 
 
@@ -1099,19 +1106,62 @@ _COLOR_RAMPS: dict[str, list[str]] = {
 }
 
 
+_COLOR_RAMP_ALIASES: dict[str, str] = {
+    "spectrum": "spectral",
+    "rainbow": "spectral",
+    "rainbowlike": "spectral",
+    "red": "reds",
+    "blue": "blues",
+    "green": "greens",
+    "orange": "oranges",
+    "purple": "purples",
+    "tableau": "tableau10",
+    "tableau-10": "tableau10",
+}
+
+
+def _normalize_color_ramp_name(value: str) -> str:
+    return "-".join(value.strip().lower().replace("_", "-").split())
+
+
+def _named_color_ramp(value: str) -> list[str] | None:
+    key = _normalize_color_ramp_name(value)
+    compact_key = key.replace("-", "")
+    canonical = _COLOR_RAMP_ALIASES.get(key) or _COLOR_RAMP_ALIASES.get(compact_key)
+    canonical = canonical or key
+    return _COLOR_RAMPS.get(canonical) or _COLOR_RAMPS.get(compact_key)
+
+
+def _resize_color_ramp(colors: list[str], classes: int) -> list[str]:
+    if classes == len(colors):
+        return list(colors)
+    return [
+        colors[round((i / max(classes - 1, 1)) * (len(colors) - 1))]
+        for i in range(classes)
+    ]
+
+
 def _resolve_color_ramp(value: Any, classes: int) -> list[str]:
     parsed = _coerce_jsonish(value)
     if isinstance(parsed, str):
-        key = parsed.strip().lower()
-        if key in _COLOR_RAMPS:
-            base = _COLOR_RAMPS[key]
-            if classes == len(base):
-                return list(base)
-            return [base[round((i / max(classes - 1, 1)) * (len(base) - 1))] for i in range(classes)]
+        named = _named_color_ramp(parsed)
+        if named:
+            return _resize_color_ramp(named, classes)
         parsed = [item.strip() for item in parsed.split(",") if item.strip()]
     colors = _coerce_string_list(parsed)
     if colors is None or not colors:
         return _resolve_color_ramp("viridis", classes)
+    if len(colors) == 1:
+        named = _named_color_ramp(colors[0])
+        if named:
+            return _resize_color_ramp(named, classes)
+        candidate = colors[0].strip()
+        if not (
+            candidate.startswith("#")
+            or candidate.lower() == "transparent"
+            or candidate.lower().startswith(("rgb(", "rgba(", "hsl(", "hsla("))
+        ):
+            return _resize_color_ramp(_COLOR_RAMPS["viridis"], classes)
     return colors
 
 

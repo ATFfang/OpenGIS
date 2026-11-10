@@ -8,6 +8,8 @@ interface ChatComposerProps {
   inputValue: string
   attachments: ChatAttachment[]
   showAttachPanel: boolean
+  isDragOver: boolean
+  dragHint: string | null
   isBusy: boolean
   isCancelling: boolean
   textAreaRef: RefObject<HTMLTextAreaElement>
@@ -44,12 +46,27 @@ export function ChatComposer({
   onAttachWorkflow,
   onAttachToolGroup,
   onRemoveAttachment,
+  isDragOver,
+  dragHint,
 }: ChatComposerProps) {
   const t = useT()
 
   return (
     <div className="p-3 pt-2 relative">
-      <div className="relative bg-bg-secondary rounded-2xl border border-border focus-within:border-accent-primary/40 focus-within:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] transition-all duration-200">
+      <div
+        className={`
+          relative bg-bg-secondary rounded-2xl border transition-all duration-200
+          focus-within:border-accent-primary/40 focus-within:shadow-[0_0_0_3px_rgba(59,130,246,0.08)]
+          ${isDragOver ? 'border-accent-primary/45 shadow-[0_0_0_3px_rgba(59,130,246,0.06)]' : 'border-border'}
+        `}
+      >
+        {isDragOver && (
+          <div className="absolute inset-0 rounded-2xl bg-accent-primary/5 border border-dashed border-accent-primary/35 pointer-events-none flex items-center justify-center">
+            <div className="px-3 py-1.5 rounded-full bg-bg-secondary/90 border border-border text-xs text-text-secondary shadow-sm">
+              {dragHint || t.chat.dropToAttach}
+            </div>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-2 pb-0">
             {attachments.map((attachment, index) => (

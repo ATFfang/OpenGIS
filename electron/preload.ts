@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 /**
  * Preload script — exposes safe APIs to the renderer process via contextBridge.
@@ -31,6 +31,23 @@ const electronAPI = {
 
   readDirectory: (path: string) =>
     ipcRenderer.invoke('file:read-dir', path),
+
+  getPathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return (file as any).path || ''
+    }
+  },
+
+  importPaths: (sources: string[], destinationDir: string, workspaceRoot: string) =>
+    ipcRenderer.invoke('file:import-paths', { sources, destinationDir, workspaceRoot }),
+
+  onFileImportProgress: (callback: (progress: any) => void) => {
+    const handler = (_event: any, progress: any) => callback(progress)
+    ipcRenderer.on('file:import-progress', handler)
+    return () => ipcRenderer.removeListener('file:import-progress', handler)
+  },
 
   openFolderDialog: () =>
     ipcRenderer.invoke('file:open-folder-dialog'),

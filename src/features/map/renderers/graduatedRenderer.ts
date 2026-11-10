@@ -290,6 +290,14 @@ function buildGraduated(def: MapLayerDefinition): {
       : quantileBreaks(values, classes)
   }
 
+  // MapLibre requires at least one stop in a `step` expression. Constant
+  // numeric fields legitimately produce no breaks, so render them with the
+  // first class color instead of attaching an invalid layer and losing the
+  // previously visible renderer.
+  if (breaks.length === 0) {
+    return { colorExpr: palette[0] ?? def.style.color, breaks, palette }
+  }
+
   // 组装 step expression
   const expr: any[] = ['step', ['to-number', ['get', cfg.field], -1e15]]
   expr.push(palette[0])
@@ -332,6 +340,8 @@ function sampleNumericField(def: MapLayerDefinition, field: string): number[] {
   const out: number[] = []
   for (const f of fc.features) {
     const v = (f.properties ?? {})[field]
+    if (v === null || v === undefined) continue
+    if (typeof v === 'string' && v.trim() === '') continue
     const n = typeof v === 'number' ? v : Number(v)
     if (Number.isFinite(n)) out.push(n)
   }
