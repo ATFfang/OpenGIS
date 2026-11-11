@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="resources/icons/app-icon.png" alt="OpenGIS" width="120" />
 </p>
@@ -356,7 +358,7 @@ An Operation contains:
 
 ```text
 operation/
-  manifest.json      # Name, description, input/output schema, dependencies, version
+  operation.json     # Name, description, input/output schema, dependencies, version
   main.py            # Single entry point
   README.md          # Usage instructions
   examples/          # Example parameters
@@ -682,13 +684,13 @@ Recommended structure:
 
 ```text
 my_operation/
-  manifest.json
+  operation.json
   main.py
   README.md
   examples/
 ```
 
-`manifest.json` should clearly describe:
+`operation.json` should clearly describe:
 
 - Input schema.
 - Output schema.
